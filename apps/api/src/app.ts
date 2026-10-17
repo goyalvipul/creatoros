@@ -19,7 +19,10 @@ export type { AppDeps } from './http';
 export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   const { config } = deps;
   const app = Fastify({
-    logger: config.logLevel === 'silent' ? false : { level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] },
+    logger:
+      config.logLevel === 'silent'
+        ? false
+        : { level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] },
     // Caddy / Tailscale Serve sit in front; trust their X-Forwarded-* headers for protocol and client IP.
     trustProxy: true,
     bodyLimit: 10 * 1024 * 1024,
@@ -27,12 +30,20 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(cookie);
   // API only serves JSON (and the docs UI), so a strict CSP is not applicable to Swagger UI's inline assets.
-  await app.register(helmet, { contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: 'same-site' } });
+  await app.register(helmet, {
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: 'same-site' },
+  });
   await app.register(rateLimit, { max: config.globalRateLimit, timeWindow: '1 minute', allowList: [] });
 
   await app.register(swagger, {
     openapi: {
-      info: { title: 'Creator OS API', version: '1.0.0', description: 'Private creator operating system. All responses use the { data, meta, error } envelope.' },
+      info: {
+        title: 'Creator OS API',
+        version: '1.0.0',
+        description:
+          'Private creator operating system. All responses use the { data, meta, error } envelope.',
+      },
       servers: [{ url: '/api/v1' }],
       components: { securitySchemes: { cookieAuth: { type: 'apiKey', in: 'cookie', name: 'cos_session' } } },
     },

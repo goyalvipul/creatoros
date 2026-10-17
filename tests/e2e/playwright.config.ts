@@ -18,7 +18,12 @@ export default defineConfig({
   use: { baseURL, trace: 'retain-on-failure', screenshot: 'only-on-failure', ...devices['Desktop Chrome'] },
   projects: [
     { name: 'desktop', use: { viewport: { width: 1280, height: 800 } }, testIgnore: /mobile\.spec\.ts/ },
-    { name: 'mobile-360', use: { viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true }, dependencies: ['desktop'], testMatch: /mobile\.spec\.ts/ },
+    {
+      name: 'mobile-360',
+      use: { viewport: { width: 360, height: 740 }, isMobile: true, hasTouch: true },
+      dependencies: ['desktop'],
+      testMatch: /mobile\.spec\.ts/,
+    },
   ],
   webServer: [
     {
@@ -39,4 +44,3 @@ export default defineConfig({
     },
   ],
 });
-

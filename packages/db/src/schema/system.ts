@@ -25,7 +25,15 @@ import {
   severity,
   syncState,
 } from './enums';
-import { brands, channels, orgRef, organizations, providerConnections, socialAccounts, users } from './identity';
+import {
+  brands,
+  channels,
+  orgRef,
+  organizations,
+  providerConnections,
+  socialAccounts,
+  users,
+} from './identity';
 
 export const internalActions = pgTable(
   'internal_actions',
@@ -67,7 +75,9 @@ export const internalActions = pgTable(
 export const taskIntegrations = pgTable('task_integrations', {
   id: pk(),
   orgId: orgRef(),
-  providerConnectionId: uuid('provider_connection_id').references(() => providerConnections.id, { onDelete: 'cascade' }),
+  providerConnectionId: uuid('provider_connection_id').references(() => providerConnections.id, {
+    onDelete: 'cascade',
+  }),
   name: text('name').notNull().default('Todo PWA'),
   baseUrl: text('base_url'),
   syncDirection: text('sync_direction').notNull().default('BOTH'), // PUSH | PULL | BOTH
@@ -105,7 +115,10 @@ export const taskLinks = pgTable(
     remoteDueAt: ts('remote_due_at'),
     remoteCompletedAt: ts('remote_completed_at'),
     conflictData: jsonb('conflict_data').$type<Record<string, unknown>>().notNull().default({}),
-    syncLog: jsonb('sync_log').$type<{ at: string; event: string; detail?: string }[]>().notNull().default([]),
+    syncLog: jsonb('sync_log')
+      .$type<{ at: string; event: string; detail?: string }[]>()
+      .notNull()
+      .default([]),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -133,11 +146,16 @@ export const notifications = pgTable(
     readAt: ts('read_at'),
     snoozedUntil: ts('snoozed_until'),
     deliveredAt: ts('delivered_at'),
-    deliveredVia: text('delivered_via').array().notNull().default(sql`'{}'::text[]`),
+    deliveredVia: text('delivered_via')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     createdAt: createdAt(),
   },
   (t) => [
-    uniqueIndex('notifications_dedupe_uq').on(t.orgId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
+    uniqueIndex('notifications_dedupe_uq')
+      .on(t.orgId, t.dedupeKey)
+      .where(sql`${t.dedupeKey} is not null`),
     index('notifications_user_idx').on(t.orgId, t.userId, t.readAt),
   ],
 );
@@ -179,7 +197,10 @@ export const goals = pgTable(
     kind: goalKind('kind').notNull().default('ACTIVITY'),
     provenance: provenance('provenance').notNull().default('USER_ENTERED'),
     revision: integer('revision').notNull().default(1),
-    history: jsonb('history').$type<{ at: string; targetValue: number; revision: number }[]>().notNull().default([]),
+    history: jsonb('history')
+      .$type<{ at: string; targetValue: number; revision: number }[]>()
+      .notNull()
+      .default([]),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -250,7 +271,10 @@ export const backgroundJobs = pgTable(
     finishedAt: ts('finished_at'),
     createdAt: createdAt(),
   },
-  (t) => [index('background_jobs_status_idx').on(t.status, t.createdAt), index('background_jobs_type_idx').on(t.type, t.createdAt)],
+  (t) => [
+    index('background_jobs_status_idx').on(t.status, t.createdAt),
+    index('background_jobs_type_idx').on(t.type, t.createdAt),
+  ],
 );
 
 export const syncCursors = pgTable(
@@ -281,7 +305,10 @@ export const oauthStates = pgTable(
     provider: provider('provider').notNull(),
     stateHash: text('state_hash').notNull(),
     codeVerifierEnc: text('code_verifier_enc').notNull(),
-    scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
+    scopes: text('scopes')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     redirectUri: text('redirect_uri').notNull(),
     expiresAt: ts('expires_at').notNull(),
     usedAt: ts('used_at'),
@@ -306,7 +333,10 @@ export const auditEvents = pgTable(
     ip: text('ip'),
     at: ts('at').notNull().defaultNow(),
   },
-  (t) => [index('audit_events_org_at_idx').on(t.orgId, t.at), index('audit_events_object_idx').on(t.objectType, t.objectId)],
+  (t) => [
+    index('audit_events_org_at_idx').on(t.orgId, t.at),
+    index('audit_events_object_idx').on(t.objectType, t.objectId),
+  ],
 );
 
 export const apiIdempotencyKeys = pgTable(

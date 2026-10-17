@@ -15,7 +15,8 @@ export class ApiError extends Error {
   }
 }
 
-const camelKey = (k: string) => (k.includes('_') ? k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase()) : k);
+const camelKey = (k: string) =>
+  k.includes('_') ? k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase()) : k;
 
 /** Some list endpoints return raw SQL rows (snake_case). The UI always works with camelCase. */
 export function camelize<T = any>(v: any): T {
@@ -66,7 +67,11 @@ export async function api<T = any>(path: string, opts: CallOpts = {}): Promise<T
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new ApiError(0, 'NETWORK', 'Cannot reach the server. Check that Creator OS is running and you are online.');
+    throw new ApiError(
+      0,
+      'NETWORK',
+      'Cannot reach the server. Check that Creator OS is running and you are online.',
+    );
   }
   const text = await res.text();
   let json: any = null;
@@ -77,24 +82,40 @@ export async function api<T = any>(path: string, opts: CallOpts = {}): Promise<T
   }
   if (!res.ok) {
     if (res.status === 401 && !opts.silent401) onUnauthorized?.();
-    throw new ApiError(res.status, json?.error?.code ?? 'ERROR', json?.error?.message ?? `Request failed (${res.status})`, json?.error?.details);
+    throw new ApiError(
+      res.status,
+      json?.error?.code ?? 'ERROR',
+      json?.error?.message ?? `Request failed (${res.status})`,
+      json?.error?.details,
+    );
   }
   return camelize<T>(json?.data ?? null);
 }
 
 const fetcher = (key: string) => api(key);
 
-export function useApi<T = any>(path: string | null, config?: SWRConfiguration & { query?: Record<string, unknown> }) {
+export function useApi<T = any>(
+  path: string | null,
+  config?: SWRConfiguration & { query?: Record<string, unknown> },
+) {
   const key = path ? `${path}${qs(config?.query)}` : null;
-  return useSWR<T, ApiError>(key, fetcher, { revalidateOnFocus: true, shouldRetryOnError: false, keepPreviousData: true, ...config });
+  return useSWR<T, ApiError>(key, fetcher, {
+    revalidateOnFocus: true,
+    shouldRetryOnError: false,
+    keepPreviousData: true,
+    ...config,
+  });
 }
 
 /** Re-fetch every cached GET whose key starts with one of the prefixes (or all when none given). */
 export function refresh(...prefixes: string[]) {
-  return globalMutate((key) => typeof key === 'string' && (prefixes.length === 0 || prefixes.some((p) => key.startsWith(p))));
+  return globalMutate(
+    (key) => typeof key === 'string' && (prefixes.length === 0 || prefixes.some((p) => key.startsWith(p))),
+  );
 }
 
-export const post = <T = any>(path: string, body?: unknown, o: Omit<CallOpts, 'method' | 'body'> = {}) => api<T>(path, { ...o, method: 'POST', body: body ?? {} });
+export const post = <T = any>(path: string, body?: unknown, o: Omit<CallOpts, 'method' | 'body'> = {}) =>
+  api<T>(path, { ...o, method: 'POST', body: body ?? {} });
 export const patch = <T = any>(path: string, body: unknown) => api<T>(path, { method: 'PATCH', body });
 export const put = <T = any>(path: string, body: unknown) => api<T>(path, { method: 'PUT', body });
 export const del = <T = any>(path: string) => api<T>(path, { method: 'DELETE' });

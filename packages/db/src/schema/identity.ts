@@ -1,23 +1,7 @@
 import { sql } from 'drizzle-orm';
-import {
-  boolean,
-  index,
-  integer,
-  jsonb,
-  pgTable,
-  text,
-  uniqueIndex,
-  uuid,
-} from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, deletedAt, pk, ts, updatedAt } from './columns';
-import {
-  connectionState,
-  membershipStatus,
-  platform,
-  provider,
-  userRole,
-  userStatus,
-} from './enums';
+import { connectionState, membershipStatus, platform, provider, userRole, userStatus } from './enums';
 
 export const users = pgTable(
   'users',
@@ -104,7 +88,10 @@ export const brands = pgTable(
     name: text('name').notNull(),
     type: text('type').notNull().default('creator'),
     description: text('description'),
-    contentPillars: text('content_pillars').array().notNull().default(sql`'{}'::text[]`),
+    contentPillars: text('content_pillars')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     active: boolean('active').notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -146,7 +133,10 @@ export const providerConnections = pgTable(
     label: text('label'),
     principalHint: text('principal_hint'),
     state: connectionState('state').notNull().default('NOT_CONFIGURED'),
-    scopes: text('scopes').array().notNull().default(sql`'{}'::text[]`),
+    scopes: text('scopes')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     encryptedTokenRef: text('encrypted_token_ref'),
     expiresAt: ts('expires_at'),
     lastSyncAt: ts('last_sync_at'),

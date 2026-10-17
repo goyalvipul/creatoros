@@ -23,7 +23,10 @@ const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }
 async function main() {
   const config = loadConfig();
   const handle = createDb(config.databaseUrl, { max: 6, applicationName: 'creatoros-worker' });
-  const log: WorkerDeps['log'] = (level, msg, extra) => console[level === 'error' ? 'error' : 'log'](JSON.stringify({ level, msg, ...extra, at: new Date().toISOString() }));
+  const log: WorkerDeps['log'] = (level, msg, extra) =>
+    console[level === 'error' ? 'error' : 'log'](
+      JSON.stringify({ level, msg, ...extra, at: new Date().toISOString() }),
+    );
   const deps: WorkerDeps = { db: handle.db, env: config.env, log };
 
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
@@ -32,7 +35,11 @@ async function main() {
   const requestsQ = new Queue('requests', { connection });
 
   for (const s of SCHEDULE) {
-    await jobsQ.upsertJobScheduler(`sched:${s.name}`, s.pattern ? { pattern: s.pattern } : { every: s.every! }, { name: s.name, opts: { removeOnComplete: 20, removeOnFail: 100, attempts: 1 } });
+    await jobsQ.upsertJobScheduler(
+      `sched:${s.name}`,
+      s.pattern ? { pattern: s.pattern } : { every: s.every! },
+      { name: s.name, opts: { removeOnComplete: 20, removeOnFail: 100, attempts: 1 } },
+    );
   }
 
   const jobsWorker = new Worker(
@@ -42,7 +49,11 @@ async function main() {
       if (!fn) throw new Error(`Unknown job ${job.name}`);
       const started = Date.now();
       const out = await fn(deps);
-      if (job.name !== 'heartbeat' && job.name !== 'events') log('info', `job ${job.name} done`, { ms: Date.now() - started, out: JSON.stringify(out).slice(0, 400) });
+      if (job.name !== 'heartbeat' && job.name !== 'events')
+        log('info', `job ${job.name} done`, {
+          ms: Date.now() - started,
+          out: JSON.stringify(out).slice(0, 400),
+        });
       return out as object;
     },
     { connection, concurrency: 2 },
@@ -55,7 +66,9 @@ async function main() {
       if (job.name === 'backup') return jobBackup(deps, 'manual');
       if (job.name === 'sync') {
         const { runSync } = await import('@creatoros/services');
-        return runSync(handle.db, config.env, String(job.data.connectionId), { full: Boolean(job.data.full) });
+        return runSync(handle.db, config.env, String(job.data.connectionId), {
+          full: Boolean(job.data.full),
+        });
       }
       void jobSync;
       throw new Error(`Unknown request ${job.name}`);
@@ -63,7 +76,8 @@ async function main() {
     { connection, concurrency: 1 },
   );
 
-  for (const w of [jobsWorker, requestsWorker]) w.on('failed', (job, err) => log('error', `job failed: ${job?.name}`, { err: String(err) }));
+  for (const w of [jobsWorker, requestsWorker])
+    w.on('failed', (job, err) => log('error', `job failed: ${job?.name}`, { err: String(err) }));
   log('info', 'worker started', { jobs: SCHEDULE.map((s) => s.name) });
 
   const stop = async () => {

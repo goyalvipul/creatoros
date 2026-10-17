@@ -25,6 +25,11 @@ export async function audit(
 }
 
 /** Transactional outbox: call inside the same transaction that changes state. */
-export async function emit(db: Executor, orgId: string, type: EventType, data: Record<string, unknown>): Promise<void> {
+export async function emit(
+  db: Executor,
+  orgId: string,
+  type: EventType,
+  data: Record<string, unknown>,
+): Promise<void> {
   await db.insert(outboxEvents).values({ orgId, type, version: EVENT_VERSION, payload: data });
 }

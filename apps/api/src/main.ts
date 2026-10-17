@@ -11,18 +11,37 @@ async function main() {
   try {
     await handle.db.execute(sql`select 1 from organizations limit 1`);
   } catch (e) {
-    console.error(JSON.stringify({ level: 'fatal', msg: 'Database not ready. Run `pnpm db:migrate` (or start the migrate service).', err: String(e) }));
+    console.error(
+      JSON.stringify({
+        level: 'fatal',
+        msg: 'Database not ready. Run `pnpm db:migrate` (or start the migrate service).',
+        err: String(e),
+      }),
+    );
     process.exit(1);
   }
   // Producer-side queue for on-demand work (sync now, backup now). Fails fast when Redis is down instead of hanging a request.
-  const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1, enableOfflineQueue: false, lazyConnect: false });
+  const redis = new Redis(config.redisUrl, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    lazyConnect: false,
+  });
   redis.on('error', () => {});
   const requests = new Queue('requests', { connection: redis });
   const enqueue = async (_queue: string, name: string, data: Record<string, unknown>) => {
     try {
-      await requests.add(name === 'connection' ? 'sync' : name, data, { removeOnComplete: 50, removeOnFail: 100, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+      await requests.add(name === 'connection' ? 'sync' : name, data, {
+        removeOnComplete: 50,
+        removeOnFail: 100,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+      });
     } catch {
-      throw new AppError(503, 'QUEUE_UNAVAILABLE', 'The background worker queue (Redis) is not reachable right now. Try again shortly.');
+      throw new AppError(
+        503,
+        'QUEUE_UNAVAILABLE',
+        'The background worker queue (Redis) is not reachable right now. Try again shortly.',
+      );
     }
   };
   const app = await buildApp({ db: handle.db, config, enqueue });

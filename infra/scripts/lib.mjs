@@ -21,9 +21,17 @@ export function parseArgs(argv) {
 
 /** Run `docker compose <args>` and collect text output. */
 export function compose(args, opts = {}) {
-  const r = spawnSync('docker', ['compose', ...args], { cwd: root, encoding: 'utf8', input: opts.input, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('docker', ['compose', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    input: opts.input,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (r.error) throw new Error(`Could not run docker: ${r.error.message}. Is Docker Desktop running?`);
-  if (r.status !== 0 && !opts.allowFail) throw new Error(`docker compose ${args.join(' ')} failed (${r.status}): ${(r.stderr || r.stdout || '').trim().slice(0, 600)}`);
+  if (r.status !== 0 && !opts.allowFail)
+    throw new Error(
+      `docker compose ${args.join(' ')} failed (${r.status}): ${(r.stderr || r.stdout || '').trim().slice(0, 600)}`,
+    );
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -36,7 +44,17 @@ export function composeToFile(args, file) {
     child.stderr.on('data', (d) => (err += d));
     child.stdout.pipe(out);
     child.on('error', reject);
-    child.on('close', (code) => (out.close(), code === 0 ? resolve() : reject(new Error(`docker compose ${args.join(' ')} failed (${code}): ${err.trim().slice(0, 600)}`))));
+    child.on(
+      'close',
+      (code) => (
+        out.close(),
+        code === 0
+          ? resolve()
+          : reject(
+              new Error(`docker compose ${args.join(' ')} failed (${code}): ${err.trim().slice(0, 600)}`),
+            )
+      ),
+    );
   });
 }
 
@@ -49,14 +67,24 @@ export function fileToCompose(file, args) {
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (err += d));
     child.on('error', reject);
-    child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error(`docker compose ${args.join(' ')} failed (${code}): ${err.trim().slice(0, 800)}`))));
+    child.on('close', (code) =>
+      code === 0
+        ? resolve(out)
+        : reject(new Error(`docker compose ${args.join(' ')} failed (${code}): ${err.trim().slice(0, 800)}`)),
+    );
     fs.createReadStream(file).on('error', reject).pipe(child.stdin);
   });
 }
 
 export function sha256File(file) {
   const h = createHash('sha256');
-  return new Promise((resolve, reject) => fs.createReadStream(file).on('data', (d) => h.update(d)).on('end', () => resolve(h.digest('hex'))).on('error', reject));
+  return new Promise((resolve, reject) =>
+    fs
+      .createReadStream(file)
+      .on('data', (d) => h.update(d))
+      .on('end', () => resolve(h.digest('hex')))
+      .on('error', reject),
+  );
 }
 
 export function readEnvFile() {

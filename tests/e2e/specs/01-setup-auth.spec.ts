@@ -3,7 +3,10 @@ import { OWNER, signIn, watchProblems } from './helpers';
 
 test.describe.configure({ mode: 'serial' });
 
-test('fresh install: first visit leads to the setup wizard (no default password exists)', async ({ page, request }) => {
+test('fresh install: first visit leads to the setup wizard (no default password exists)', async ({
+  page,
+  request,
+}) => {
   const s = await request.get('/api/v1/setup/status');
   expect((await s.json()).data.initialized).toBe(false);
   await page.goto('/');
@@ -62,7 +65,12 @@ test('setup wizard: owner, brand/channel/account, skip devices, finish', async (
 test('setup cannot be repeated once an owner exists', async ({ request }) => {
   const r = await request.post('/api/v1/setup/bootstrap', {
     headers: { 'x-requested-with': 'e2e' },
-    data: { email: 'second@e2e.test', name: 'Mallory', password: 'Another-Long-Passphrase-1', orgName: 'Nope' },
+    data: {
+      email: 'second@e2e.test',
+      name: 'Mallory',
+      password: 'Another-Long-Passphrase-1',
+      orgName: 'Nope',
+    },
   });
   expect(r.status()).toBeGreaterThanOrEqual(400);
 });

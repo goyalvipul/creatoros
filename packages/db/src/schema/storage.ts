@@ -48,7 +48,10 @@ export const devices = pgTable(
     lastSeenAt: ts('last_seen_at'),
     state: deviceState('state').notNull().default('PENDING'),
     tailscaleHint: text('tailscale_hint'),
-    listenUrls: text('listen_urls').array().notNull().default(sql`'{}'::text[]`),
+    listenUrls: text('listen_urls')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     signingKeyEnc: text('signing_key_enc'),
     lastError: text('last_error'),
     load: jsonb('load').$type<Record<string, unknown>>().notNull().default({}),
@@ -72,7 +75,10 @@ export const deviceCredentials = pgTable(
     revokedAt: ts('revoked_at'),
     pairingAudit: jsonb('pairing_audit').$type<Record<string, unknown>>().notNull().default({}),
   },
-  (t) => [uniqueIndex('device_credentials_token_uq').on(t.tokenHash), index('device_credentials_device_idx').on(t.deviceId)],
+  (t) => [
+    uniqueIndex('device_credentials_token_uq').on(t.tokenHash),
+    index('device_credentials_device_idx').on(t.deviceId),
+  ],
 );
 
 export const devicePairingCodes = pgTable(
@@ -120,17 +126,31 @@ export const storageRoots = pgTable(
     mountPath: text('mount_path'),
     accessMethod: accessMethod('access_method').notNull().default('LOCAL'),
     recursive: boolean('recursive').notNull().default(true),
-    includeGlobs: text('include_globs').array().notNull().default(sql`'{}'::text[]`),
-    excludeGlobs: text('exclude_globs').array().notNull().default(sql`'{}'::text[]`),
-    extensions: text('extensions').array().notNull().default(sql`'{}'::text[]`),
+    includeGlobs: text('include_globs')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    excludeGlobs: text('exclude_globs')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    extensions: text('extensions')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     scanIntervalMinutes: integer('scan_interval_minutes').notNull().default(360),
     settleSeconds: integer('settle_seconds').notNull().default(60),
     hashMode: hashMode('hash_mode').notNull().default('all'),
     followLinks: boolean('follow_links').notNull().default(false),
     readOnly: boolean('read_only').notNull().default(true),
     brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
-    projectId: uuid('project_id').references((): AnyPgColumn => creativeProjects.id, { onDelete: 'set null' }),
-    autoTagRules: jsonb('auto_tag_rules').$type<{ pattern: string; tags?: string[]; brandId?: string; projectId?: string }[]>().notNull().default([]),
+    projectId: uuid('project_id').references((): AnyPgColumn => creativeProjects.id, {
+      onDelete: 'set null',
+    }),
+    autoTagRules: jsonb('auto_tag_rules')
+      .$type<{ pattern: string; tags?: string[]; brandId?: string; projectId?: string }[]>()
+      .notNull()
+      .default([]),
     state: rootState('state').notNull().default('ACTIVE'),
     scanRequestedAt: ts('scan_requested_at'),
     reconcileRequestedAt: ts('reconcile_requested_at'),
@@ -283,7 +303,9 @@ export const logicalAssets = pgTable(
     id: pk(),
     orgId: orgRef(),
     brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
-    projectId: uuid('project_id').references((): AnyPgColumn => creativeProjects.id, { onDelete: 'set null' }),
+    projectId: uuid('project_id').references((): AnyPgColumn => creativeProjects.id, {
+      onDelete: 'set null',
+    }),
     kind: assetKind('kind').notNull().default('VIDEO'),
     title: text('title').notNull(),
     description: text('description'),
@@ -317,7 +339,9 @@ export const assetVersions = pgTable(
     mediaObjectId: uuid('media_object_id').references(() => mediaObjects.id, { onDelete: 'set null' }),
     variantType: variantType('variant_type').notNull().default('MASTER'),
     approvalState: approvalState('approval_state').notNull().default('PENDING'),
-    parentVersionId: uuid('parent_version_id').references((): AnyPgColumn => assetVersions.id, { onDelete: 'set null' }),
+    parentVersionId: uuid('parent_version_id').references((): AnyPgColumn => assetVersions.id, {
+      onDelete: 'set null',
+    }),
     resolution: text('resolution'),
     intendedUse: text('intended_use'),
     notes: text('notes'),
@@ -327,7 +351,10 @@ export const assetVersions = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('asset_versions_number_uq').on(t.assetId, t.number), index('asset_versions_media_idx').on(t.mediaObjectId)],
+  (t) => [
+    uniqueIndex('asset_versions_number_uq').on(t.assetId, t.number),
+    index('asset_versions_media_idx').on(t.mediaObjectId),
+  ],
 );
 
 export const assetFileLinks = pgTable(

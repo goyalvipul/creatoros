@@ -1,6 +1,11 @@
 import { expect, type Page } from '@playwright/test';
 
-export const OWNER = { name: 'Vipul Test', email: 'owner@e2e.test', password: 'Quartz-Lantern-Harbor-77', org: 'E2E Studio' };
+export const OWNER = {
+  name: 'Vipul Test',
+  email: 'owner@e2e.test',
+  password: 'Quartz-Lantern-Harbor-77',
+  org: 'E2E Studio',
+};
 
 export const SECTIONS: { path: string; heading: RegExp }[] = [
   { path: '/', heading: /^Hello/ },
@@ -23,7 +28,8 @@ export function watchProblems(page: Page) {
   const problems: string[] = [];
   page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
   page.on('console', (m) => {
-    if (m.type() === 'error' && !/favicon|Failed to load resource.*(400|401|404|409|422)/i.test(m.text())) problems.push(`console: ${m.text()}`);
+    if (m.type() === 'error' && !/favicon|Failed to load resource.*(400|401|404|409|422)/i.test(m.text()))
+      problems.push(`console: ${m.text()}`);
   });
   page.on('response', (r) => {
     if (r.url().includes('/api/v1/') && r.status() >= 500) problems.push(`HTTP ${r.status()} ${r.url()}`);
@@ -42,6 +48,9 @@ export async function signIn(page: Page, email = OWNER.email, password = OWNER.p
 export async function expectNoHorizontalOverflow(page: Page) {
   // on mobile emulation innerWidth grows with the content, so compare with the configured viewport instead
   const width = page.viewportSize()!.width;
-  const over = await page.evaluate((w) => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - w, width);
+  const over = await page.evaluate(
+    (w) => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - w,
+    width,
+  );
   expect(over, 'page must not scroll horizontally').toBeLessThanOrEqual(1);
 }

@@ -6,35 +6,35 @@
 
 ## Environment (checked 2026-10-16)
 
-| Tool                | State                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Node 24 / pnpm 12   | present                                                                                                                                                 |
-| Go 1.27             | installed by agent via winget (`C:\Program Files\Go\bin\go.exe`)                                                                                        |
+| Tool                | State                                                                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Node 24 / pnpm 12   | present                                                                                                                                                                               |
+| Go 1.27             | installed by agent via winget (`C:\Program Files\Go\bin\go.exe`)                                                                                                                      |
 | Docker Desktop 29.8 | present. Agent shells need `. .\infra\scripts\docker-env.ps1` first (credential-helper workaround). Cached: postgres:17-alpine, redis:7-alpine, caddy:2-alpine, node:22-bookworm-slim |
-| ffmpeg / ffprobe 9  | present                                                                                                                                                 |
-| Tailscale 1.102     | present                                                                                                                                                 |
-| git                 | repo on `main`, commit regularly                                                                                                                        |
+| ffmpeg / ffprobe 9  | present                                                                                                                                                                               |
+| Tailscale 1.102     | present                                                                                                                                                                               |
+| git                 | repo on `main`, commit regularly                                                                                                                                                      |
 
 Typecheck a package: `cd packages/services; npx tsc -p tsconfig.json 2>&1 | Select-String "error TS"` (empty = clean).
 Run integration tests: `. .\infra\scripts\docker-env.ps1; pnpm --filter @creatoros/tests-integration exec vitest run`.
 
 ## Work items
 
-| #   | Item                                                                                              | Status                                                  |
-| --- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| 0   | Repo skeleton, root config, spec copied to docs/ and .cursor/rules                                | DONE                                                    |
-| 1   | packages/domain                                                                                   | DONE (unit tests TODO)                                  |
-| 2   | packages/db (Drizzle schema 0000 + custom 0001 extras)                                            | DONE, verified on PG17                                  |
-| 3   | packages/connectors                                                                               | DONE (unit tests TODO)                                  |
-| 4   | packages/services (types, crypto, audit, setup, devices, roots, ingest, library, assets, projects, publishing, crm, actions, integrations, notifications, todo, insights, ops, auth, catalog, demo, settings, config) | DONE; integration-tested: ingest, auth, demo; rest exercised through API tests |
-| 5   | apps/api (Fastify, /api/v1, auth, CSRF, idempotency, agent + stream endpoints, OpenAPI)           | DONE; 13 HTTP integration tests passing                  |
-| 6   | apps/scanner-agent (Go)                                                                           | DONE; Go unit tests + real-binary E2E (agent-e2e.test.ts, 5 tests) passing |
-| 7   | apps/worker (BullMQ, scheduler, sync jobs, backups)                                               | DONE; 7 ops tests (backup/restore verified on real pg_dump) |
-| 8   | apps/web (Next.js PWA, all sections)                                                              | DONE; 32 Playwright specs passing (desktop + 360px) |
-| 9   | infra (compose, Caddy, Dockerfiles, scripts, backup/restore)                                      | IN_PROGRESS: `docker compose up -d --build` verified healthy via Caddy :8080; scripts backup/restore/diagnostics/seed-demo TODO |
-| 10  | tests (unit, integration T01-T35, Playwright, Go)                                                 | IN_PROGRESS: 46 integration tests + 32 Playwright specs passing; domain/connector unit tests, CI, lint TODO |
-| 11  | docs (README, FEATURES, architecture, ops, EXTERNAL_PREREQUISITES, ER + system diagrams)          | TODO                                                    |
-| 12  | Final validation run + evidence                                                                   | TODO                                                    |
+| #   | Item                                                                                                                                                                                                                  | Status                                                                                                                          |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | Repo skeleton, root config, spec copied to docs/ and .cursor/rules                                                                                                                                                    | DONE                                                                                                                            |
+| 1   | packages/domain                                                                                                                                                                                                       | DONE (unit tests TODO)                                                                                                          |
+| 2   | packages/db (Drizzle schema 0000 + custom 0001 extras)                                                                                                                                                                | DONE, verified on PG17                                                                                                          |
+| 3   | packages/connectors                                                                                                                                                                                                   | DONE (unit tests TODO)                                                                                                          |
+| 4   | packages/services (types, crypto, audit, setup, devices, roots, ingest, library, assets, projects, publishing, crm, actions, integrations, notifications, todo, insights, ops, auth, catalog, demo, settings, config) | DONE; integration-tested: ingest, auth, demo; rest exercised through API tests                                                  |
+| 5   | apps/api (Fastify, /api/v1, auth, CSRF, idempotency, agent + stream endpoints, OpenAPI)                                                                                                                               | DONE; 13 HTTP integration tests passing                                                                                         |
+| 6   | apps/scanner-agent (Go)                                                                                                                                                                                               | DONE; Go unit tests + real-binary E2E (agent-e2e.test.ts, 5 tests) passing                                                      |
+| 7   | apps/worker (BullMQ, scheduler, sync jobs, backups)                                                                                                                                                                   | DONE; 7 ops tests (backup/restore verified on real pg_dump)                                                                     |
+| 8   | apps/web (Next.js PWA, all sections)                                                                                                                                                                                  | DONE; 32 Playwright specs passing (desktop + 360px)                                                                             |
+| 9   | infra (compose, Caddy, Dockerfiles, scripts, backup/restore)                                                                                                                                                          | IN_PROGRESS: `docker compose up -d --build` verified healthy via Caddy :8080; scripts backup/restore/diagnostics/seed-demo TODO |
+| 10  | tests (unit, integration T01-T35, Playwright, Go)                                                                                                                                                                     | IN_PROGRESS: 46 integration tests + 32 Playwright specs passing; domain/connector unit tests, CI, lint TODO                     |
+| 11  | docs (README, FEATURES, architecture, ops, EXTERNAL_PREREQUISITES, ER + system diagrams)                                                                                                                              | TODO                                                                                                                            |
+| 12  | Final validation run + evidence                                                                                                                                                                                       | TODO                                                                                                                            |
 
 ## Blockers / notes
 

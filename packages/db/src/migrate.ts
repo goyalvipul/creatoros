@@ -24,7 +24,10 @@ export function migrationsFolder(): string {
  * Applies pending migrations. Never resets data. When MIGRATE_BACKUP_DIR is set and the database
  * already contains tables, a pg_dump safety backup is written first (best effort, logged).
  */
-export async function runMigrations(db: Db, databaseUrl?: string): Promise<{ folder: string; backup?: string }> {
+export async function runMigrations(
+  db: Db,
+  databaseUrl?: string,
+): Promise<{ folder: string; backup?: string }> {
   const folder = migrationsFolder();
   let backup: string | undefined;
   const backupDir = process.env.MIGRATE_BACKUP_DIR;
@@ -35,13 +38,24 @@ export async function runMigrations(db: Db, databaseUrl?: string): Promise<{ fol
     const n = (existing as unknown as { rows: { n: number }[] }).rows?.[0]?.n ?? 0;
     if (n > 0) {
       fs.mkdirSync(backupDir, { recursive: true });
-      const file = path.join(backupDir, `pre-migrate-${new Date().toISOString().replace(/[:.]/g, '-')}.sql.gz.dump`);
-      const r = spawnSync('pg_dump', ['--format=custom', '--compress=6', `--file=${file}`, databaseUrl], { encoding: 'utf8' });
+      const file = path.join(
+        backupDir,
+        `pre-migrate-${new Date().toISOString().replace(/[:.]/g, '-')}.sql.gz.dump`,
+      );
+      const r = spawnSync('pg_dump', ['--format=custom', '--compress=6', `--file=${file}`, databaseUrl], {
+        encoding: 'utf8',
+      });
       if (r.status === 0) {
         backup = file;
         console.log(JSON.stringify({ level: 'info', msg: 'pre-migration backup written', file }));
       } else {
-        console.warn(JSON.stringify({ level: 'warn', msg: 'pre-migration backup skipped', err: r.stderr || r.error?.message }));
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            msg: 'pre-migration backup skipped',
+            err: r.stderr || r.error?.message,
+          }),
+        );
       }
     }
   }

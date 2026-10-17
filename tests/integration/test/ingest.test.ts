@@ -1,7 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, duplicateCandidates, eq, fileInstances, mediaObjects, scanRuns, storageRoots, type DbHandle } from '@creatoros/db';
-import { detectNearDuplicates, processIngest, getHashRequests, type AuthedAgent, type Ctx } from '@creatoros/services';
+import {
+  and,
+  duplicateCandidates,
+  eq,
+  fileInstances,
+  mediaObjects,
+  scanRuns,
+  storageRoots,
+  type DbHandle,
+} from '@creatoros/db';
+import {
+  detectNearDuplicates,
+  processIngest,
+  getHashRequests,
+  type AuthedAgent,
+  type Ctx,
+} from '@creatoros/services';
 import { makeOrg, makeRoot, openDb, pairTestDevice } from '../src/helpers';
 
 let h: DbHandle;
@@ -33,12 +48,17 @@ async function setup() {
   const dev = await pairTestDevice(org.ctx);
   const root = await makeRoot(org.ctx, dev.deviceId, 'D:\\Media');
   const agent = (await dev.authFor('{}')) as AuthedAgent;
-  const send = (runId: string, phase: 'START' | 'PROGRESS' | 'END', observations: any[] = [], extra: Record<string, unknown> = {}) =>
-    processIngest(h.db, org.env, agent, { rootId: root.id, runId, phase, observations, ...extra });
+  const send = (
+    runId: string,
+    phase: 'START' | 'PROGRESS' | 'END',
+    observations: any[] = [],
+    extra: Record<string, unknown> = {},
+  ) => processIngest(h.db, org.env, agent, { rootId: root.id, runId, phase, observations, ...extra });
   return { org, dev, root, agent, send, ctx: org.ctx as Ctx };
 }
 
-const inst = async (rootId: string) => h.db.select().from(fileInstances).where(eq(fileInstances.rootId, rootId));
+const inst = async (rootId: string) =>
+  h.db.select().from(fileInstances).where(eq(fileInstances.rootId, rootId));
 
 describe('agent ingest', () => {
   it('records files once and replays are idempotent (T11)', async () => {
@@ -57,12 +77,23 @@ describe('agent ingest', () => {
 
   it('rejects paths outside the root (T12) and foreign roots', async () => {
     const { root, send, org } = await setup();
-    const r = await send(randomUUID(), 'START', [file('C:\\Windows\\System32\\evil.dll'), file('D:\\Media\\..\\Secret\\x.mp4'), file('D:\\Media\\ok.mp4')]);
+    const r = await send(randomUUID(), 'START', [
+      file('C:\\Windows\\System32\\evil.dll'),
+      file('D:\\Media\\..\\Secret\\x.mp4'),
+      file('D:\\Media\\ok.mp4'),
+    ]);
     expect(r.rejected).toBe(2);
     expect(r.accepted).toBe(1);
     expect((await inst(root.id)).map((x) => x.fileName)).toEqual(['ok.mp4']);
     const other = await setup();
-    await expect(processIngest(h.db, org.env, other.agent, { rootId: root.id, runId: randomUUID(), phase: 'START', observations: [] })).rejects.toMatchObject({ status: 403 });
+    await expect(
+      processIngest(h.db, org.env, other.agent, {
+        rootId: root.id,
+        runId: randomUUID(),
+        phase: 'START',
+        observations: [],
+      }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 
   it('detects moves by file id instead of creating a new instance (T08)', async () => {
@@ -102,13 +133,33 @@ describe('agent ingest', () => {
     expect(g.availability).toBe('MISSING_CANDIDATE');
     // complete scan 2 (grace 0h so confirmation is immediate on the 2nd miss)
     const r4 = randomUUID();
-    await processIngest(h.db, org.env, agent, { rootId: root.id, runId: r4, phase: 'START', observations: [file('D:\\Media\\keep.mp4', { eventId: randomUUID() })] }, { missingGraceHours: 0, now: t(1) });
-    await processIngest(h.db, org.env, agent, { rootId: root.id, runId: r4, phase: 'END', complete: true, observations: [] }, { missingGraceHours: 0, now: t(1) });
+    await processIngest(
+      h.db,
+      org.env,
+      agent,
+      {
+        rootId: root.id,
+        runId: r4,
+        phase: 'START',
+        observations: [file('D:\\Media\\keep.mp4', { eventId: randomUUID() })],
+      },
+      { missingGraceHours: 0, now: t(1) },
+    );
+    await processIngest(
+      h.db,
+      org.env,
+      agent,
+      { rootId: root.id, runId: r4, phase: 'END', complete: true, observations: [] },
+      { missingGraceHours: 0, now: t(1) },
+    );
     g = (await inst(root.id)).find((x) => x.fileName === 'gone.mp4')!;
     expect(g.availability).toBe('CONFIRMED_MISSING');
     // the file comes back
     const r5 = randomUUID();
-    await send(r5, 'START', [file('D:\\Media\\gone.mp4', { eventId: randomUUID() }), file('D:\\Media\\keep.mp4', { eventId: randomUUID() })]);
+    await send(r5, 'START', [
+      file('D:\\Media\\gone.mp4', { eventId: randomUUID() }),
+      file('D:\\Media\\keep.mp4', { eventId: randomUUID() }),
+    ]);
     g = (await inst(root.id)).find((x) => x.fileName === 'gone.mp4')!;
     expect(g.availability).toBe('AVAILABLE');
     expect(g.missingChecks).toBe(0);
@@ -131,11 +182,39 @@ describe('agent ingest', () => {
     const { root, send } = await setup();
     const HASH = 'a'.repeat(64);
     const run = randomUUID();
-    await send(run, 'START', [file('D:\\Media\\x.mp4'), file('D:\\Media\\copy\\x2.mp4', { fileId: 'other' }), file('D:\\Media\\wip.mp4', { state: 'STILL_WRITING' })]);
+    await send(run, 'START', [
+      file('D:\\Media\\x.mp4'),
+      file('D:\\Media\\copy\\x2.mp4', { fileId: 'other' }),
+      file('D:\\Media\\wip.mp4', { state: 'STILL_WRITING' }),
+    ]);
     await send(run, 'PROGRESS', [
-      { eventId: randomUUID(), seq: seq++, kind: 'hash', path: 'D:\\Media\\x.mp4', size: 1000, mtimeMs: T0, fullHash: HASH },
-      { eventId: randomUUID(), seq: seq++, kind: 'hash', path: 'D:\\Media\\copy\\x2.mp4', size: 1000, mtimeMs: T0, fullHash: HASH },
-      { eventId: randomUUID(), seq: seq++, kind: 'hash', path: 'D:\\Media\\wip.mp4', size: 1000, mtimeMs: T0, fullHash: 'b'.repeat(64) },
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'hash',
+        path: 'D:\\Media\\x.mp4',
+        size: 1000,
+        mtimeMs: T0,
+        fullHash: HASH,
+      },
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'hash',
+        path: 'D:\\Media\\copy\\x2.mp4',
+        size: 1000,
+        mtimeMs: T0,
+        fullHash: HASH,
+      },
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'hash',
+        path: 'D:\\Media\\wip.mp4',
+        size: 1000,
+        mtimeMs: T0,
+        fullHash: 'b'.repeat(64),
+      },
     ]);
     const rows = await inst(root.id);
     const x = rows.find((r) => r.fileName === 'x.mp4')!;
@@ -145,7 +224,17 @@ describe('agent ingest', () => {
     expect(x.mediaObjectId).toBe(x2.mediaObjectId);
     expect(wip.fullHash).toBeNull();
     // stale hash (size changed since hashing) is rejected
-    await send(run, 'PROGRESS', [{ eventId: randomUUID(), seq: seq++, kind: 'hash', path: 'D:\\Media\\x.mp4', size: 999, mtimeMs: T0, fullHash: 'c'.repeat(64) }]);
+    await send(run, 'PROGRESS', [
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'hash',
+        path: 'D:\\Media\\x.mp4',
+        size: 999,
+        mtimeMs: T0,
+        fullHash: 'c'.repeat(64),
+      },
+    ]);
     const [after] = await h.db.select().from(fileInstances).where(eq(fileInstances.id, x.id));
     expect(after!.fullHash).toBe(HASH);
     const mos = await h.db.select().from(mediaObjects).where(eq(mediaObjects.exactHash, HASH));
@@ -156,7 +245,17 @@ describe('agent ingest', () => {
     const { root, send } = await setup();
     const run = randomUUID();
     await send(run, 'START', [file('D:\\Media\\v.mp4')]);
-    await send(run, 'PROGRESS', [{ eventId: randomUUID(), seq: seq++, kind: 'hash', path: 'D:\\Media\\v.mp4', size: 1000, mtimeMs: T0, fullHash: 'd'.repeat(64) }]);
+    await send(run, 'PROGRESS', [
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'hash',
+        path: 'D:\\Media\\v.mp4',
+        size: 1000,
+        mtimeMs: T0,
+        fullHash: 'd'.repeat(64),
+      },
+    ]);
     const r2 = randomUUID();
     await send(r2, 'START', [file('D:\\Media\\v.mp4', { size: 5000, mtimeMs: T0 + 60_000 })]);
     const [row] = await inst(root.id);
@@ -198,9 +297,27 @@ describe('near-duplicate detection', () => {
     const mk = async (name: string, hash: string, size: number, durationMs: number) => {
       const [mo] = await h.db
         .insert(mediaObjects)
-        .values({ orgId: ctx.orgId, exactHash: hash.repeat(64).slice(0, 64), size, kind: 'VIDEO', tech: { durationMs, width: 1920, height: 1080 } })
+        .values({
+          orgId: ctx.orgId,
+          exactHash: hash.repeat(64).slice(0, 64),
+          size,
+          kind: 'VIDEO',
+          tech: { durationMs, width: 1920, height: 1080 },
+        })
         .returning();
-      await h.db.insert(fileInstances).values({ orgId: ctx.orgId, rootId: root.id, deviceId: dev.deviceId, canonicalPath: `d:/media/${name}`, displayPath: `D:\\Media\\${name}`, fileName: name, ext: 'mp4', size, mediaObjectId: mo!.id, fileType: 'VIDEO', fullHash: mo!.exactHash });
+      await h.db.insert(fileInstances).values({
+        orgId: ctx.orgId,
+        rootId: root.id,
+        deviceId: dev.deviceId,
+        canonicalPath: `d:/media/${name}`,
+        displayPath: `D:\\Media\\${name}`,
+        fileName: name,
+        ext: 'mp4',
+        size,
+        mediaObjectId: mo!.id,
+        fileType: 'VIDEO',
+        fullHash: mo!.exactHash,
+      });
       return mo!;
     };
     const a = await mk('rooftop_session_final.mp4', 'a', 5_000_000, 180_000);
@@ -211,7 +328,10 @@ describe('near-duplicate detection', () => {
     expect(first.suggested).toBe(1);
     const second = await detectNearDuplicates(ctx);
     expect(second.suggested).toBe(0);
-    const rows = await h.db.select().from(duplicateCandidates).where(eq(duplicateCandidates.orgId, ctx.orgId));
+    const rows = await h.db
+      .select()
+      .from(duplicateCandidates)
+      .where(eq(duplicateCandidates.orgId, ctx.orgId));
     expect(rows.length).toBe(1);
     expect([rows[0]!.mediaAId, rows[0]!.mediaBId].sort()).toEqual([a.id, b.id].sort());
   });

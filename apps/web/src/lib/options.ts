@@ -32,7 +32,11 @@ export const PAYMENT_METHODS = PAYMENT_METHOD;
 export interface Brand {
   id: string;
   name: string;
-  channels: { id: string; name: string; accounts: { id: string; platform: string; handle: string; channelId: string }[] }[];
+  channels: {
+    id: string;
+    name: string;
+    accounts: { id: string; platform: string; handle: string; channelId: string }[];
+  }[];
   [k: string]: any;
 }
 
@@ -47,12 +51,22 @@ export function useBrands(): Brand[] {
 
 export function useAccounts() {
   const brands = useBrands();
-  return brands.flatMap((b) => b.channels.flatMap((c) => c.accounts.map((a) => ({ ...a, brandName: b.name, channelName: c.name }))));
+  return brands.flatMap((b) =>
+    b.channels.flatMap((c) => c.accounts.map((a) => ({ ...a, brandName: b.name, channelName: c.name }))),
+  );
 }
 
 /** /roots returns { root, deviceName, fileCount... }; the UI works with the flattened shape. */
 export function useRoots(refreshInterval?: number) {
   const res = useApi<any[]>('/roots', { refreshInterval });
-  const data = res.data?.map((r) => ({ ...r.root, deviceName: r.deviceName, deviceState: r.deviceState, fileCount: Number(r.fileCount ?? 0), missingCount: Number(r.missingCount ?? 0), stillWritingCount: Number(r.stillWritingCount ?? 0), totalBytes: Number(r.totalBytes ?? 0) }));
+  const data = res.data?.map((r) => ({
+    ...r.root,
+    deviceName: r.deviceName,
+    deviceState: r.deviceState,
+    fileCount: Number(r.fileCount ?? 0),
+    missingCount: Number(r.missingCount ?? 0),
+    stillWritingCount: Number(r.stillWritingCount ?? 0),
+    totalBytes: Number(r.totalBytes ?? 0),
+  }));
   return { ...res, data } as typeof res & { data: any[] | undefined };
 }

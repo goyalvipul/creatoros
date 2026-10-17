@@ -1,7 +1,25 @@
 import { createHash } from 'node:crypto';
-import { ConnectorError, type Connector, type ConnectorCapabilities, type ConnectorContext, type ConnectResult, type Credentials, type HealthResult, type NormalizedEmail, type RateLimitBudget, type SyncResult } from '../types';
+import {
+  ConnectorError,
+  type Connector,
+  type ConnectorCapabilities,
+  type ConnectorContext,
+  type ConnectResult,
+  type Credentials,
+  type HealthResult,
+  type NormalizedEmail,
+  type RateLimitBudget,
+  type SyncResult,
+} from '../types';
 import { ensureFreshToken, http } from '../http';
-import { buildGoogleAuthUrl, GOOGLE_SCOPES, hasScope, refreshGoogleToken, revokeGoogleToken, type GoogleClientConfig } from './oauth';
+import {
+  buildGoogleAuthUrl,
+  GOOGLE_SCOPES,
+  hasScope,
+  refreshGoogleToken,
+  revokeGoogleToken,
+  type GoogleClientConfig,
+} from './oauth';
 import { generatePkce, randomState } from '../pkce';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -52,14 +70,27 @@ function extractText(part: GmailPart | undefined): string | null {
     if (t) return t;
   }
   if (part.mimeType === 'text/html' && part.body?.data) {
-    return decodeB64Url(part.body.data).replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return decodeB64Url(part.body.data)
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
   return null;
 }
 
-function collectAttachments(part: GmailPart | undefined, out: NormalizedEmail['attachments'] = []): NormalizedEmail['attachments'] {
+function collectAttachments(
+  part: GmailPart | undefined,
+  out: NormalizedEmail['attachments'] = [],
+): NormalizedEmail['attachments'] {
   if (!part) return out;
-  if (part.filename) out.push({ name: part.filename, mime: part.mimeType, sizeBytes: part.body?.size, ref: part.body?.attachmentId });
+  if (part.filename)
+    out.push({
+      name: part.filename,
+      mime: part.mimeType,
+      sizeBytes: part.body?.size,
+      ref: part.body?.attachmentId,
+    });
   for (const p of part.parts ?? []) collectAttachments(p, out);
   return out;
 }
@@ -74,15 +105,24 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     const read = hasTokens && hasScope(creds, GOOGLE_SCOPES.gmailRead[0]);
     const drafts = hasTokens && hasScope(creds, GOOGLE_SCOPES.gmailDrafts[0]);
     const blockers: string[] = [];
-    if (!client) blockers.push('Google OAuth client is not configured (set GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI and optionally GOOGLE_CLIENT_SECRET).');
-    if (client && !hasTokens) blockers.push('Gmail account not connected yet. Use the Connect button and approve read-only access.');
+    if (!client)
+      blockers.push(
+        'Google OAuth client is not configured (set GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI and optionally GOOGLE_CLIENT_SECRET).',
+      );
+    if (client && !hasTokens)
+      blockers.push('Gmail account not connected yet. Use the Connect button and approve read-only access.');
     return {
       provider: 'gmail',
       state: !client ? 'NOT_CONFIGURED' : !hasTokens ? 'NOT_CONFIGURED' : 'ACTIVE',
       read,
       write: false,
       incrementalSync: read,
-      flags: { readMessages: read, createDrafts: drafts, sendEmail: false, pushNotifications: Boolean(ctx.config.pubsubTopic) },
+      flags: {
+        readMessages: read,
+        createDrafts: drafts,
+        sendEmail: false,
+        pushNotifications: Boolean(ctx.config.pubsubTopic),
+      },
       blockers,
       setupSteps: [
         'Create an OAuth client in Google Cloud Console (Desktop or Web application) and enable the Gmail API.',
@@ -97,10 +137,20 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     if (!client) return { status: 'NOT_CONFIGURED', steps: (await this.getCapabilities(ctx)).setupSteps };
     const pkce = generatePkce();
     const state = randomState();
-    const scopes = [...GOOGLE_SCOPES.identity, ...GOOGLE_SCOPES.gmailRead, ...(input.drafts ? GOOGLE_SCOPES.gmailDrafts : [])];
+    const scopes = [
+      ...GOOGLE_SCOPES.identity,
+      ...GOOGLE_SCOPES.gmailRead,
+      ...(input.drafts ? GOOGLE_SCOPES.gmailDrafts : []),
+    ];
     return {
       status: 'REDIRECT',
-      authorizeUrl: buildGoogleAuthUrl({ client, scopes, state, codeChallenge: pkce.challenge, loginHint: input.loginHint }),
+      authorizeUrl: buildGoogleAuthUrl({
+        client,
+        scopes,
+        state,
+        codeChallenge: pkce.challenge,
+        loginHint: input.loginHint,
+      }),
       oauth: { state, verifier: pkce.verifier, scopes },
     };
   }
@@ -117,9 +167,16 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     return ensureFreshToken(ctx, refreshGoogleToken);
   }
 
-  private async get<T>(ctx: ConnectorContext, path: string, query?: Record<string, string | number | undefined>): Promise<T> {
+  private async get<T>(
+    ctx: ConnectorContext,
+    path: string,
+    query?: Record<string, string | number | undefined>,
+  ): Promise<T> {
     const token = await this.token(ctx);
-    const { data } = await http<T>(ctx, `${API}${path}`, { headers: { authorization: `Bearer ${token}` }, query });
+    const { data } = await http<T>(ctx, `${API}${path}`, {
+      headers: { authorization: `Bearer ${token}` },
+      query,
+    });
     return data;
   }
 
@@ -129,7 +186,12 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
       return { ok: true, state: 'ACTIVE', checkedAt: new Date(ctx.now()).toISOString() };
     } catch (e) {
       const err = e as ConnectorError;
-      const state = err.kind === 'AUTH_REVOKED' || err.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : err.kind === 'NOT_CONFIGURED' ? 'NOT_CONFIGURED' : 'ERROR';
+      const state =
+        err.kind === 'AUTH_REVOKED' || err.kind === 'AUTH_EXPIRED'
+          ? 'AUTH_EXPIRED'
+          : err.kind === 'NOT_CONFIGURED'
+            ? 'NOT_CONFIGURED'
+            : 'ERROR';
       return { ok: false, state, detail: err.message, checkedAt: new Date(ctx.now()).toISOString() };
     }
   }
@@ -148,7 +210,9 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     const labels = raw.labelIds ?? [];
     const outbound = labels.includes('SENT') || labels.includes('DRAFT');
     const subject = header(raw, 'Subject') ?? '';
-    const ts = raw.internalDate ? new Date(Number(raw.internalDate)).toISOString() : new Date(header(raw, 'Date') ?? Date.now()).toISOString();
+    const ts = raw.internalDate
+      ? new Date(Number(raw.internalDate)).toISOString()
+      : new Date(header(raw, 'Date') ?? Date.now()).toISOString();
     const body = extractText(raw.payload);
     return {
       providerMsgId: raw.id,
@@ -163,14 +227,18 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
       labelIds: labels,
       direction: outbound ? 'OUTBOUND' : 'INBOUND',
       attachments: collectAttachments(raw.payload),
-      rawChecksum: createHash('sha256').update(`${raw.id}|${subject}|${raw.snippet ?? ''}|${ts}`).digest('hex'),
+      rawChecksum: createHash('sha256')
+        .update(`${raw.id}|${subject}|${raw.snippet ?? ''}|${ts}`)
+        .digest('hex'),
       historyId: raw.historyId,
     };
   }
 
   async getExternalRecord(ctx: ConnectorContext, id: string): Promise<NormalizedEmail | null> {
     try {
-      const raw = await this.get<GmailRawMessage>(ctx, `/messages/${encodeURIComponent(id)}`, { format: 'full' });
+      const raw = await this.get<GmailRawMessage>(ctx, `/messages/${encodeURIComponent(id)}`, {
+        format: 'full',
+      });
       return this.normalize(raw);
     } catch (e) {
       if (e instanceof ConnectorError && e.kind === 'NOT_FOUND') return null;
@@ -193,7 +261,10 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
   }
 
   /** Full sync: capture historyId FIRST so nothing arriving during the listing is missed. */
-  async syncFull(ctx: ConnectorContext, opts: { maxMessages?: number; query?: string } = {}): Promise<SyncResult<NormalizedEmail>> {
+  async syncFull(
+    ctx: ConnectorContext,
+    opts: { maxMessages?: number; query?: string } = {},
+  ): Promise<SyncResult<NormalizedEmail>> {
     const profile = await this.get<{ historyId: string; emailAddress: string }>(ctx, '/profile');
     const items: NormalizedEmail[] = [];
     let pageToken: string | undefined;
@@ -222,11 +293,16 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     let latest = cursor;
     try {
       do {
-        const res = await this.get<{ history?: { id: string; messagesAdded?: { message: { id: string } }[] }[]; historyId?: string; nextPageToken?: string }>(
-          ctx,
-          '/history',
-          { startHistoryId: cursor, historyTypes: 'messageAdded', maxResults: 100, pageToken },
-        );
+        const res = await this.get<{
+          history?: { id: string; messagesAdded?: { message: { id: string } }[] }[];
+          historyId?: string;
+          nextPageToken?: string;
+        }>(ctx, '/history', {
+          startHistoryId: cursor,
+          historyTypes: 'messageAdded',
+          maxResults: 100,
+          pageToken,
+        });
         for (const h of res.history ?? []) {
           for (const a of h.messagesAdded ?? []) ids.add(a.message.id);
           if (h.id) latest = h.id;

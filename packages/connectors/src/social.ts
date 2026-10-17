@@ -51,7 +51,10 @@ export class PostizConnector implements Connector<NormalizedPost, PostizPost> {
     let integrations = false;
     if (configured) {
       try {
-        await http(ctx, `${this.base(ctx)}${ctx.config.integrationsPath ?? '/public/v1/integrations'}`, { headers: this.headers(ctx), maxAttempts: 1 });
+        await http(ctx, `${this.base(ctx)}${ctx.config.integrationsPath ?? '/public/v1/integrations'}`, {
+          headers: this.headers(ctx),
+          maxAttempts: 1,
+        });
         integrations = true;
       } catch {
         integrations = false;
@@ -64,13 +67,23 @@ export class PostizConnector implements Connector<NormalizedPost, PostizPost> {
       write: false,
       incrementalSync: false,
       flags: { listIntegrations: integrations, listPosts: integrations, schedule: false },
-      blockers: configured ? (integrations ? ['Write/scheduling through Postiz is intentionally not enabled (read-only sync).'] : ['Postiz did not answer the integrations endpoint; this version may not expose the public API.']) : ['Postiz is optional and not configured.'],
-      setupSteps: ['Install Postiz (self-hosted or hosted).', 'Generate a public API key in Postiz settings.', 'Set POSTIZ_BASE_URL and POSTIZ_API_KEY, then Test connection.'],
+      blockers: configured
+        ? integrations
+          ? ['Write/scheduling through Postiz is intentionally not enabled (read-only sync).']
+          : ['Postiz did not answer the integrations endpoint; this version may not expose the public API.']
+        : ['Postiz is optional and not configured.'],
+      setupSteps: [
+        'Install Postiz (self-hosted or hosted).',
+        'Generate a public API key in Postiz settings.',
+        'Set POSTIZ_BASE_URL and POSTIZ_API_KEY, then Test connection.',
+      ],
     };
   }
   async connect(ctx: ConnectorContext): Promise<ConnectResult> {
     const caps = await this.getCapabilities(ctx);
-    return caps.state === 'ACTIVE' ? { status: 'CONNECTED' } : { status: 'NOT_CONFIGURED', steps: caps.setupSteps };
+    return caps.state === 'ACTIVE'
+      ? { status: 'CONNECTED' }
+      : { status: 'NOT_CONFIGURED', steps: caps.setupSteps };
   }
   async disconnect() {}
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
@@ -92,11 +105,18 @@ export class PostizConnector implements Connector<NormalizedPost, PostizPost> {
       url: p.releaseURL ?? null,
       title: null,
       description: p.content ?? null,
-      publishedAt: published ? p.publishDate ?? null : null,
+      publishedAt: published ? (p.publishDate ?? null) : null,
       durationMs: null,
       privacy: 'PUBLIC',
       // Only a returned release URL counts as evidence; otherwise we do not claim it is live.
-      state: published && p.releaseURL ? 'PUBLISHED_VERIFIED' : st === 'ERROR' ? 'FAILED' : st === 'QUEUE' || st === 'SCHEDULED' ? 'SCHEDULED' : 'UNKNOWN',
+      state:
+        published && p.releaseURL
+          ? 'PUBLISHED_VERIFIED'
+          : st === 'ERROR'
+            ? 'FAILED'
+            : st === 'QUEUE' || st === 'SCHEDULED'
+              ? 'SCHEDULED'
+              : 'UNKNOWN',
       stats: null,
       thumbnailUrl: null,
       accountExternalId: p.integration?.id ?? null,
@@ -112,7 +132,7 @@ export class PostizConnector implements Connector<NormalizedPost, PostizPost> {
       headers: this.headers(ctx),
       query: { startDate: start, endDate: end },
     });
-    const list: PostizPost[] = Array.isArray(data) ? data : data?.posts ?? [];
+    const list: PostizPost[] = Array.isArray(data) ? data : (data?.posts ?? []);
     return { items: list.map((p) => this.normalize(p)), nextCursor: iso(ctx), hasMore: false };
   }
   syncIncremental(ctx: ConnectorContext): Promise<SyncResult<NormalizedPost>> {
@@ -155,7 +175,9 @@ export class InstagramConnector implements Connector<NormalizedPost, IgMedia> {
       blockers: [
         'Reading Instagram DMs requires Meta App Review for instagram_manage_messages and a connected Facebook Page; not available by default.',
         'Publishing via API requires instagram_content_publish approval; use manual publish records until approved.',
-        ...(configured ? [] : ['Provide an Instagram professional-account access token and IG user id (Integrations → Meta).']),
+        ...(configured
+          ? []
+          : ['Provide an Instagram professional-account access token and IG user id (Integrations → Meta).']),
       ],
       setupSteps: [
         'Convert the Instagram account to Professional (Creator/Business) and link it to a Facebook Page.',
@@ -166,7 +188,9 @@ export class InstagramConnector implements Connector<NormalizedPost, IgMedia> {
   }
   async connect(ctx: ConnectorContext): Promise<ConnectResult> {
     const caps = await this.getCapabilities(ctx);
-    return caps.state === 'ACTIVE' ? { status: 'CONNECTED' } : { status: 'REQUIRES_APPROVAL', steps: caps.setupSteps };
+    return caps.state === 'ACTIVE'
+      ? { status: 'CONNECTED' }
+      : { status: 'REQUIRES_APPROVAL', steps: caps.setupSteps };
   }
   async disconnect() {}
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
@@ -177,12 +201,26 @@ export class InstagramConnector implements Connector<NormalizedPost, IgMedia> {
   }
   async health(ctx: ConnectorContext): Promise<HealthResult> {
     try {
-      if (!ctx.credentials.accessToken || !ctx.config.igUserId) throw new ConnectorError('NOT_CONFIGURED', 'Instagram token / user id missing');
-      await http(ctx, this.url(ctx, `/${ctx.config.igUserId}`), { query: { fields: 'id,username', access_token: ctx.credentials.accessToken }, maxAttempts: 1 });
+      if (!ctx.credentials.accessToken || !ctx.config.igUserId)
+        throw new ConnectorError('NOT_CONFIGURED', 'Instagram token / user id missing');
+      await http(ctx, this.url(ctx, `/${ctx.config.igUserId}`), {
+        query: { fields: 'id,username', access_token: ctx.credentials.accessToken },
+        maxAttempts: 1,
+      });
       return { ok: true, state: 'ACTIVE', checkedAt: iso(ctx) };
     } catch (e) {
       const err = e as ConnectorError;
-      return { ok: false, state: err.kind === 'NOT_CONFIGURED' ? 'NOT_CONFIGURED' : err.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'ERROR', detail: err.message, checkedAt: iso(ctx) };
+      return {
+        ok: false,
+        state:
+          err.kind === 'NOT_CONFIGURED'
+            ? 'NOT_CONFIGURED'
+            : err.kind === 'AUTH_EXPIRED'
+              ? 'AUTH_EXPIRED'
+              : 'ERROR',
+        detail: err.message,
+        checkedAt: iso(ctx),
+      };
     }
   }
   async rateLimitBudget(): Promise<RateLimitBudget> {
@@ -207,7 +245,10 @@ export class InstagramConnector implements Connector<NormalizedPost, IgMedia> {
   async getExternalRecord(ctx: ConnectorContext, id: string): Promise<NormalizedPost | null> {
     try {
       const { data } = await http<IgMedia>(ctx, this.url(ctx, `/${id}`), {
-        query: { fields: 'id,caption,media_type,permalink,timestamp,like_count,comments_count,thumbnail_url', access_token: ctx.credentials.accessToken },
+        query: {
+          fields: 'id,caption,media_type,permalink,timestamp,like_count,comments_count,thumbnail_url',
+          access_token: ctx.credentials.accessToken,
+        },
       });
       return this.normalize(data);
     } catch (e) {
@@ -216,11 +257,13 @@ export class InstagramConnector implements Connector<NormalizedPost, IgMedia> {
     }
   }
   async syncFull(ctx: ConnectorContext, stopBefore?: string | null): Promise<SyncResult<NormalizedPost>> {
-    if (!ctx.credentials.accessToken || !ctx.config.igUserId) throw new ConnectorError('NOT_CONFIGURED', 'Instagram token / user id missing');
+    if (!ctx.credentials.accessToken || !ctx.config.igUserId)
+      throw new ConnectorError('NOT_CONFIGURED', 'Instagram token / user id missing');
     const items: NormalizedPost[] = [];
     let next: string | undefined = this.url(ctx, `/${ctx.config.igUserId}/media`);
     let query: Record<string, string> | undefined = {
-      fields: 'id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,thumbnail_url',
+      fields:
+        'id,caption,media_type,media_product_type,permalink,timestamp,like_count,comments_count,thumbnail_url',
       limit: '50',
       access_token: ctx.credentials.accessToken,
     };
@@ -293,7 +336,8 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
     };
   }
   async connect(ctx: ConnectorContext): Promise<ConnectResult> {
-    if (!ctx.config.clientKey || !ctx.config.redirectUri) return { status: 'NOT_CONFIGURED', steps: (await this.getCapabilities(ctx)).setupSteps };
+    if (!ctx.config.clientKey || !ctx.config.redirectUri)
+      return { status: 'NOT_CONFIGURED', steps: (await this.getCapabilities(ctx)).setupSteps };
     const pkce = generatePkce();
     const state = randomState();
     const scopes = ['user.info.basic', 'video.list'];
@@ -305,7 +349,11 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
     u.searchParams.set('state', state);
     u.searchParams.set('code_challenge', pkce.challenge);
     u.searchParams.set('code_challenge_method', 'S256');
-    return { status: 'REDIRECT', authorizeUrl: u.toString(), oauth: { state, verifier: pkce.verifier, scopes } };
+    return {
+      status: 'REDIRECT',
+      authorizeUrl: u.toString(),
+      oauth: { state, verifier: pkce.verifier, scopes },
+    };
   }
   async exchangeCode(ctx: ConnectorContext, code: string, verifier: string): Promise<Credentials> {
     const { data } = await http<any>(ctx, 'https://open.tiktokapis.com/v2/oauth/token/', {
@@ -324,24 +372,38 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
       accessToken: data.access_token,
       refreshToken: data.refresh_token,
       expiresAt: ctx.now() + (data.expires_in ?? 86400) * 1000,
-      scopes: String(data.scope ?? '').split(',').filter(Boolean),
+      scopes: String(data.scope ?? '')
+        .split(',')
+        .filter(Boolean),
       principal: data.open_id,
     };
   }
   async disconnect() {}
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
-    if (!ctx.credentials.refreshToken) throw new ConnectorError('AUTH_EXPIRED', 'No TikTok refresh token; reconnect.');
+    if (!ctx.credentials.refreshToken)
+      throw new ConnectorError('AUTH_EXPIRED', 'No TikTok refresh token; reconnect.');
     const { data } = await http<any>(ctx, 'https://open.tiktokapis.com/v2/oauth/token/', {
       method: 'POST',
-      form: { client_key: ctx.config.clientKey, client_secret: ctx.config.clientSecret, grant_type: 'refresh_token', refresh_token: ctx.credentials.refreshToken },
+      form: {
+        client_key: ctx.config.clientKey,
+        client_secret: ctx.config.clientSecret,
+        grant_type: 'refresh_token',
+        refresh_token: ctx.credentials.refreshToken,
+      },
       maxAttempts: 2,
       idempotent: true,
     });
-    return { ...ctx.credentials, accessToken: data.access_token, refreshToken: data.refresh_token ?? ctx.credentials.refreshToken, expiresAt: ctx.now() + (data.expires_in ?? 86400) * 1000 };
+    return {
+      ...ctx.credentials,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token ?? ctx.credentials.refreshToken,
+      expiresAt: ctx.now() + (data.expires_in ?? 86400) * 1000,
+    };
   }
   private async token(ctx: ConnectorContext): Promise<string> {
     const c = ctx.credentials;
-    if (!c.accessToken && !c.refreshToken) throw new ConnectorError('NOT_CONFIGURED', 'TikTok account not connected.');
+    if (!c.accessToken && !c.refreshToken)
+      throw new ConnectorError('NOT_CONFIGURED', 'TikTok account not connected.');
     if (c.accessToken && (!c.expiresAt || c.expiresAt - 120_000 > ctx.now())) return c.accessToken;
     const next = await this.refreshCredentials(ctx);
     ctx.credentials = next;
@@ -351,11 +413,25 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
   async health(ctx: ConnectorContext): Promise<HealthResult> {
     try {
       const t = await this.token(ctx);
-      await http(ctx, 'https://open.tiktokapis.com/v2/user/info/', { headers: { authorization: `Bearer ${t}` }, query: { fields: 'open_id' }, maxAttempts: 1 });
+      await http(ctx, 'https://open.tiktokapis.com/v2/user/info/', {
+        headers: { authorization: `Bearer ${t}` },
+        query: { fields: 'open_id' },
+        maxAttempts: 1,
+      });
       return { ok: true, state: 'ACTIVE', checkedAt: iso(ctx) };
     } catch (e) {
       const err = e as ConnectorError;
-      return { ok: false, state: err.kind === 'NOT_CONFIGURED' ? 'NOT_CONFIGURED' : err.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'ERROR', detail: err.message, checkedAt: iso(ctx) };
+      return {
+        ok: false,
+        state:
+          err.kind === 'NOT_CONFIGURED'
+            ? 'NOT_CONFIGURED'
+            : err.kind === 'AUTH_EXPIRED'
+              ? 'AUTH_EXPIRED'
+              : 'ERROR',
+        detail: err.message,
+        checkedAt: iso(ctx),
+      };
     }
   }
   async rateLimitBudget(): Promise<RateLimitBudget> {
@@ -391,7 +467,10 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
       const { data } = await http<any>(ctx, 'https://open.tiktokapis.com/v2/video/list/', {
         method: 'POST',
         headers: { authorization: `Bearer ${t}` },
-        query: { fields: 'id,title,video_description,duration,create_time,share_url,cover_image_url,view_count,like_count,comment_count,share_count' },
+        query: {
+          fields:
+            'id,title,video_description,duration,create_time,share_url,cover_image_url,view_count,like_count,comment_count,share_count',
+        },
         json: { max_count: 20, ...(cursor !== undefined ? { cursor } : {}) },
         idempotent: true,
       });

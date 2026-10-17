@@ -53,8 +53,14 @@ export const ideas = pgTable(
     creativeBrief: text('creative_brief'),
     notes: text('notes'),
     genre: text('genre'),
-    contentPillars: text('content_pillars').array().notNull().default(sql`'{}'::text[]`),
-    referenceLinks: text('reference_links').array().notNull().default(sql`'{}'::text[]`),
+    contentPillars: text('content_pillars')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    referenceLinks: text('reference_links')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     voiceNoteFileId: uuid('voice_note_file_id').references(() => fileInstances.id, { onDelete: 'set null' }),
     language: text('language').notNull().default('en'),
     format: contentFormat('format').notNull().default('OTHER'),
@@ -65,7 +71,10 @@ export const ideas = pgTable(
     status: ideaStatus('status').notNull().default('NEW'),
     storyboard: text('storyboard'),
     lyricsDraft: text('lyrics_draft'),
-    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    tags: text('tags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     origin: text('origin').notNull().default('manual'),
     convertedProjectId: uuid('converted_project_id').references((): AnyPgColumn => creativeProjects.id, {
       onDelete: 'set null',
@@ -100,7 +109,10 @@ export const creativeProjects = pgTable(
     parentProjectId: uuid('parent_project_id').references((): AnyPgColumn => creativeProjects.id, {
       onDelete: 'set null',
     }),
-    tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
+    tags: text('tags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     pinned: boolean('pinned').notNull().default(false),
     priority: priority('priority').notNull().default('NORMAL'),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
@@ -142,7 +154,10 @@ export const projectChecklistTemplates = pgTable('project_checklist_templates', 
   name: text('name').notNull(),
   contentType: contentFormat('content_type').notNull().default('OTHER'),
   items: jsonb('items').$type<{ label: string; required: boolean; stage?: string }[]>().notNull().default([]),
-  variants: text('variants').array().notNull().default(sql`'{}'::text[]`),
+  variants: text('variants')
+    .array()
+    .notNull()
+    .default(sql`'{}'::text[]`),
   builtIn: boolean('built_in').notNull().default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -184,7 +199,9 @@ export const songs = pgTable(
     musicalKey: text('musical_key'),
     lyrics: text('lyrics'),
     lyricsAssetId: uuid('lyrics_asset_id').references(() => logicalAssets.id, { onDelete: 'set null' }),
-    audioMasterAssetId: uuid('audio_master_asset_id').references(() => logicalAssets.id, { onDelete: 'set null' }),
+    audioMasterAssetId: uuid('audio_master_asset_id').references(() => logicalAssets.id, {
+      onDelete: 'set null',
+    }),
     sunoUrl: text('suno_url'),
     notes: text('notes'),
     createdAt: createdAt(),
@@ -209,10 +226,17 @@ export const productionScenes = pgTable(
     narration: text('narration'),
     direction: text('direction'),
     shotPrompt: text('shot_prompt'),
-    audioSegmentAssetId: uuid('audio_segment_asset_id').references(() => logicalAssets.id, { onDelete: 'set null' }),
-    referenceAssetIds: uuid('reference_asset_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    audioSegmentAssetId: uuid('audio_segment_asset_id').references(() => logicalAssets.id, {
+      onDelete: 'set null',
+    }),
+    referenceAssetIds: uuid('reference_asset_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::uuid[]`),
     status: clipState('status').notNull().default('PLANNED'),
-    selectedVersionId: uuid('selected_version_id').references(() => assetVersions.id, { onDelete: 'set null' }),
+    selectedVersionId: uuid('selected_version_id').references(() => assetVersions.id, {
+      onDelete: 'set null',
+    }),
     qaNotes: text('qa_notes'),
     approvedAt: ts('approved_at'),
     createdAt: createdAt(),
@@ -269,7 +293,10 @@ export const generationOutputs = pgTable(
     selectionState: outputSelection('selection_state').notNull().default('CANDIDATE'),
     createdAt: createdAt(),
   },
-  (t) => [index('generation_outputs_job_idx').on(t.jobId), index('generation_outputs_file_idx').on(t.fileInstanceId)],
+  (t) => [
+    index('generation_outputs_job_idx').on(t.jobId),
+    index('generation_outputs_file_idx').on(t.fileInstanceId),
+  ],
 );
 
 export const projectAttachments = pgTable(
@@ -291,7 +318,10 @@ export const projectAttachments = pgTable(
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
   },
-  (t) => [index('project_attachments_project_idx').on(t.projectId), index('project_attachments_deal_idx').on(t.dealId)],
+  (t) => [
+    index('project_attachments_project_idx').on(t.projectId),
+    index('project_attachments_deal_idx').on(t.dealId),
+  ],
 );
 
 export const projectStatusEvents = pgTable(

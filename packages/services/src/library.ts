@@ -1,14 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {
-  and,
-  derivedPreviews,
-  eq,
-  fileInstances,
-  sql,
-  type Db,
-  type SQL,
-} from '@creatoros/db';
+import { and, derivedPreviews, eq, fileInstances, sql, type Db, type SQL } from '@creatoros/db';
 import { mapToSmbPath, type PathOs } from '@creatoros/domain';
 import { audit } from './audit';
 import type { AuthedAgent } from './devices';
@@ -51,11 +43,16 @@ export function copyPathsFor(
   root: { displayPath: string; smbPath: string | null; mountPath: string | null; pathOs: string },
 ): CopyPaths {
   const os = (root.pathOs as PathOs) ?? 'windows';
-  const smb = root.smbPath ? mapToSmbPath(file.displayPath, { localRoot: root.displayPath, smbRoot: root.smbPath }, os) : null;
+  const smb = root.smbPath
+    ? mapToSmbPath(file.displayPath, { localRoot: root.displayPath, smbRoot: root.smbPath }, os)
+    : null;
   let mount: string | null = null;
   if (root.mountPath) {
     const base = root.displayPath.replace(/[\\/]+$/, '');
-    const rest = file.displayPath.slice(base.length).replace(/^[\\/]+/, '').replace(/\\/g, '/');
+    const rest = file.displayPath
+      .slice(base.length)
+      .replace(/^[\\/]+/, '')
+      .replace(/\\/g, '/');
     mount = `${root.mountPath.replace(/\/+$/, '')}/${rest}`;
   }
   return { local: file.displayPath, smb, mount };
@@ -82,9 +79,17 @@ const FILE_SELECT = sql`
   (select count(*)::int from asset_file_links l where l.file_instance_id = f.id) as "assetLinks"`;
 
 function shapeFile(r: any) {
-  const copy = copyPathsFor(r, { displayPath: r.rootPath, smbPath: r.rootSmb, mountPath: r.rootMount, pathOs: r.rootOs });
+  const copy = copyPathsFor(r, {
+    displayPath: r.rootPath,
+    smbPath: r.rootSmb,
+    mountPath: r.rootMount,
+    pathOs: r.rootOs,
+  });
   const { rootPath, rootSmb, rootMount, rootOs, ...rest } = r;
-  void rootPath; void rootSmb; void rootMount; void rootOs;
+  void rootPath;
+  void rootSmb;
+  void rootMount;
+  void rootOs;
   return { ...rest, copyPaths: copy };
 }
 
@@ -101,9 +106,14 @@ export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
   if (q.rootId) where.push(sql`f.root_id = ${q.rootId}`);
   if (q.deviceId) where.push(sql`f.device_id = ${q.deviceId}`);
   if (q.availability) where.push(sql`(${EFFECTIVE_AVAILABILITY}) = ${q.availability}`);
-  if (q.tagId) where.push(sql`exists(select 1 from file_tag_links t where t.file_instance_id = f.id and t.tag_id = ${q.tagId})`);
-  if (q.linked === true) where.push(sql`exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
-  if (q.linked === false) where.push(sql`not exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
+  if (q.tagId)
+    where.push(
+      sql`exists(select 1 from file_tag_links t where t.file_instance_id = f.id and t.tag_id = ${q.tagId})`,
+    );
+  if (q.linked === true)
+    where.push(sql`exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
+  if (q.linked === false)
+    where.push(sql`not exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
   if (q.duplicates)
     where.push(
       sql`f.media_object_id is not null and exists(select 1 from file_instances c where c.media_object_id = f.media_object_id and c.id <> f.id and c.archived_at is null)`,
@@ -125,7 +135,8 @@ export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
   const last = page[page.length - 1];
   return {
     items: page.map(shapeFile),
-    nextCursor: rows.length > limit && last ? encodeCursor(new Date(last.firstSeenAt).toISOString(), last.id) : null,
+    nextCursor:
+      rows.length > limit && last ? encodeCursor(new Date(last.firstSeenAt).toISOString(), last.id) : null,
   };
 }
 
@@ -144,12 +155,18 @@ export async function libraryCounts(ctx: Ctx) {
     byKind[r.kind] = (byKind[r.kind] ?? 0) + r.n;
     total += r.n;
   }
-  const dup = rowsOf<{ n: number }>(
-    await ctx.db.execute(sql`select count(*)::int as n from (select media_object_id from file_instances where org_id = ${ctx.orgId} and archived_at is null and media_object_id is not null group by 1 having count(*) > 1) x`),
-  )[0]?.n ?? 0;
-  const unlinked = rowsOf<{ n: number }>(
-    await ctx.db.execute(sql`select count(*)::int as n from file_instances f where f.org_id = ${ctx.orgId} and f.archived_at is null and f.file_type in ('VIDEO','AUDIO','IMAGE') and not exists (select 1 from asset_file_links l where l.file_instance_id = f.id)`),
-  )[0]?.n ?? 0;
+  const dup =
+    rowsOf<{ n: number }>(
+      await ctx.db.execute(
+        sql`select count(*)::int as n from (select media_object_id from file_instances where org_id = ${ctx.orgId} and archived_at is null and media_object_id is not null group by 1 having count(*) > 1) x`,
+      ),
+    )[0]?.n ?? 0;
+  const unlinked =
+    rowsOf<{ n: number }>(
+      await ctx.db.execute(
+        sql`select count(*)::int as n from file_instances f where f.org_id = ${ctx.orgId} and f.archived_at is null and f.file_type in ('VIDEO','AUDIO','IMAGE') and not exists (select 1 from asset_file_links l where l.file_instance_id = f.id)`,
+      ),
+    )[0]?.n ?? 0;
   return { total, byAvailability, byKind, duplicateGroups: dup, unlinkedMedia: unlinked };
 }
 
@@ -173,7 +190,12 @@ export async function getFileDetail(ctx: Ctx, id: string) {
         displayPath: c.displayPath,
         deviceName: c.deviceName,
         effectiveAvailability: c.effectiveAvailability,
-        copyPaths: copyPathsFor(c, { displayPath: c.rootPath, smbPath: c.rootSmb, mountPath: c.rootMount, pathOs: c.rootOs }),
+        copyPaths: copyPathsFor(c, {
+          displayPath: c.rootPath,
+          smbPath: c.rootSmb,
+          mountPath: c.rootMount,
+          pathOs: c.rootOs,
+        }),
       }))
     : [];
   const links = rowsOf<any>(
@@ -183,7 +205,9 @@ export async function getFileDetail(ctx: Ctx, id: string) {
       where l.file_instance_id = ${id} and l.org_id = ${ctx.orgId}`),
   );
   const tags = rowsOf<any>(
-    await ctx.db.execute(sql`select t.id, t.name, t.color from file_tag_links l join media_tags t on t.id = l.tag_id where l.file_instance_id = ${id}`),
+    await ctx.db.execute(
+      sql`select t.id, t.name, t.color from file_tag_links l join media_tags t on t.id = l.tag_id where l.file_instance_id = ${id}`,
+    ),
   );
   return { ...file, copies, assets: links, tags };
 }
@@ -195,9 +219,21 @@ export function previewRelPath(orgId: string, instanceId: string, variant = 'thu
 }
 
 /** The agent uploads a thumbnail it generated from the original; originals are never touched on the server. */
-export async function storePreview(db: Db, env: ServiceEnv, agent: AuthedAgent, instanceId: string, bytes: Buffer, contentType = 'image/jpeg', variant = 'thumb') {
-  if (bytes.length === 0 || bytes.length > 2_000_000) throw badRequest('Preview must be between 1 byte and 2 MB');
-  const [inst] = await db.select().from(fileInstances).where(and(eq(fileInstances.id, instanceId), eq(fileInstances.orgId, agent.orgId)));
+export async function storePreview(
+  db: Db,
+  env: ServiceEnv,
+  agent: AuthedAgent,
+  instanceId: string,
+  bytes: Buffer,
+  contentType = 'image/jpeg',
+  variant = 'thumb',
+) {
+  if (bytes.length === 0 || bytes.length > 2_000_000)
+    throw badRequest('Preview must be between 1 byte and 2 MB');
+  const [inst] = await db
+    .select()
+    .from(fileInstances)
+    .where(and(eq(fileInstances.id, instanceId), eq(fileInstances.orgId, agent.orgId)));
   if (!inst) throw notFound('File');
   if (inst.deviceId !== agent.deviceId) throw forbidden('This device does not own that file');
   const rel = previewRelPath(agent.orgId, instanceId, variant);
@@ -206,24 +242,53 @@ export async function storePreview(db: Db, env: ServiceEnv, agent: AuthedAgent, 
   await fs.writeFile(abs, bytes);
   await db
     .insert(derivedPreviews)
-    .values({ orgId: agent.orgId, fileInstanceId: instanceId, mediaObjectId: inst.mediaObjectId, variantKey: variant, relativeCachePath: rel, contentType, sizeBytes: bytes.length, status: 'READY' })
+    .values({
+      orgId: agent.orgId,
+      fileInstanceId: instanceId,
+      mediaObjectId: inst.mediaObjectId,
+      variantKey: variant,
+      relativeCachePath: rel,
+      contentType,
+      sizeBytes: bytes.length,
+      status: 'READY',
+    })
     .onConflictDoUpdate({
       target: [derivedPreviews.fileInstanceId, derivedPreviews.variantKey],
-      set: { relativeCachePath: rel, contentType, sizeBytes: bytes.length, status: 'READY', generatedAt: new Date(), lastAccessedAt: new Date() },
+      set: {
+        relativeCachePath: rel,
+        contentType,
+        sizeBytes: bytes.length,
+        status: 'READY',
+        generatedAt: new Date(),
+        lastAccessedAt: new Date(),
+      },
     });
   return { instanceId, bytes: bytes.length };
 }
 
-export async function readPreview(ctx: Ctx, instanceId: string, variant = 'thumb'): Promise<{ bytes: Buffer; contentType: string } | null> {
+export async function readPreview(
+  ctx: Ctx,
+  instanceId: string,
+  variant = 'thumb',
+): Promise<{ bytes: Buffer; contentType: string } | null> {
   const [p] = await ctx.db
     .select()
     .from(derivedPreviews)
-    .where(and(eq(derivedPreviews.fileInstanceId, instanceId), eq(derivedPreviews.orgId, ctx.orgId), eq(derivedPreviews.variantKey, variant)));
+    .where(
+      and(
+        eq(derivedPreviews.fileInstanceId, instanceId),
+        eq(derivedPreviews.orgId, ctx.orgId),
+        eq(derivedPreviews.variantKey, variant),
+      ),
+    );
   if (!p || p.status !== 'READY') return null;
   const abs = path.join(ctx.env.mediaPreviewDir, p.relativeCachePath);
   try {
     const bytes = await fs.readFile(abs);
-    await ctx.db.update(derivedPreviews).set({ lastAccessedAt: new Date() }).where(eq(derivedPreviews.id, p.id));
+    await ctx.db
+      .update(derivedPreviews)
+      .set({ lastAccessedAt: new Date() })
+      .where(eq(derivedPreviews.id, p.id));
     return { bytes, contentType: p.contentType };
   } catch {
     // cache file was evicted/removed: forget it so the agent regenerates it
@@ -233,10 +298,15 @@ export async function readPreview(ctx: Ctx, instanceId: string, variant = 'thumb
 }
 
 /** Preview cache is disposable: evict least-recently-used files beyond the size cap. Never touches originals. */
-export async function evictPreviews(db: Db, env: ServiceEnv): Promise<{ removed: number; freedBytes: number }> {
+export async function evictPreviews(
+  db: Db,
+  env: ServiceEnv,
+): Promise<{ removed: number; freedBytes: number }> {
   const cap = Math.floor(env.mediaPreviewMaxGb * 1024 ** 3);
   const rows = rowsOf<{ id: string; rel: string; size: number }>(
-    await db.execute(sql`select id, relative_cache_path as rel, size_bytes::bigint::float8 as size from derived_previews order by last_accessed_at asc`),
+    await db.execute(
+      sql`select id, relative_cache_path as rel, size_bytes::bigint::float8 as size from derived_previews order by last_accessed_at asc`,
+    ),
   );
   let total = rows.reduce((a, r) => a + Number(r.size), 0);
   let removed = 0;
@@ -255,18 +325,25 @@ export async function evictPreviews(db: Db, env: ServiceEnv): Promise<{ removed:
 }
 
 export async function setFileTags(ctx: Ctx, fileInstanceId: string, tagNames: string[]) {
-  const [inst] = await ctx.db.select({ id: fileInstances.id }).from(fileInstances).where(and(eq(fileInstances.id, fileInstanceId), eq(fileInstances.orgId, ctx.orgId)));
+  const [inst] = await ctx.db
+    .select({ id: fileInstances.id })
+    .from(fileInstances)
+    .where(and(eq(fileInstances.id, fileInstanceId), eq(fileInstances.orgId, ctx.orgId)));
   if (!inst) throw notFound('File');
   const names = [...new Set(tagNames.map((t) => t.trim()).filter(Boolean))].slice(0, 30);
   await ctx.db.transaction(async (tx) => {
     await tx.execute(sql`delete from file_tag_links where file_instance_id = ${fileInstanceId}`);
     for (const name of names) {
-      await tx.execute(sql`insert into media_tags (org_id, name) values (${ctx.orgId}, ${name}) on conflict (org_id, lower(name)) do nothing`);
+      await tx.execute(
+        sql`insert into media_tags (org_id, name) values (${ctx.orgId}, ${name}) on conflict (org_id, lower(name)) do nothing`,
+      );
       await tx.execute(
         sql`insert into file_tag_links (org_id, file_instance_id, tag_id) select ${ctx.orgId}, ${fileInstanceId}, id from media_tags where org_id = ${ctx.orgId} and lower(name) = lower(${name}) on conflict do nothing`,
       );
     }
   });
-  await audit(ctx, 'file.tags.set', { type: 'file_instance', id: fileInstanceId }, undefined, { tags: names });
+  await audit(ctx, 'file.tags.set', { type: 'file_instance', id: fileInstanceId }, undefined, {
+    tags: names,
+  });
   return { tags: names };
 }

@@ -1,4 +1,12 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual,
+} from 'node:crypto';
 
 /** Derive the 32-byte encryption key from CREDENTIAL_ENCRYPTION_KEY (64 hex, base64 of 32 bytes, or a passphrase). */
 export function deriveKey(secret: string): Buffer {
@@ -36,7 +44,8 @@ export function decryptJson<T>(payload: string, key: Buffer): T {
 }
 
 export const sha256Hex = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
-export const hmacHex = (key: string | Buffer, data: string) => createHmac('sha256', key).update(data).digest('hex');
+export const hmacHex = (key: string | Buffer, data: string) =>
+  createHmac('sha256', key).update(data).digest('hex');
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
 export function safeEqualHex(a: string, b: string): boolean {
@@ -61,7 +70,9 @@ export function redact<T>(value: T): T {
     if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
     if (v instanceof Date) return v.toISOString();
     if (typeof v === 'object') {
-      return Object.fromEntries(Object.entries(v).map(([k, val]) => [k, SENSITIVE.test(k) ? '[redacted]' : walk(val, depth + 1)]));
+      return Object.fromEntries(
+        Object.entries(v).map(([k, val]) => [k, SENSITIVE.test(k) ? '[redacted]' : walk(val, depth + 1)]),
+      );
     }
     return v;
   };
@@ -69,12 +80,19 @@ export function redact<T>(value: T): T {
 }
 
 /** Sign a short-lived media access token bound to an instance id. */
-export function signMediaToken(secret: string, parts: { instanceId: string; userId: string; exp: number }): string {
+export function signMediaToken(
+  secret: string,
+  parts: { instanceId: string; userId: string; exp: number },
+): string {
   const payload = `${parts.instanceId}.${parts.userId}.${parts.exp}`;
   return `${Buffer.from(payload).toString('base64url')}.${hmacHex(secret, payload)}`;
 }
 
-export function verifyMediaToken(secret: string, token: string, now = Date.now()): { instanceId: string; userId: string } | null {
+export function verifyMediaToken(
+  secret: string,
+  token: string,
+  now = Date.now(),
+): { instanceId: string; userId: string } | null {
   const [p, sig] = token.split('.');
   if (!p || !sig) return null;
   const payload = Buffer.from(p, 'base64url').toString('utf8');

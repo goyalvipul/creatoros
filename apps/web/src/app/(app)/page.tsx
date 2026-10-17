@@ -29,29 +29,54 @@ export default function HomePage() {
 
   return (
     <>
-      <PageHeader title={`Hello${me.data ? `, ${String(me.data.user.name).split(' ')[0]}` : ''}`} subtitle="What deserves your attention right now." />
-      {me.data?.organization?.demoLoaded && <div className="mb-4"><Notice tone="info" title="Demo data is loaded">Records starting with “DEMO” are samples. Remove them any time in Settings → Demo data.</Notice></div>}
+      <PageHeader
+        title={`Hello${me.data ? `, ${String(me.data.user.name).split(' ')[0]}` : ''}`}
+        subtitle="What deserves your attention right now."
+      />
+      {me.data?.organization?.demoLoaded && (
+        <div className="mb-4">
+          <Notice tone="info" title="Demo data is loaded">
+            Records starting with “DEMO” are samples. Remove them any time in Settings → Demo data.
+          </Notice>
+        </div>
+      )}
 
       <Async res={briefing}>
         {(b) => (
           <div className="space-y-5">
             <Card>
-              <CardTitle action={<span className="text-xs text-muted">{b.today}</span>}>Your top {Math.min(3, b.top.length) || 3} right now</CardTitle>
+              <CardTitle action={<span className="text-xs text-muted">{b.today}</span>}>
+                Your top {Math.min(3, b.top.length) || 3} right now
+              </CardTitle>
               {b.top.length === 0 ? (
-                <EmptyState title="Nothing urgent">You're clear. Capture an idea, plan a post, or check the library.</EmptyState>
+                <EmptyState title="Nothing urgent">
+                  You're clear. Capture an idea, plan a post, or check the library.
+                </EmptyState>
               ) : (
                 <ol className="space-y-2">
                   {b.top.slice(0, 3).map((t: any, i: number) => (
                     <li key={t.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 text-sm font-semibold text-accent">{i + 1}</span>
+                      <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 text-sm font-semibold text-accent">
+                        {i + 1}
+                      </span>
                       <div className="min-w-0 flex-1">
                         <div className="font-medium">{t.title}</div>
                         <div className="mt-1 flex flex-wrap gap-1.5">
-                          {t.reasons?.map((r: string) => <Badge key={r}>{r}</Badge>)}
+                          {t.reasons?.map((r: string) => (
+                            <Badge key={r}>{r}</Badge>
+                          ))}
                           {t.dueAt && <Badge tone="info">{when(t.dueAt, tz, false)}</Badge>}
                         </div>
                       </div>
-                      {t.deepLink && <Link href={t.deepLink} className="shrink-0 text-sm text-accent" aria-label={`Open ${t.title}`}><ArrowRight className="size-4" /></Link>}
+                      {t.deepLink && (
+                        <Link
+                          href={t.deepLink}
+                          className="shrink-0 text-sm text-accent"
+                          aria-label={`Open ${t.title}`}
+                        >
+                          <ArrowRight className="size-4" />
+                        </Link>
+                      )}
                     </li>
                   ))}
                 </ol>
@@ -78,7 +103,9 @@ export default function HomePage() {
         <div className="mt-5 space-y-2">
           <h2 className="text-sm font-semibold">System status</h2>
           {problems.map(([name, c]: any) => (
-            <Notice key={name} tone="warn" title={`${name}: needs attention`}>{c.detail ?? 'See Settings → System for details.'}</Notice>
+            <Notice key={name} tone="warn" title={`${name}: needs attention`}>
+              {c.detail ?? 'See Settings → System for details.'}
+            </Notice>
           ))}
         </div>
       )}

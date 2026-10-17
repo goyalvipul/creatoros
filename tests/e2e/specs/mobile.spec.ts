@@ -29,7 +29,10 @@ test('360px: bottom navigation and the More sheet', async ({ page }) => {
 
 test('360px: touch targets in primary navigation are at least 44px', async ({ page }) => {
   await page.goto('/');
-  const boxes = await page.getByRole('navigation', { name: 'Primary' }).locator('a,button').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+  const boxes = await page
+    .getByRole('navigation', { name: 'Primary' })
+    .locator('a,button')
+    .evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
   for (const b of boxes) {
     expect(b.height).toBeGreaterThanOrEqual(44);
     expect(b.width).toBeGreaterThanOrEqual(44);

@@ -53,20 +53,27 @@ test('ideas become projects; checklist gates "ready"; override is explicit', asy
   await expect(page.getByRole('checkbox').first()).toBeChecked();
 
   await page.getByLabel('Move to stage').selectOption('READY');
-  await page.getByRole('dialog').getByRole('button', { name: /Move anyway/ }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: /Move anyway/ })
+    .click();
   await expect(page.getByLabel('Move to stage')).toHaveValue('READY');
   await expect(page.getByText('checklist override')).toBeVisible();
   expect(problems).toEqual([]);
 });
 
-test('collaborations: log an inquiry, triage it, create a deal, invoice and record a payment', async ({ page }) => {
+test('collaborations: log an inquiry, triage it, create a deal, invoice and record a payment', async ({
+  page,
+}) => {
   const problems = watchProblems(page);
   await page.goto('/collaborations');
   await page.getByRole('button', { name: 'Log inquiry' }).click();
   await page.getByLabel('Brand / company').fill('Acme Audio');
   await page.getByLabel('Contact e-mail').fill('sam@acme.example');
   await page.getByLabel('Subject').fill('Sponsored reel for Acme headphones');
-  await page.getByLabel('Message / notes').fill('Hi! We would love a collab. Budget is 1500 CAD for one reel.');
+  await page
+    .getByLabel('Message / notes')
+    .fill('Hi! We would love a collab. Budget is 1500 CAD for one reel.');
   await page.getByLabel('Offered amount').fill('1500');
   await page.getByRole('dialog').getByRole('button', { name: 'Log inquiry' }).click();
 
@@ -107,13 +114,18 @@ test('channels: add a brand, channel and account', async ({ page }) => {
   await page.getByRole('button', { name: 'New brand' }).click();
   await page.getByLabel('Brand name').fill('Travel Notes');
   await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
-  const brand = page.locator('section', { has: page.getByRole('heading', { name: 'Travel Notes', level: 2 }) }).first();
+  const brand = page
+    .locator('section', { has: page.getByRole('heading', { name: 'Travel Notes', level: 2 }) })
+    .first();
   await expect(brand).toBeVisible();
   await brand.getByRole('button', { name: 'Channel' }).click();
   await page.getByLabel('Channel name').fill('Travel Notes Vlogs');
   await page.getByRole('dialog').getByRole('button', { name: 'Create' }).click();
   await expect(page.getByRole('region', { name: 'Channel Travel Notes Vlogs' })).toBeVisible();
-  await page.getByRole('region', { name: 'Channel Travel Notes Vlogs' }).getByRole('button', { name: 'Account' }).click();
+  await page
+    .getByRole('region', { name: 'Channel Travel Notes Vlogs' })
+    .getByRole('button', { name: 'Account' })
+    .click();
   await page.getByLabel('Handle').fill('@travelnotes');
   await page.getByRole('dialog').getByRole('button', { name: 'Add' }).click();
   await expect(page.getByText('@travelnotes')).toBeVisible();
@@ -130,7 +142,10 @@ test('command palette finds records; quick add captures an idea', async ({ page 
 
   await page.getByRole('button', { name: 'Quick add' }).click();
   await page.getByRole('dialog').getByLabel('Title').fill('Idea from quick add');
-  await page.getByRole('dialog').getByRole('button', { name: /^(Add|Save|Capture)/ }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: /^(Add|Save|Capture)/ })
+    .click();
   await page.goto('/content');
   await expect(page.getByText('Idea from quick add')).toBeVisible();
 });

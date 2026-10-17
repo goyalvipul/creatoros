@@ -24,9 +24,10 @@ import {
 import type { z } from 'zod';
 import { audit, emit } from './audit';
 import { decrypt, encrypt, hmacHex, pairingCode, randomToken, safeEqualHex, sha256Hex } from './crypto';
-import { AppError, badRequest, notFound, unauthorized, type Ctx, type ServiceEnv } from './types';
+import { AppError, notFound, unauthorized, type Ctx, type ServiceEnv } from './types';
 
-const codeHash = (env: ServiceEnv, code: string) => hmacHex(env.agentPairingSecret, code.trim().toUpperCase());
+const codeHash = (env: ServiceEnv, code: string) =>
+  hmacHex(env.agentPairingSecret, code.trim().toUpperCase());
 
 /** One-time expiring pairing code shown in the UI; the agent exchanges it for scoped device credentials. */
 export async function createPairingCode(ctx: Ctx, label?: string) {
@@ -43,7 +44,12 @@ export async function createPairingCode(ctx: Ctx, label?: string) {
   return { code, expiresAt };
 }
 
-export async function pairDevice(db: Db, env: ServiceEnv, input: z.infer<typeof pairRequestSchema>, ip?: string) {
+export async function pairDevice(
+  db: Db,
+  env: ServiceEnv,
+  input: z.infer<typeof pairRequestSchema>,
+  ip?: string,
+) {
   const hash = codeHash(env, input.code);
   const now = new Date();
   return db.transaction(async (tx) => {
@@ -51,14 +57,24 @@ export async function pairDevice(db: Db, env: ServiceEnv, input: z.infer<typeof 
     const claimed = await tx
       .update(devicePairingCodes)
       .set({ usedAt: now })
-      .where(and(eq(devicePairingCodes.codeHash, hash), isNull(devicePairingCodes.usedAt), gt(devicePairingCodes.expiresAt, now)))
+      .where(
+        and(
+          eq(devicePairingCodes.codeHash, hash),
+          isNull(devicePairingCodes.usedAt),
+          gt(devicePairingCodes.expiresAt, now),
+        ),
+      )
       .returning();
     const code = claimed[0];
-    if (!code) throw new AppError(403, 'INVALID_PAIRING_CODE', 'Pairing code is invalid, already used or expired.');
+    if (!code)
+      throw new AppError(403, 'INVALID_PAIRING_CODE', 'Pairing code is invalid, already used or expired.');
     const token = randomToken(32);
     const signingKey = randomToken(32);
     const displayName = input.label || code.label || input.hostname;
-    const [existing] = await tx.select().from(devices).where(and(eq(devices.orgId, code.orgId), eq(devices.deviceUuid, input.deviceUuid)));
+    const [existing] = await tx
+      .select()
+      .from(devices)
+      .where(and(eq(devices.orgId, code.orgId), eq(devices.deviceUuid, input.deviceUuid)));
     let deviceId: string;
     if (existing) {
       deviceId = existing.id;
@@ -76,7 +92,10 @@ export async function pairDevice(db: Db, env: ServiceEnv, input: z.infer<typeof 
           lastError: null,
         })
         .where(eq(devices.id, existing.id));
-      await tx.update(deviceCredentials).set({ revokedAt: now }).where(and(eq(deviceCredentials.deviceId, existing.id), isNull(deviceCredentials.revokedAt)));
+      await tx
+        .update(deviceCredentials)
+        .set({ revokedAt: now })
+        .where(and(eq(deviceCredentials.deviceId, existing.id), isNull(deviceCredentials.revokedAt)));
     } else {
       const [d] = await tx
         .insert(devices)
@@ -100,12 +119,28 @@ export async function pairDevice(db: Db, env: ServiceEnv, input: z.infer<typeof 
       deviceId,
       tokenHash: sha256Hex(token),
       expiresAt,
-      pairingAudit: { pairedAt: now.toISOString(), ip: ip ?? null, codeId: code.id, hostname: input.hostname, agentVersion: input.agentVersion },
+      pairingAudit: {
+        pairedAt: now.toISOString(),
+        ip: ip ?? null,
+        codeId: code.id,
+        hostname: input.hostname,
+        agentVersion: input.agentVersion,
+      },
     });
-    await tx.update(devicePairingCodes).set({ usedByDeviceId: deviceId }).where(eq(devicePairingCodes.id, code.id));
-    await audit({ db: tx, orgId: code.orgId, actor: { type: 'agent', id: deviceId }, userId: null, ip }, 'device.paired', { type: 'device', id: deviceId });
+    await tx
+      .update(devicePairingCodes)
+      .set({ usedByDeviceId: deviceId })
+      .where(eq(devicePairingCodes.id, code.id));
+    await audit(
+      { db: tx, orgId: code.orgId, actor: { type: 'agent', id: deviceId }, userId: null, ip },
+      'device.paired',
+      { type: 'device', id: deviceId },
+    );
     await emit(tx, code.orgId, 'agent.connected', { deviceId, hostname: input.hostname, paired: true });
-    const [org] = await tx.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, code.orgId));
+    const [org] = await tx
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.id, code.orgId));
     return { deviceId, token, signingKey, expiresAt, orgName: org?.name ?? '' };
   });
 }
@@ -122,7 +157,12 @@ export interface AuthedAgent {
 export async function authenticateAgent(
   db: Db,
   env: ServiceEnv,
-  req: { token: string | undefined; timestamp: string | undefined; signature: string | undefined; body: string | Buffer },
+  req: {
+    token: string | undefined;
+    timestamp: string | undefined;
+    signature: string | undefined;
+    body: string | Buffer;
+  },
   now = new Date(),
 ): Promise<AuthedAgent> {
   if (!req.token || !req.timestamp || !req.signature) throw unauthorized('Missing agent credentials');
@@ -132,20 +172,37 @@ export async function authenticateAgent(
     .innerJoin(devices, eq(devices.id, deviceCredentials.deviceId))
     .where(eq(deviceCredentials.tokenHash, sha256Hex(req.token)))
     .limit(1);
-  if (!row || row.cred.revokedAt || row.cred.expiresAt <= now || row.device.revokedAt || row.device.state === 'REVOKED') {
+  if (
+    !row ||
+    row.cred.revokedAt ||
+    row.cred.expiresAt <= now ||
+    row.device.revokedAt ||
+    row.device.state === 'REVOKED'
+  ) {
     throw unauthorized('Agent credentials are invalid, expired or revoked');
   }
   const ts = Number(req.timestamp);
-  if (!Number.isFinite(ts) || Math.abs(now.getTime() / 1000 - ts) > SIGNATURE_MAX_SKEW_SECONDS) throw unauthorized('Request timestamp outside allowed clock skew');
+  if (!Number.isFinite(ts) || Math.abs(now.getTime() / 1000 - ts) > SIGNATURE_MAX_SKEW_SECONDS)
+    throw unauthorized('Request timestamp outside allowed clock skew');
   if (!row.device.signingKeyEnc) throw unauthorized('Device has no signing key');
   const key = decrypt(row.device.signingKeyEnc, env.encryptionKey);
   const expected = hmacHex(key, `${req.timestamp}.${sha256Hex(req.body)}`);
   if (!safeEqualHex(expected, req.signature)) throw unauthorized('Bad request signature');
-  return { deviceId: row.device.id, orgId: row.device.orgId, device: row.device, credentialId: row.cred.id, credentialExpiresAt: row.cred.expiresAt };
+  return {
+    deviceId: row.device.id,
+    orgId: row.device.orgId,
+    device: row.device,
+    credentialId: row.cred.id,
+    credentialExpiresAt: row.cred.expiresAt,
+  };
 }
 
 /** Client-side helper used by tests and tooling to sign requests exactly like the Go agent does. */
-export function signAgentRequest(signingKey: string, body: string | Buffer, timestamp = Math.floor(Date.now() / 1000)) {
+export function signAgentRequest(
+  signingKey: string,
+  body: string | Buffer,
+  timestamp = Math.floor(Date.now() / 1000),
+) {
   return { timestamp: String(timestamp), signature: hmacHex(signingKey, `${timestamp}.${sha256Hex(body)}`) };
 }
 
@@ -154,9 +211,21 @@ export async function rotateAgentToken(db: Db, env: ServiceEnv, agent: AuthedAge
   const now = new Date();
   const expiresAt = new Date(now.getTime() + env.agentTokenTtlDays * 86400_000);
   await db.transaction(async (tx) => {
-    await tx.update(deviceCredentials).set({ revokedAt: now }).where(eq(deviceCredentials.id, agent.credentialId));
-    await tx.insert(deviceCredentials).values({ deviceId: agent.deviceId, tokenHash: sha256Hex(token), expiresAt, pairingAudit: { rotatedAt: now.toISOString() } });
-    await audit({ db: tx, orgId: agent.orgId, actor: { type: 'agent', id: agent.deviceId }, userId: null }, 'device.token.rotate', { type: 'device', id: agent.deviceId });
+    await tx
+      .update(deviceCredentials)
+      .set({ revokedAt: now })
+      .where(eq(deviceCredentials.id, agent.credentialId));
+    await tx.insert(deviceCredentials).values({
+      deviceId: agent.deviceId,
+      tokenHash: sha256Hex(token),
+      expiresAt,
+      pairingAudit: { rotatedAt: now.toISOString() },
+    });
+    await audit(
+      { db: tx, orgId: agent.orgId, actor: { type: 'agent', id: agent.deviceId }, userId: null },
+      'device.token.rotate',
+      { type: 'device', id: agent.deviceId },
+    );
   });
   return { token, expiresAt };
 }
@@ -180,7 +249,10 @@ export async function agentHeartbeat(db: Db, agent: AuthedAgent, input: unknown)
     })
     .where(eq(devices.id, agent.deviceId));
   for (const r of body.roots) {
-    const [root] = await db.select().from(storageRoots).where(and(eq(storageRoots.id, r.rootId), eq(storageRoots.deviceId, agent.deviceId)));
+    const [root] = await db
+      .select()
+      .from(storageRoots)
+      .where(and(eq(storageRoots.id, r.rootId), eq(storageRoots.deviceId, agent.deviceId)));
     if (!root || root.state === 'RETIRED') continue;
     const state = !r.reachable ? 'UNREACHABLE' : root.state === 'UNREACHABLE' ? 'ACTIVE' : root.state;
     await db
@@ -188,13 +260,22 @@ export async function agentHeartbeat(db: Db, agent: AuthedAgent, input: unknown)
       .set({
         state,
         lastHeartbeatAt: now,
-        health: { reachable: r.reachable, error: r.error ?? null, freeBytes: r.freeBytes ?? null, totalBytes: r.totalBytes ?? null, queueDepth: r.queueDepth ?? 0, scanning: r.scanning ?? false, at: now.toISOString() },
+        health: {
+          reachable: r.reachable,
+          error: r.error ?? null,
+          freeBytes: r.freeBytes ?? null,
+          totalBytes: r.totalBytes ?? null,
+          queueDepth: r.queueDepth ?? 0,
+          scanning: r.scanning ?? false,
+          at: now.toISOString(),
+        },
         // a root that became reachable again after being unreachable/offline gets a full reconcile
         ...(r.reachable && (root.state === 'UNREACHABLE' || wasOffline) ? { reconcileRequestedAt: now } : {}),
       })
       .where(eq(storageRoots.id, root.id));
   }
-  if (wasOffline) await emit(db, agent.orgId, 'agent.connected', { deviceId: agent.deviceId, reconnected: true });
+  if (wasOffline)
+    await emit(db, agent.orgId, 'agent.connected', { deviceId: agent.deviceId, reconnected: true });
   return getAgentConfig(db, agent);
 }
 
@@ -254,10 +335,17 @@ export async function listDevices(ctx: Ctx) {
   return rows;
 }
 
-export async function updateDevice(ctx: Ctx, id: string, patch: { displayName?: string; hardwareLabel?: string | null }) {
+export async function updateDevice(
+  ctx: Ctx,
+  id: string,
+  patch: { displayName?: string; hardwareLabel?: string | null },
+) {
   const [row] = await ctx.db
     .update(devices)
-    .set({ ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.hardwareLabel !== undefined ? { hardwareLabel: patch.hardwareLabel } : {}) })
+    .set({
+      ...(patch.displayName ? { displayName: patch.displayName } : {}),
+      ...(patch.hardwareLabel !== undefined ? { hardwareLabel: patch.hardwareLabel } : {}),
+    })
     .where(and(eq(devices.id, id), eq(devices.orgId, ctx.orgId)))
     .returning();
   if (!row) throw notFound('Device');
@@ -268,11 +356,17 @@ export async function updateDevice(ctx: Ctx, id: string, patch: { displayName?: 
 /** Revocation is non-destructive: inventory stays, files simply show as machine offline. */
 export async function revokeDevice(ctx: Ctx, id: string) {
   const now = ctx.now();
-  const [d] = await ctx.db.select().from(devices).where(and(eq(devices.id, id), eq(devices.orgId, ctx.orgId)));
+  const [d] = await ctx.db
+    .select()
+    .from(devices)
+    .where(and(eq(devices.id, id), eq(devices.orgId, ctx.orgId)));
   if (!d) throw notFound('Device');
   await ctx.db.transaction(async (tx) => {
     await tx.update(devices).set({ state: 'REVOKED', revokedAt: now }).where(eq(devices.id, id));
-    await tx.update(deviceCredentials).set({ revokedAt: now }).where(and(eq(deviceCredentials.deviceId, id), isNull(deviceCredentials.revokedAt)));
+    await tx
+      .update(deviceCredentials)
+      .set({ revokedAt: now })
+      .where(and(eq(deviceCredentials.deviceId, id), isNull(deviceCredentials.revokedAt)));
     await audit({ ...ctx, db: tx }, 'device.revoke', { type: 'device', id });
   });
   return { ok: true };
@@ -302,7 +396,13 @@ export async function getDeviceSigningKey(env: ServiceEnv, deviceId: string, db:
 
 export async function listPairingCodes(ctx: Ctx) {
   return ctx.db
-    .select({ id: devicePairingCodes.id, label: devicePairingCodes.label, expiresAt: devicePairingCodes.expiresAt, usedAt: devicePairingCodes.usedAt, createdAt: devicePairingCodes.createdAt })
+    .select({
+      id: devicePairingCodes.id,
+      label: devicePairingCodes.label,
+      expiresAt: devicePairingCodes.expiresAt,
+      usedAt: devicePairingCodes.usedAt,
+      createdAt: devicePairingCodes.createdAt,
+    })
     .from(devicePairingCodes)
     .where(eq(devicePairingCodes.orgId, ctx.orgId))
     .orderBy(desc(devicePairingCodes.createdAt))

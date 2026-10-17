@@ -12,7 +12,9 @@ const schema = z.object({
   ALLOWED_ORIGINS: z.string().default(''),
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: z.coerce.number().int().default(4000),
-  ENCRYPTION_KEY: z.string().min(16, 'ENCRYPTION_KEY must be at least 16 characters (use a long random value)'),
+  ENCRYPTION_KEY: z
+    .string()
+    .min(16, 'ENCRYPTION_KEY must be at least 16 characters (use a long random value)'),
   AGENT_PAIRING_SECRET: z.string().min(16, 'AGENT_PAIRING_SECRET must be at least 16 characters'),
   WORKFLOW_WEBHOOK_SECRET: z.string().optional(),
   DATA_DIR: z.string().default('./data'),
@@ -44,11 +46,15 @@ export function loadConfig(raw: Record<string, string | undefined> = process.env
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const msg = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
-    throw new Error(`Invalid configuration:\n${msg}\nCopy .env.example to .env and fill the values (see docs/EXTERNAL_PREREQUISITES.md).`);
+    throw new Error(
+      `Invalid configuration:\n${msg}\nCopy .env.example to .env and fill the values (see docs/EXTERNAL_PREREQUISITES.md).`,
+    );
   }
   const e = parsed.data;
   const dataDir = path.resolve(e.DATA_DIR);
-  const origins = [e.APP_BASE_URL, ...e.ALLOWED_ORIGINS.split(',')].map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
+  const origins = [e.APP_BASE_URL, ...e.ALLOWED_ORIGINS.split(',')]
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
   return {
     nodeEnv: e.NODE_ENV,
     databaseUrl: e.DATABASE_URL,

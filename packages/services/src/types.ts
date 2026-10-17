@@ -46,12 +46,16 @@ export class AppError extends Error {
   }
 }
 
-export const badRequest = (message: string, details?: unknown, code = 'BAD_REQUEST') => new AppError(400, code, message, details);
-export const unauthorized = (message = 'Authentication required') => new AppError(401, 'UNAUTHORIZED', message);
+export const badRequest = (message: string, details?: unknown, code = 'BAD_REQUEST') =>
+  new AppError(400, code, message, details);
+export const unauthorized = (message = 'Authentication required') =>
+  new AppError(401, 'UNAUTHORIZED', message);
 export const forbidden = (message = 'Not allowed') => new AppError(403, 'FORBIDDEN', message);
 export const notFound = (what = 'Resource') => new AppError(404, 'NOT_FOUND', `${what} not found`);
-export const conflict = (message: string, details?: unknown, code = 'CONFLICT') => new AppError(409, code, message, details);
-export const unprocessable = (message: string, details?: unknown) => new AppError(422, 'UNPROCESSABLE', message, details);
+export const conflict = (message: string, details?: unknown, code = 'CONFLICT') =>
+  new AppError(409, code, message, details);
+export const unprocessable = (message: string, details?: unknown) =>
+  new AppError(422, 'UNPROCESSABLE', message, details);
 export const tooMany = (message = 'Too many requests') => new AppError(429, 'RATE_LIMITED', message);
 
 export function systemCtx(base: Pick<Ctx, 'db' | 'env'>, orgId: string): Ctx {

@@ -29,7 +29,11 @@ export interface GoogleClientConfig {
 
 export function readGoogleClientConfig(env: Record<string, string | undefined>): GoogleClientConfig | null {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) return null;
-  return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET || undefined, redirectUri: env.GOOGLE_REDIRECT_URI };
+  return {
+    clientId: env.GOOGLE_CLIENT_ID,
+    clientSecret: env.GOOGLE_CLIENT_SECRET || undefined,
+    redirectUri: env.GOOGLE_REDIRECT_URI,
+  };
 }
 
 export function buildGoogleAuthUrl(args: {
@@ -101,12 +105,25 @@ export async function exchangeGoogleCode(
 export async function refreshGoogleToken(ctx: ConnectorContext): Promise<Credentials> {
   const client = ctx.config.googleClient as GoogleClientConfig | undefined;
   const rt = ctx.credentials.refreshToken;
-  if (!client) throw new ConnectorError('NOT_CONFIGURED', 'Google OAuth client is not configured (GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI).');
+  if (!client)
+    throw new ConnectorError(
+      'NOT_CONFIGURED',
+      'Google OAuth client is not configured (GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI).',
+    );
   if (!rt) throw new ConnectorError('AUTH_EXPIRED', 'No refresh token stored; reconnect the Google account.');
-  const form: Record<string, string> = { client_id: client.clientId, refresh_token: rt, grant_type: 'refresh_token' };
+  const form: Record<string, string> = {
+    client_id: client.clientId,
+    refresh_token: rt,
+    grant_type: 'refresh_token',
+  };
   if (client.clientSecret) form.client_secret = client.clientSecret;
   try {
-    const { data } = await http<TokenResponse>(ctx, GOOGLE_TOKEN_URL, { method: 'POST', form, maxAttempts: 2, idempotent: true });
+    const { data } = await http<TokenResponse>(ctx, GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      form,
+      maxAttempts: 2,
+      idempotent: true,
+    });
     return {
       ...ctx.credentials,
       accessToken: data.access_token,
@@ -116,7 +133,11 @@ export async function refreshGoogleToken(ctx: ConnectorContext): Promise<Credent
   } catch (e) {
     if (e instanceof ConnectorError && (e.kind === 'BAD_REQUEST' || e.kind === 'AUTH_EXPIRED')) {
       // invalid_grant => the owner revoked access or the token expired (7 day limit for unverified apps in testing mode)
-      throw new ConnectorError('AUTH_REVOKED', 'Google rejected the refresh token (revoked or expired). Reconnect the account.', { status: e.status });
+      throw new ConnectorError(
+        'AUTH_REVOKED',
+        'Google rejected the refresh token (revoked or expired). Reconnect the account.',
+        { status: e.status },
+      );
     }
     throw e;
   }

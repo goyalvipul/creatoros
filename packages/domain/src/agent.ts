@@ -56,8 +56,13 @@ export const ingestBatchSchema = z.object({
   phase: z.enum(['START', 'PROGRESS', 'END']).default('PROGRESS'),
   /** Only meaningful on END: scanner walked the entire root with no traversal failure. */
   complete: z.boolean().optional(),
-  counts: z.object({ scanned: z.number().int().nonnegative(), errors: z.number().int().nonnegative() }).optional(),
-  errors: z.array(z.object({ path: z.string(), error: z.string() })).max(200).optional(),
+  counts: z
+    .object({ scanned: z.number().int().nonnegative(), errors: z.number().int().nonnegative() })
+    .optional(),
+  errors: z
+    .array(z.object({ path: z.string(), error: z.string() }))
+    .max(200)
+    .optional(),
   observations: z.array(observationSchema).max(1000).default([]),
 });
 export type IngestBatch = z.infer<typeof ingestBatchSchema>;

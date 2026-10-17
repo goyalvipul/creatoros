@@ -109,13 +109,20 @@ export class TodoConnector implements Connector<RemoteTask, any> {
 
   private cfg(ctx: ConnectorContext): Required<Pick<TodoConfig, 'baseUrl'>> & TodoConfig {
     const c = ctx.config as TodoConfig | undefined;
-    if (!c?.baseUrl) throw new ConnectorError('NOT_CONFIGURED', 'Todo API base URL is not configured. Set it in Integrations → Todo.');
+    if (!c?.baseUrl)
+      throw new ConnectorError(
+        'NOT_CONFIGURED',
+        'Todo API base URL is not configured. Set it in Integrations → Todo.',
+      );
     return c as any;
   }
   private fields(ctx: ConnectorContext): RemoteTaskFields {
     return { ...DEFAULT_FIELDS, ...((ctx.config as TodoConfig).fieldMap ?? {}) };
   }
-  private endpoint(ctx: ConnectorContext, key: keyof typeof DEFAULT_ENDPOINTS): { method: string; path: string } {
+  private endpoint(
+    ctx: ConnectorContext,
+    key: keyof typeof DEFAULT_ENDPOINTS,
+  ): { method: string; path: string } {
     const raw = ((ctx.config as TodoConfig).endpoints?.[key] ?? DEFAULT_ENDPOINTS[key]) as string;
     const [method, ...rest] = raw.split(' ');
     return { method: method.toUpperCase(), path: rest.join(' ') };
@@ -143,7 +150,8 @@ export class TodoConnector implements Connector<RemoteTask, any> {
   private normalizeWith(raw: any, f: RemoteTaskFields, cfg: TodoConfig | undefined): RemoteTask {
     const completedRaw = getPath(raw, f.completed);
     const doneValue = cfg?.completion?.doneValue ?? 'done';
-    const completed = cfg?.completion?.style === 'status' ? String(completedRaw) === doneValue : Boolean(completedRaw);
+    const completed =
+      cfg?.completion?.style === 'status' ? String(completedRaw) === doneValue : Boolean(completedRaw);
     const rev = getPath(raw, f.revision);
     return {
       id: String(getPath(raw, f.id)),
@@ -170,10 +178,16 @@ export class TodoConnector implements Connector<RemoteTask, any> {
     if (d.remindAt !== undefined) setPath(body, f.remindAt, d.remindAt);
     if (d.externalRef !== undefined) setPath(body, f.externalRef, d.externalRef);
     if (d.priority !== undefined && cfg.priorityMap) setPath(body, f.priority, cfg.priorityMap[d.priority]);
-    if (d.tags !== undefined || cfg.defaultTags) setPath(body, f.tags, [...(cfg.defaultTags ?? []), ...(d.tags ?? [])]);
+    if (d.tags !== undefined || cfg.defaultTags)
+      setPath(body, f.tags, [...(cfg.defaultTags ?? []), ...(d.tags ?? [])]);
     if (cfg.projectId) setPath(body, f.project, cfg.projectId);
     if (d.completed !== undefined) {
-      if (cfg.completion?.style === 'status') setPath(body, f.completed, d.completed ? cfg.completion.doneValue ?? 'done' : cfg.completion.openValue ?? 'open');
+      if (cfg.completion?.style === 'status')
+        setPath(
+          body,
+          f.completed,
+          d.completed ? (cfg.completion.doneValue ?? 'done') : (cfg.completion.openValue ?? 'open'),
+        );
       else setPath(body, f.completed, d.completed);
     }
     return body;
@@ -194,8 +208,11 @@ export class TodoConnector implements Connector<RemoteTask, any> {
   async findByRef(ctx: ConnectorContext, ref: string): Promise<RemoteTask | null> {
     const ep = this.endpoint(ctx, 'findByRef');
     try {
-      const { data } = await http<any>(ctx, this.url(ctx, ep.path, { ref }), { method: ep.method, headers: this.headers(ctx) });
-      const list: any[] = Array.isArray(data) ? data : data?.data ?? data?.items ?? data?.tasks ?? [];
+      const { data } = await http<any>(ctx, this.url(ctx, ep.path, { ref }), {
+        method: ep.method,
+        headers: this.headers(ctx),
+      });
+      const list: any[] = Array.isArray(data) ? data : (data?.data ?? data?.items ?? data?.tasks ?? []);
       const f = this.fields(ctx);
       const hit = list.find((t) => getPath(t, f.externalRef) === ref);
       return hit ? this.normalizeWith(hit, f, ctx.config as TodoConfig) : null;
@@ -208,7 +225,10 @@ export class TodoConnector implements Connector<RemoteTask, any> {
   async getTask(ctx: ConnectorContext, id: string): Promise<RemoteTask | null> {
     const ep = this.endpoint(ctx, 'get');
     try {
-      const { data } = await http<any>(ctx, this.url(ctx, ep.path, { id }), { method: ep.method, headers: this.headers(ctx) });
+      const { data } = await http<any>(ctx, this.url(ctx, ep.path, { id }), {
+        method: ep.method,
+        headers: this.headers(ctx),
+      });
       return this.normalizeWith(data?.data ?? data, this.fields(ctx), ctx.config as TodoConfig);
     } catch (e) {
       if (e instanceof ConnectorError && e.kind === 'NOT_FOUND') return null;
@@ -217,7 +237,12 @@ export class TodoConnector implements Connector<RemoteTask, any> {
   }
 
   /** Update only the provided fields. `revision` is sent as If-Match (ETag) when known; 412 => ConnectorError('CONFLICT'). */
-  async updateTask(ctx: ConnectorContext, id: string, patch: Partial<TaskDraft>, revision?: string | null): Promise<RemoteTask> {
+  async updateTask(
+    ctx: ConnectorContext,
+    id: string,
+    patch: Partial<TaskDraft>,
+    revision?: string | null,
+  ): Promise<RemoteTask> {
     const ep = this.endpoint(ctx, 'update');
     const headers: Record<string, string> = { ...this.headers(ctx) };
     if (revision) headers['if-match'] = revision;
@@ -237,7 +262,7 @@ export class TodoConnector implements Connector<RemoteTask, any> {
       headers: this.headers(ctx),
       query: since ? { updated_since: since } : undefined,
     });
-    const list: any[] = Array.isArray(data) ? data : data?.data ?? data?.items ?? data?.tasks ?? [];
+    const list: any[] = Array.isArray(data) ? data : (data?.data ?? data?.items ?? data?.tasks ?? []);
     const f = this.fields(ctx);
     return list.map((t) => this.normalizeWith(t, f, ctx.config as TodoConfig));
   }
@@ -262,7 +287,9 @@ export class TodoConnector implements Connector<RemoteTask, any> {
 
   async connect(ctx: ConnectorContext): Promise<ConnectResult> {
     const caps = await this.getCapabilities(ctx);
-    return caps.state === 'ACTIVE' ? { status: 'CONNECTED' } : { status: 'NOT_CONFIGURED', steps: caps.setupSteps };
+    return caps.state === 'ACTIVE'
+      ? { status: 'CONNECTED' }
+      : { status: 'NOT_CONFIGURED', steps: caps.setupSteps };
   }
   async disconnect(): Promise<void> {}
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
@@ -273,18 +300,28 @@ export class TodoConnector implements Connector<RemoteTask, any> {
     const now = new Date(ctx.now()).toISOString();
     try {
       const ep = this.endpoint(ctx, 'health');
-      await http(ctx, this.url(ctx, ep.path), { method: ep.method, headers: this.headers(ctx), maxAttempts: 1 });
+      await http(ctx, this.url(ctx, ep.path), {
+        method: ep.method,
+        headers: this.headers(ctx),
+        maxAttempts: 1,
+      });
       return { ok: true, state: 'ACTIVE', checkedAt: now };
     } catch (e) {
       const err = e as ConnectorError;
-      if (err.kind === 'NOT_CONFIGURED') return { ok: false, state: 'NOT_CONFIGURED', detail: err.message, checkedAt: now };
+      if (err.kind === 'NOT_CONFIGURED')
+        return { ok: false, state: 'NOT_CONFIGURED', detail: err.message, checkedAt: now };
       // Some apps have no /health. Fall back to listing one page.
       try {
         await this.listTasks(ctx);
         return { ok: true, state: 'ACTIVE', checkedAt: now };
       } catch (e2) {
         const er = e2 as ConnectorError;
-        return { ok: false, state: er.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'OFFLINE', detail: er.message, checkedAt: now };
+        return {
+          ok: false,
+          state: er.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'OFFLINE',
+          detail: er.message,
+          checkedAt: now,
+        };
       }
     }
   }

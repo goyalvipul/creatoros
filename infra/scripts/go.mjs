@@ -22,10 +22,16 @@ export function findGo() {
 export function runGo(args, opts = {}) {
   const go = findGo();
   if (!go) {
-    console.error('Go is not installed. Install it with: winget install GoLang.Go  (then open a new terminal)');
+    console.error(
+      'Go is not installed. Install it with: winget install GoLang.Go  (then open a new terminal)',
+    );
     return 127;
   }
-  const r = spawnSync(go, args, { cwd: agentDir, stdio: 'inherit', env: { ...process.env, ...(opts.env ?? {}) } });
+  const r = spawnSync(go, args, {
+    cwd: agentDir,
+    stdio: 'inherit',
+    env: { ...process.env, ...(opts.env ?? {}) },
+  });
   return r.status ?? 1;
 }
 

@@ -116,7 +116,9 @@ export function mapToSmbPath(
   if (!isInsideRoot(rootKey, fileKey, os)) return null;
   const rest = filePath.slice(mapping.localRoot.replace(/[\\/]+$/, '').length).replace(/^[\\/]+/, '');
   const smb = mapping.smbRoot.replace(/[\\/]+$/, '');
-  return rest ? `${smb}${os === 'windows' ? '\\' : '/'}${rest.replace(/[\\/]/g, os === 'windows' ? '\\' : '/')}` : smb;
+  return rest
+    ? `${smb}${os === 'windows' ? '\\' : '/'}${rest.replace(/[\\/]/g, os === 'windows' ? '\\' : '/')}`
+    : smb;
 }
 
 const MEDIA_EXT: Record<string, 'VIDEO' | 'AUDIO' | 'IMAGE' | 'DOCUMENT' | 'PROJECT'> = {
@@ -153,7 +155,9 @@ const MEDIA_EXT: Record<string, 'VIDEO' | 'AUDIO' | 'IMAGE' | 'DOCUMENT' | 'PROJ
   aep: 'PROJECT',
 };
 
-export function kindFromExtension(ext: string): 'VIDEO' | 'AUDIO' | 'IMAGE' | 'DOCUMENT' | 'PROJECT' | 'OTHER' {
+export function kindFromExtension(
+  ext: string,
+): 'VIDEO' | 'AUDIO' | 'IMAGE' | 'DOCUMENT' | 'PROJECT' | 'OTHER' {
   return MEDIA_EXT[ext.toLowerCase()] ?? 'OTHER';
 }
 
@@ -172,5 +176,10 @@ export const DEFAULT_IGNORE_PATTERNS = [
 
 /** Safe file name for derived artefacts (no traversal, no separators). */
 export function safeFileName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^\.+/, '_').slice(0, 120) || 'file';
+  return (
+    name
+      .replace(/[^a-zA-Z0-9._-]+/g, '_')
+      .replace(/^\.+/, '_')
+      .slice(0, 120) || 'file'
+  );
 }

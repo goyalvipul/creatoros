@@ -10,7 +10,9 @@ for (const s of SECTIONS) {
     const problems = watchProblems(page);
     await page.goto(s.path);
     await expect(page.getByRole('heading', { level: 1 }).first()).toHaveText(s.heading);
-    await expect(page.getByText(/Request failed|Something went wrong|Cannot reach the server/i)).toHaveCount(0);
+    await expect(page.getByText(/Request failed|Something went wrong|Cannot reach the server/i)).toHaveCount(
+      0,
+    );
     await page.waitForLoadState('networkidle');
     expect(problems).toEqual([]);
   });

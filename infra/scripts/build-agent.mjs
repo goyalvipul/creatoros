@@ -12,15 +12,31 @@ const dist = join(agentDir, 'dist');
 mkdirSync(dist, { recursive: true });
 
 const targets = [{ goos: 'windows', goarch: 'amd64' }];
-if (all) targets.push({ goos: 'linux', goarch: 'amd64' }, { goos: 'linux', goarch: 'arm64' }, { goos: 'darwin', goarch: 'arm64' });
+if (all)
+  targets.push(
+    { goos: 'linux', goarch: 'amd64' },
+    { goos: 'linux', goarch: 'arm64' },
+    { goos: 'darwin', goarch: 'arm64' },
+  );
 
 let failed = 0;
 for (const t of targets) {
   const out = join(dist, `creatoros-agent-${t.goos}-${t.goarch}${t.goos === 'windows' ? '.exe' : ''}`);
   console.log(`building ${out}`);
-  const code = runGo(['build', '-trimpath', '-ldflags', `-s -w -X main.version=${version}`, '-o', out, './cmd/creatoros-agent'], {
-    env: { GOOS: t.goos, GOARCH: t.goarch, CGO_ENABLED: '0' },
-  });
+  const code = runGo(
+    [
+      'build',
+      '-trimpath',
+      '-ldflags',
+      `-s -w -X main.version=${version}`,
+      '-o',
+      out,
+      './cmd/creatoros-agent',
+    ],
+    {
+      env: { GOOS: t.goos, GOARCH: t.goarch, CGO_ENABLED: '0' },
+    },
+  );
   if (code !== 0) failed += 1;
 }
 process.exit(failed ? 1 : 0);

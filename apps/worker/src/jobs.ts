@@ -34,7 +34,12 @@ export interface WorkerDeps {
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const nowOf = (d: WorkerDeps) => (d.now ?? (() => new Date()))();
-const log = (d: WorkerDeps, level: 'info' | 'warn' | 'error', msg: string, extra: Record<string, unknown> = {}) => (d.log ?? (() => {}))(level, msg, extra);
+const log = (
+  d: WorkerDeps,
+  level: 'info' | 'warn' | 'error',
+  msg: string,
+  extra: Record<string, unknown> = {},
+) => (d.log ?? (() => {}))(level, msg, extra);
 
 export async function orgIds(db: Db): Promise<string[]> {
   return (await db.select({ id: organizations.id }).from(organizations)).map((o) => o.id);
@@ -50,14 +55,21 @@ async function each<T>(d: WorkerDeps, items: T[], name: string, fn: (item: T) =>
       ok++;
     } catch (e) {
       failed++;
-      log(d, 'error', `${name} failed`, { err: String(e), item: typeof item === 'string' ? item : undefined });
+      log(d, 'error', `${name} failed`, {
+        err: String(e),
+        item: typeof item === 'string' ? item : undefined,
+      });
     }
   }
   return { ok, failed };
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {
-  await recordHeartbeat(d.db, 'worker', { pid: process.pid, uptimeS: Math.round(process.uptime()), node: process.version });
+  await recordHeartbeat(d.db, 'worker', {
+    pid: process.pid,
+    uptimeS: Math.round(process.uptime()),
+    node: process.version,
+  });
   return { ok: true };
 }
 
@@ -89,13 +101,20 @@ export async function jobActions(d: WorkerDeps) {
 export async function jobSync(d: WorkerDeps, scope: 'fast' | 'slow' | 'all' = 'all') {
   const conns = await listConnectionsForSync(d.db);
   const fastProviders = new Set(['gmail']);
-  const picked = conns.filter((c) => (scope === 'all' ? true : scope === 'fast' ? fastProviders.has(c.provider) : !fastProviders.has(c.provider)));
+  const picked = conns.filter((c) =>
+    scope === 'all'
+      ? true
+      : scope === 'fast'
+        ? fastProviders.has(c.provider)
+        : !fastProviders.has(c.provider),
+  );
   const r = await each(d, picked, 'connection sync', (c) => runSync(d.db, d.env, c.id, {}, d.overrides));
   let todo: unknown = null;
-  if (scope !== 'slow') todo = await syncDueTaskLinks(d.db, d.env, { now: nowOf(d), overrides: d.overrides }).catch((e) => {
-    log(d, 'error', 'todo sync failed', { err: String(e) });
-    return null;
-  });
+  if (scope !== 'slow')
+    todo = await syncDueTaskLinks(d.db, d.env, { now: nowOf(d), overrides: d.overrides }).catch((e) => {
+      log(d, 'error', 'todo sync failed', { err: String(e) });
+      return null;
+    });
   return { connections: picked.length, ...r, todo };
 }
 
@@ -121,13 +140,21 @@ export async function jobMaintenance(d: WorkerDeps) {
   const evicted = await evictPreviews(d.db, d.env);
   await d.db.execute(sql`delete from api_idempotency_keys where expires_at < now()`);
   await d.db.execute(sql`delete from oauth_states where expires_at < now() - interval '1 day'`);
-  await d.db.execute(sql`delete from sessions where expires_at < now() - interval '7 days' or revoked_at < now() - interval '30 days'`);
+  await d.db.execute(
+    sql`delete from sessions where expires_at < now() - interval '7 days' or revoked_at < now() - interval '30 days'`,
+  );
   await d.db.execute(sql`delete from webhook_receipts where received_at < now() - interval '30 days'`);
-  await d.db.execute(sql`delete from background_jobs where type not like 'heartbeat:%' and created_at < now() - interval '60 days'`).catch(() => null);
+  await d.db
+    .execute(
+      sql`delete from background_jobs where type not like 'heartbeat:%' and created_at < now() - interval '60 days'`,
+    )
+    .catch(() => null);
   const ids = await orgIds(d.db);
   const now = nowOf(d);
   await each(d, ids, 'analytics snapshot', (orgId) => snapshotAnalytics(d.db, orgId, now));
-  await each(d, ids, 'near duplicates', (orgId) => detectNearDuplicates({ ...systemCtx({ db: d.db, env: d.env }, orgId), now: () => now }));
+  await each(d, ids, 'near duplicates', (orgId) =>
+    detectNearDuplicates({ ...systemCtx({ db: d.db, env: d.env }, orgId), now: () => now }),
+  );
   return { evicted };
 }
 

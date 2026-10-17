@@ -21,7 +21,11 @@ const google = new GatedConnector(
   ['"google" is an umbrella OAuth client. Connect Gmail and YouTube individually.'],
   ['Open Integrations and connect Gmail and/or YouTube.'],
 );
-const manual = new GatedConnector('manual', ['Manual intake is always available and needs no connector.'], []);
+const manual = new GatedConnector(
+  'manual',
+  ['Manual intake is always available and needs no connector.'],
+  [],
+);
 
 export const CONNECTORS: Record<Provider, Connector<any, any>> = {
   gmail,

@@ -86,7 +86,16 @@ export const DUPLICATE_METHOD = ['EXACT_HASH', 'NEAR_DURATION_NAME', 'NEAR_NAME_
 export const PREVIEW_STATUS = ['READY', 'FAILED', 'PENDING'] as const;
 
 /* ---------- assets / production ---------- */
-export const ASSET_KIND = ['VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT', 'LYRICS', 'SCRIPT', 'THUMBNAIL', 'OTHER'] as const;
+export const ASSET_KIND = [
+  'VIDEO',
+  'AUDIO',
+  'IMAGE',
+  'DOCUMENT',
+  'LYRICS',
+  'SCRIPT',
+  'THUMBNAIL',
+  'OTHER',
+] as const;
 export type AssetKind = (typeof ASSET_KIND)[number];
 export const CREATIVE_STATE = ['DRAFT', 'IN_REVIEW', 'APPROVED', 'REJECTED', 'ARCHIVED'] as const;
 export const APPROVAL_STATE = ['PENDING', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED'] as const;
@@ -126,7 +135,15 @@ export const PROJECT_TYPE = [
   'EDUCATION',
   'OTHER',
 ] as const;
-export const CLIP_STATE = ['PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SELECTED', 'REJECTED'] as const;
+export const CLIP_STATE = [
+  'PLANNED',
+  'QUEUED',
+  'RUNNING',
+  'SUCCEEDED',
+  'FAILED',
+  'SELECTED',
+  'REJECTED',
+] as const;
 export type ClipState = (typeof CLIP_STATE)[number];
 export const GENERATION_STATUS = ['QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export const OUTPUT_SELECTION = ['CANDIDATE', 'SELECTED', 'REJECTED'] as const;
@@ -182,7 +199,14 @@ export const DEAL_STAGE = [
 ] as const;
 export type DealStage = (typeof DEAL_STAGE)[number];
 export const CLOSED_DEAL_STAGES: readonly DealStage[] = ['PAID_CLOSED', 'DECLINED', 'LOST'];
-export const COMPENSATION_TYPE = ['FLAT_FEE', 'GIFTED', 'AFFILIATE', 'COMMISSION', 'MIXED', 'UNKNOWN'] as const;
+export const COMPENSATION_TYPE = [
+  'FLAT_FEE',
+  'GIFTED',
+  'AFFILIATE',
+  'COMMISSION',
+  'MIXED',
+  'UNKNOWN',
+] as const;
 export const DELIVERABLE_STATUS = [
   'PLANNED',
   'IN_PROGRESS',
@@ -192,7 +216,15 @@ export const DELIVERABLE_STATUS = [
   'PUBLISHED',
   'ACCEPTED',
 ] as const;
-export const CONTRACT_STATUS = ['NONE', 'DRAFT', 'SENT', 'SIGNED_BY_OWNER', 'SIGNED_BOTH', 'EXPIRED', 'TERMINATED'] as const;
+export const CONTRACT_STATUS = [
+  'NONE',
+  'DRAFT',
+  'SENT',
+  'SIGNED_BY_OWNER',
+  'SIGNED_BOTH',
+  'EXPIRED',
+  'TERMINATED',
+] as const;
 export const MESSAGE_DIRECTION = ['INBOUND', 'OUTBOUND'] as const;
 export const ACTIONABLE_STATE = ['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE'] as const;
 export type ActionableState = (typeof ACTIONABLE_STATE)[number];
@@ -200,7 +232,15 @@ export const TRIAGE_STATE = ['POSSIBLE', 'CONFIRMED', 'DISMISSED', 'MERGED'] as 
 export const MESSAGE_SOURCE = ['GMAIL', 'MANUAL', 'INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'OTHER'] as const;
 export const INVOICE_STATUS = ['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID'] as const;
 export const PAYMENT_METHOD = ['BANK_TRANSFER', 'PAYPAL', 'STRIPE', 'WISE', 'CASH', 'OTHER'] as const;
-export const EXPENSE_CATEGORY = ['SOFTWARE', 'GPU_COMPUTE', 'MUSIC', 'TALENT', 'ADS', 'TRAVEL', 'OTHER'] as const;
+export const EXPENSE_CATEGORY = [
+  'SOFTWARE',
+  'GPU_COMPUTE',
+  'MUSIC',
+  'TALENT',
+  'ADS',
+  'TRAVEL',
+  'OTHER',
+] as const;
 export const AMOUNT_KIND = ['ESTIMATED', 'CONTRACTED', 'INVOICED', 'RECEIVED'] as const;
 
 /* ---------- actions / notifications ---------- */
@@ -229,10 +269,12 @@ export const OUTBOX_STATE = ['PENDING', 'DELIVERED', 'FAILED'] as const;
 
 /** Labels used by the API/UI to explain the different "count" definitions (see spec 5.2). */
 export const COUNT_DEFINITIONS = {
-  physicalInstances: 'Distinct physical file instances (every copy on every machine/path, current inventory).',
+  physicalInstances:
+    'Distinct physical file instances (every copy on every machine/path, current inventory).',
   exactMediaObjects:
     'Distinct exact media objects: verified full-hash groups plus un-hashed files (each un-hashed file is a provisional identity, never collapsed).',
-  logicalVideoAssets: 'Logical video assets (intended pieces of content), independent of copies and versions.',
+  logicalVideoAssets:
+    'Logical video assets (intended pieces of content), independent of copies and versions.',
   publications: 'Publication records per social account + platform with their own status/evidence.',
   readyToPublish: 'Approved export variants with at least one planned target that is not yet published.',
 } as const;

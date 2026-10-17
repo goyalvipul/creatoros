@@ -5,7 +5,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const run = (cmd, args, opts = {}) => spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32', ...opts });
+const run = (cmd, args, opts = {}) =>
+  spawnSync(cmd, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32', ...opts });
 
 if (!existsSync(join(root, '.env'))) run('node', ['infra/scripts/init-env.mjs']);
 
@@ -34,7 +35,18 @@ const env = {
 };
 
 console.log('> starting Postgres + Redis (loopback only)');
-const up = run('docker', ['compose', '--profile', 'dev', 'up', '-d', '--wait', 'db', 'redis', 'db-proxy', 'redis-proxy']);
+const up = run('docker', [
+  'compose',
+  '--profile',
+  'dev',
+  'up',
+  '-d',
+  '--wait',
+  'db',
+  'redis',
+  'db-proxy',
+  'redis-proxy',
+]);
 if (up.status !== 0) {
   console.error('Could not start the data stores. Is Docker Desktop running?');
   process.exit(up.status ?? 1);
@@ -47,7 +59,13 @@ const procs = [];
 function start(name, args) {
   const p = spawn('pnpm', args, { cwd: root, env, shell: process.platform === 'win32' });
   const tag = `[${name}] `;
-  const pipe = (stream, out) => stream.on('data', (d) => String(d).split(/\r?\n/).filter(Boolean).forEach((l) => out.write(tag + l + '\n')));
+  const pipe = (stream, out) =>
+    stream.on('data', (d) =>
+      String(d)
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .forEach((l) => out.write(tag + l + '\n')),
+    );
   pipe(p.stdout, process.stdout);
   pipe(p.stderr, process.stderr);
   p.on('exit', (code) => console.log(`${tag}exited (${code})`));
@@ -57,7 +75,9 @@ start('api', ['--filter', '@creatoros/api', 'dev']);
 start('worker', ['--filter', '@creatoros/worker', 'dev']);
 start('web', ['--filter', '@creatoros/web', 'dev']);
 
-console.log('\nCreator OS dev: http://localhost:3000   (API http://127.0.0.1:4000/api/docs)\nCtrl+C to stop (Docker data stores keep running).\n');
+console.log(
+  '\nCreator OS dev: http://localhost:3000   (API http://127.0.0.1:4000/api/docs)\nCtrl+C to stop (Docker data stores keep running).\n',
+);
 const stop = () => {
   for (const p of procs) {
     try {

@@ -49,7 +49,11 @@ export const externalOrganizations = pgTable(
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),
   },
-  (t) => [uniqueIndex('external_orgs_name_uq').on(t.orgId, sql`lower(${t.name})`).where(sql`${t.deletedAt} is null`)],
+  (t) => [
+    uniqueIndex('external_orgs_name_uq')
+      .on(t.orgId, sql`lower(${t.name})`)
+      .where(sql`${t.deletedAt} is null`),
+  ],
 );
 
 export const contacts = pgTable(
@@ -57,11 +61,19 @@ export const contacts = pgTable(
   {
     id: pk(),
     orgId: orgRef(),
-    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, { onDelete: 'set null' }),
+    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, {
+      onDelete: 'set null',
+    }),
     name: text('name').notNull(),
-    emails: text('emails').array().notNull().default(sql`'{}'::text[]`),
+    emails: text('emails')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     handles: jsonb('handles').$type<Record<string, string>>().notNull().default({}),
-    websites: text('websites').array().notNull().default(sql`'{}'::text[]`),
+    websites: text('websites')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     timezone: text('timezone'),
     preferredComms: text('preferred_comms'),
     replySlaHours: integer('reply_sla_hours'),
@@ -78,15 +90,21 @@ export const conversationThreads = pgTable(
   {
     id: pk(),
     orgId: orgRef(),
-    providerConnectionId: uuid('provider_connection_id').references(() => providerConnections.id, { onDelete: 'set null' }),
+    providerConnectionId: uuid('provider_connection_id').references(() => providerConnections.id, {
+      onDelete: 'set null',
+    }),
     source: messageSource('source').notNull().default('MANUAL'),
     principal: text('principal'),
     providerThreadId: text('provider_thread_id'),
     subject: text('subject'),
-    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, { onDelete: 'set null' }),
+    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, {
+      onDelete: 'set null',
+    }),
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
-    opportunityId: uuid('opportunity_id').references((): AnyPgColumn => opportunities.id, { onDelete: 'set null' }),
+    opportunityId: uuid('opportunity_id').references((): AnyPgColumn => opportunities.id, {
+      onDelete: 'set null',
+    }),
     dealId: uuid('deal_id').references((): AnyPgColumn => deals.id, { onDelete: 'set null' }),
     triageState: triageState('triage_state').notNull().default('POSSIBLE'),
     state: actionableState('state').notNull().default('NEED_REPLY'),
@@ -96,7 +114,9 @@ export const conversationThreads = pgTable(
     snoozeUntil: ts('snooze_until'),
     lastCheckedAt: ts('last_checked_at'),
     externalLink: text('external_link'),
-    mergedIntoId: uuid('merged_into_id').references((): AnyPgColumn => conversationThreads.id, { onDelete: 'set null' }),
+    mergedIntoId: uuid('merged_into_id').references((): AnyPgColumn => conversationThreads.id, {
+      onDelete: 'set null',
+    }),
     isDemo: boolean('is_demo').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -125,12 +145,18 @@ export const messages = pgTable(
     receivedAt: ts('received_at').notNull().defaultNow(),
     fromEmail: text('from_email'),
     fromName: text('from_name'),
-    toEmails: text('to_emails').array().notNull().default(sql`'{}'::text[]`),
+    toEmails: text('to_emails')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     subject: text('subject'),
     bodyPreview: text('body_preview'),
     bodyEnc: text('body_enc'),
     isRead: boolean('is_read').notNull().default(false),
-    attachmentRefs: jsonb('attachment_refs').$type<{ name: string; mime?: string; sizeBytes?: number; ref?: string }[]>().notNull().default([]),
+    attachmentRefs: jsonb('attachment_refs')
+      .$type<{ name: string; mime?: string; sizeBytes?: number; ref?: string }[]>()
+      .notNull()
+      .default([]),
     rawChecksum: text('raw_checksum').notNull(),
     provenance: provenance('provenance').notNull().default('USER_ENTERED'),
     createdAt: createdAt(),
@@ -170,10 +196,14 @@ export const opportunities = pgTable(
   {
     id: pk(),
     orgId: orgRef(),
-    sourceThreadId: uuid('source_thread_id').references((): AnyPgColumn => conversationThreads.id, { onDelete: 'set null' }),
+    sourceThreadId: uuid('source_thread_id').references((): AnyPgColumn => conversationThreads.id, {
+      onDelete: 'set null',
+    }),
     brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
     channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'set null' }),
-    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, { onDelete: 'set null' }),
+    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, {
+      onDelete: 'set null',
+    }),
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     title: text('title').notNull(),
     offerType: compensationType('offer_type').notNull().default('UNKNOWN'),
@@ -189,7 +219,9 @@ export const opportunities = pgTable(
     deletedAt: deletedAt(),
   },
   (t) => [
-    uniqueIndex('opportunities_thread_uq').on(t.sourceThreadId).where(sql`${t.sourceThreadId} is not null and ${t.deletedAt} is null`),
+    uniqueIndex('opportunities_thread_uq')
+      .on(t.sourceThreadId)
+      .where(sql`${t.sourceThreadId} is not null and ${t.deletedAt} is null`),
     index('opportunities_org_stage_idx').on(t.orgId, t.stage),
   ],
 );
@@ -200,7 +232,9 @@ export const deals = pgTable(
     id: pk(),
     orgId: orgRef(),
     opportunityId: uuid('opportunity_id').references(() => opportunities.id, { onDelete: 'set null' }),
-    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, { onDelete: 'set null' }),
+    externalOrgId: uuid('external_org_id').references(() => externalOrganizations.id, {
+      onDelete: 'set null',
+    }),
     contactId: uuid('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
     brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
     channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'set null' }),
@@ -252,7 +286,9 @@ export const dealDeliverables = pgTable(
     title: text('title').notNull(),
     projectId: uuid('project_id').references(() => creativeProjects.id, { onDelete: 'set null' }),
     assetVersionId: uuid('asset_version_id').references(() => assetVersions.id, { onDelete: 'set null' }),
-    publicationId: uuid('publication_id').references((): AnyPgColumn => publicationRecords.id, { onDelete: 'set null' }),
+    publicationId: uuid('publication_id').references((): AnyPgColumn => publicationRecords.id, {
+      onDelete: 'set null',
+    }),
     format: text('format'),
     platform: text('platform'),
     quantity: integer('quantity').notNull().default(1),
@@ -267,7 +303,10 @@ export const dealDeliverables = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('deal_deliverables_deal_idx').on(t.dealId), index('deal_deliverables_due_idx').on(t.orgId, t.dueAt)],
+  (t) => [
+    index('deal_deliverables_deal_idx').on(t.dealId),
+    index('deal_deliverables_due_idx').on(t.orgId, t.dueAt),
+  ],
 );
 
 export const dealContracts = pgTable('deal_contracts', {
@@ -309,7 +348,10 @@ export const invoices = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('invoices_no_uq').on(t.orgId, t.invoiceNo), index('invoices_due_idx').on(t.orgId, t.status, t.dueAt)],
+  (t) => [
+    uniqueIndex('invoices_no_uq').on(t.orgId, t.invoiceNo),
+    index('invoices_due_idx').on(t.orgId, t.status, t.dueAt),
+  ],
 );
 
 export const payments = pgTable(

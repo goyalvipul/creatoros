@@ -77,7 +77,11 @@ export function scoreCandidate(c: PriorityCandidate, now: Date = new Date()): Sc
   return { ...c, score: Math.round(score * 100) / 100, reasons };
 }
 
-export function rankCandidates(items: PriorityCandidate[], now: Date = new Date(), limit = 3): ScoredCandidate[] {
+export function rankCandidates(
+  items: PriorityCandidate[],
+  now: Date = new Date(),
+  limit = 3,
+): ScoredCandidate[] {
   return items
     .filter((i) => !i.snoozedUntil || new Date(i.snoozedUntil).getTime() <= now.getTime())
     .map((i) => scoreCandidate(i, now))

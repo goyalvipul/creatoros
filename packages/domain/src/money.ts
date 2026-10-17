@@ -27,7 +27,10 @@ export interface PaymentLike {
   amountMinor: number;
 }
 
-export function invoiceBalance(invoiceAmountMinor: number, payments: PaymentLike[]): { paid: number; due: number } {
+export function invoiceBalance(
+  invoiceAmountMinor: number,
+  payments: PaymentLike[],
+): { paid: number; due: number } {
   const paid = payments.reduce((s, p) => s + p.amountMinor, 0);
   return { paid, due: Math.max(0, invoiceAmountMinor - paid) };
 }

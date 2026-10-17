@@ -41,12 +41,28 @@ export function openDb(): DbHandle {
 export async function makeOrg(h: DbHandle, env = testEnv(), name = 'Test Org') {
   const [u] = await h.db
     .insert(users)
-    .values({ email: `${randomUUID()}@test.local`, passwordHash: 'x', name: 'Owner', role: 'OWNER', timezone: 'America/Vancouver' })
+    .values({
+      email: `${randomUUID()}@test.local`,
+      passwordHash: 'x',
+      name: 'Owner',
+      role: 'OWNER',
+      timezone: 'America/Vancouver',
+    })
     .returning({ id: users.id });
-  const [o] = await h.db.insert(organizations).values({ name, ownerUserId: u!.id }).returning({ id: organizations.id });
+  const [o] = await h.db
+    .insert(organizations)
+    .values({ name, ownerUserId: u!.id })
+    .returning({ id: organizations.id });
   await h.db.insert(organizationMemberships).values({ orgId: o!.id, userId: u!.id, role: 'OWNER' });
   await seedOrgDefaults(h.db, o!.id, u!.id, 'America/Vancouver');
-  const ctx: Ctx = { db: h.db, env, orgId: o!.id, userId: u!.id, actor: { type: 'user', id: u!.id }, now: () => new Date() };
+  const ctx: Ctx = {
+    db: h.db,
+    env,
+    orgId: o!.id,
+    userId: u!.id,
+    actor: { type: 'user', id: u!.id },
+    now: () => new Date(),
+  };
   return { orgId: o!.id, userId: u!.id, ctx, env };
 }
 
@@ -61,12 +77,22 @@ export async function pairTestDevice(ctx: Ctx, os = 'windows', hostname = 'TEST-
   });
   const authFor = async (body: string): Promise<AuthedAgent> => {
     const sig = signAgentRequest(paired.signingKey, body);
-    return authenticateAgent(ctx.db, ctx.env, { token: paired.token, timestamp: sig.timestamp, signature: sig.signature, body });
+    return authenticateAgent(ctx.db, ctx.env, {
+      token: paired.token,
+      timestamp: sig.timestamp,
+      signature: sig.signature,
+      body,
+    });
   };
   return { ...paired, authFor };
 }
 
-export async function makeRoot(ctx: Ctx, deviceId: string, displayPath = 'D:\\Media', extra: Record<string, unknown> = {}) {
+export async function makeRoot(
+  ctx: Ctx,
+  deviceId: string,
+  displayPath = 'D:\\Media',
+  extra: Record<string, unknown> = {},
+) {
   return createRoot(ctx, { deviceId, label: displayPath, displayPath, ...extra } as any);
 }
 
@@ -121,12 +147,20 @@ export function testConfig(databaseUrl: string, over: Record<string, string> = {
 export interface Api {
   app: Awaited<ReturnType<typeof buildApp>>;
   config: AppConfig;
-  call: (method: string, url: string, opts?: { body?: unknown; cookie?: string; headers?: Record<string, string>; raw?: string | Buffer }) => Promise<{ status: number; body: any; headers: Record<string, any>; cookie?: string; raw: Buffer }>;
+  call: (
+    method: string,
+    url: string,
+    opts?: { body?: unknown; cookie?: string; headers?: Record<string, string>; raw?: string | Buffer },
+  ) => Promise<{ status: number; body: any; headers: Record<string, any>; cookie?: string; raw: Buffer }>;
   login: (email: string, password: string, totp?: string) => Promise<string>;
   close: () => Promise<void>;
 }
 
-export async function makeApi(handle: DbHandle, url: string, over: Record<string, string> = {}): Promise<Api> {
+export async function makeApi(
+  handle: DbHandle,
+  url: string,
+  over: Record<string, string> = {},
+): Promise<Api> {
   const config = testConfig(url, over);
   const app = await buildApp({ db: handle.db, config });
   await app.ready();
@@ -140,7 +174,9 @@ export async function makeApi(handle: DbHandle, url: string, over: Record<string
       headers['content-type'] ??= 'application/json';
     }
     const res = await app.inject({ method: method as any, url: u, headers, payload });
-    const setCookie = ([] as string[]).concat((res.headers['set-cookie'] as any) ?? []).find((c) => c.startsWith('cos_session='));
+    const setCookie = ([] as string[])
+      .concat((res.headers['set-cookie'] as any) ?? [])
+      .find((c) => c.startsWith('cos_session='));
     let body: any = undefined;
     const text = res.body;
     try {
@@ -148,7 +184,13 @@ export async function makeApi(handle: DbHandle, url: string, over: Record<string
     } catch {
       body = text;
     }
-    return { status: res.statusCode, body, headers: res.headers as any, cookie: setCookie?.split(';')[0], raw: res.rawPayload };
+    return {
+      status: res.statusCode,
+      body,
+      headers: res.headers as any,
+      cookie: setCookie?.split(';')[0],
+      raw: res.rawPayload,
+    };
   };
   const login = async (email: string, password: string, totp?: string) => {
     const r = await call('POST', '/api/v1/auth/login', { body: { email, password, totp } });
@@ -177,7 +219,14 @@ export function dockerRunner(container: string | undefined = process.env.TEST_PG
       }
       cleaned.push(args[i]!);
     }
-    const dockerArgs = ['exec', '-i', ...Object.entries(opts.env ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]), container, cmd, ...cleaned];
+    const dockerArgs = [
+      'exec',
+      '-i',
+      ...Object.entries(opts.env ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
+      container,
+      cmd,
+      ...cleaned,
+    ];
     return new Promise((resolve, reject) => {
       const child = spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
@@ -188,7 +237,11 @@ export function dockerRunner(container: string | undefined = process.env.TEST_PG
       if (opts.stdinFile) fs.createReadStream(opts.stdinFile).pipe(child.stdin);
       else child.stdin.end();
       child.on('error', reject);
-      child.on('close', (code) => (code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`${cmd} exited with ${code}: ${stderr.slice(0, 800)}`))));
+      child.on('close', (code) =>
+        code === 0
+          ? resolve({ stdout, stderr })
+          : reject(new Error(`${cmd} exited with ${code}: ${stderr.slice(0, 800)}`)),
+      );
     });
   };
 }

@@ -1,4 +1,18 @@
-import { CalendarDays, Clapperboard, FolderKanban, Handshake, HardDrive, Home, Inbox, Layers, LineChart, Lightbulb, Plug, Settings, Share2 } from 'lucide-react';
+import {
+  CalendarDays,
+  Clapperboard,
+  FolderKanban,
+  Handshake,
+  HardDrive,
+  Home,
+  Inbox,
+  Layers,
+  LineChart,
+  Lightbulb,
+  Plug,
+  Settings,
+  Share2,
+} from 'lucide-react';
 
 export const NAV = [
   { href: '/', label: 'Home', icon: Home },

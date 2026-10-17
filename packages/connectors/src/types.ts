@@ -21,7 +21,11 @@ export class ConnectorError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
   readonly status?: number;
-  constructor(kind: ConnectorErrorKind, message: string, opts: { status?: number; retryAfterMs?: number; cause?: unknown } = {}) {
+  constructor(
+    kind: ConnectorErrorKind,
+    message: string,
+    opts: { status?: number; retryAfterMs?: number; cause?: unknown } = {},
+  ) {
     super(message, opts.cause ? { cause: opts.cause } : undefined);
     this.name = 'ConnectorError';
     this.kind = kind;

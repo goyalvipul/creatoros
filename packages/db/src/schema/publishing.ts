@@ -32,7 +32,10 @@ export const distributionVariants = pgTable(
     format: variantType('format').notNull().default('MASTER'),
     titleMaster: text('title_master').notNull(),
     captionMaster: text('caption_master'),
-    hashtags: text('hashtags').array().notNull().default(sql`'{}'::text[]`),
+    hashtags: text('hashtags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     language: text('language').notNull().default('en'),
     cta: text('cta'),
     thumbnailAssetId: uuid('thumbnail_asset_id').references(() => logicalAssets.id, { onDelete: 'set null' }),
@@ -42,7 +45,10 @@ export const distributionVariants = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('distribution_variants_asset_idx').on(t.assetId), index('distribution_variants_org_ready_idx').on(t.orgId, t.readiness)],
+  (t) => [
+    index('distribution_variants_asset_idx').on(t.assetId),
+    index('distribution_variants_org_ready_idx').on(t.orgId, t.readiness),
+  ],
 );
 
 export const publicationTargets = pgTable(
@@ -62,7 +68,10 @@ export const publicationTargets = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('publication_targets_uq').on(t.variantId, t.socialAccountId), index('publication_targets_account_idx').on(t.socialAccountId)],
+  (t) => [
+    uniqueIndex('publication_targets_uq').on(t.variantId, t.socialAccountId),
+    index('publication_targets_account_idx').on(t.socialAccountId),
+  ],
 );
 
 export const publicationRecords = pgTable(
@@ -81,8 +90,14 @@ export const publicationRecords = pgTable(
     canonicalUrl: text('canonical_url'),
     title: text('title'),
     caption: text('caption'),
-    hashtags: text('hashtags').array().notNull().default(sql`'{}'::text[]`),
-    taggedProducts: text('tagged_products').array().notNull().default(sql`'{}'::text[]`),
+    hashtags: text('hashtags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    taggedProducts: text('tagged_products')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     privacy: privacy('privacy').notNull().default('PUBLIC'),
     language: text('language'),
     cta: text('cta'),
@@ -90,7 +105,9 @@ export const publicationRecords = pgTable(
     thumbnailAssetId: uuid('thumbnail_asset_id').references(() => logicalAssets.id, { onDelete: 'set null' }),
     isSponsored: boolean('is_sponsored').notNull().default(false),
     sponsorDisclosure: boolean('sponsor_disclosure').notNull().default(false),
-    deliverableId: uuid('deliverable_id').references((): AnyPgColumn => dealDeliverables.id, { onDelete: 'set null' }),
+    deliverableId: uuid('deliverable_id').references((): AnyPgColumn => dealDeliverables.id, {
+      onDelete: 'set null',
+    }),
     state: publicationState('state').notNull().default('PLANNED'),
     stateProvenance: provenance('state_provenance').notNull().default('USER_ENTERED'),
     stateEvidence: text('state_evidence'),
@@ -184,5 +201,8 @@ export const publishingSchedules = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('publishing_schedules_planned_idx').on(t.orgId, t.plannedAt), index('publishing_schedules_pub_idx').on(t.publicationId)],
+  (t) => [
+    index('publishing_schedules_planned_idx').on(t.orgId, t.plannedAt),
+    index('publishing_schedules_pub_idx').on(t.publicationId),
+  ],
 );

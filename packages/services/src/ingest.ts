@@ -46,8 +46,16 @@ export interface IngestOptions {
   now?: Date;
 }
 
-export async function getOrgNumberSetting(db: Executor, orgId: string, key: string, fallback: number): Promise<number> {
-  const [o] = await db.select({ settings: organizations.settings }).from(organizations).where(eq(organizations.id, orgId));
+export async function getOrgNumberSetting(
+  db: Executor,
+  orgId: string,
+  key: string,
+  fallback: number,
+): Promise<number> {
+  const [o] = await db
+    .select({ settings: organizations.settings })
+    .from(organizations)
+    .where(eq(organizations.id, orgId));
   const v = (o?.settings as Record<string, unknown> | undefined)?.[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
@@ -56,18 +64,29 @@ export async function getOrgNumberSetting(db: Executor, orgId: string, key: stri
  * Apply one agent batch. Fully idempotent: every observation carries a unique event id, replays are counted as
  * duplicates and never re-applied (T11). Paths outside the paired root are rejected (T12).
  */
-export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent, input: unknown, opts: IngestOptions = {}): Promise<IngestResponse> {
+export async function processIngest(
+  db: Db,
+  env: ServiceEnv,
+  agent: AuthedAgent,
+  input: unknown,
+  opts: IngestOptions = {},
+): Promise<IngestResponse> {
   const batch = ingestBatchSchema.parse(input);
   const now = opts.now ?? new Date();
   const [root] = await db.select().from(storageRoots).where(eq(storageRoots.id, batch.rootId));
   if (!root || root.orgId !== agent.orgId || root.deviceId !== agent.deviceId) {
-    await audit({ db, orgId: agent.orgId, actor: { type: 'agent', id: agent.deviceId }, userId: null }, 'agent.ingest.denied', { type: 'storage_root', id: batch.rootId });
+    await audit(
+      { db, orgId: agent.orgId, actor: { type: 'agent', id: agent.deviceId }, userId: null },
+      'agent.ingest.denied',
+      { type: 'storage_root', id: batch.rootId },
+    );
     throw forbidden('This storage root is not granted to the authenticated device');
   }
   if (root.state === 'RETIRED') throw forbidden('This storage root has been retired');
   const os = root.pathOs as PathOs;
   const isAlias = Boolean((root.config as any)?.alternatePathFor);
-  const graceHours = opts.missingGraceHours ?? (await getOrgNumberSetting(db, agent.orgId, 'missingGraceHours', 24));
+  const graceHours =
+    opts.missingGraceHours ?? (await getOrgNumberSetting(db, agent.orgId, 'missingGraceHours', 24));
   const minChecks = opts.minMissingChecks ?? 2;
 
   return db.transaction(async (tx) => {
@@ -78,7 +97,13 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
     if (!run) {
       [run] = await tx
         .insert(scanRuns)
-        .values({ orgId: root.orgId, rootId: root.id, runId: batch.runId, jobType: batch.jobType, startedAt: now })
+        .values({
+          orgId: root.orgId,
+          rootId: root.id,
+          runId: batch.runId,
+          jobType: batch.jobType,
+          startedAt: now,
+        })
         .onConflictDoNothing()
         .returning();
       run ??= (await tx.select().from(scanRuns).where(eq(scanRuns.runId, batch.runId)))[0];
@@ -86,7 +111,9 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
         .update(storageRoots)
         .set({
           // HEARTBEAT runs carry only enrichment (hashes, probes); they are not scans and must not look like one.
-          ...(batch.jobType === 'HEARTBEAT' ? { lastHeartbeatAt: now } : { lastScanAt: now, scanRequestedAt: null }),
+          ...(batch.jobType === 'HEARTBEAT'
+            ? { lastHeartbeatAt: now }
+            : { lastScanAt: now, scanRequestedAt: null }),
           ...(batch.jobType === 'RECONCILE' ? { reconcileRequestedAt: null } : {}),
           ...(root.state === 'UNREACHABLE' ? { state: 'ACTIVE' as const } : {}),
         })
@@ -148,7 +175,13 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
         const rows = await tx
           .select()
           .from(fileInstances)
-          .where(and(eq(fileInstances.rootId, root.id), isNull(fileInstances.archivedAt), inArray(fileInstances.canonicalPath, part)));
+          .where(
+            and(
+              eq(fileInstances.rootId, root.id),
+              isNull(fileInstances.archivedAt),
+              inArray(fileInstances.canonicalPath, part),
+            ),
+          );
         rows.forEach((r) => existing.set(r.canonicalPath, r));
       }
 
@@ -163,10 +196,18 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           continue;
         }
         const mtimeDiff = o.mtimeMs ? Math.abs((ex.mtime?.getTime() ?? 0) - o.mtimeMs) : 0;
-        const changed = ex.size !== o.size || mtimeDiff > Math.max(MTIME_TOLERANCE_MS, o.mtimePrecisionMs ?? 0) || (o.fileId && ex.fileId && o.fileId !== ex.fileId);
+        const changed =
+          ex.size !== o.size ||
+          mtimeDiff > Math.max(MTIME_TOLERANCE_MS, o.mtimePrecisionMs ?? 0) ||
+          (o.fileId && ex.fileId && o.fileId !== ex.fileId);
         const wasMissing = ex.availability === 'MISSING_CANDIDATE' || ex.availability === 'CONFIRMED_MISSING';
         if (wasMissing) restored.push({ id: ex.id, path: o.path });
-        const availability = o.state === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED' : o.state === 'INCOMPLETE' ? 'INCOMPLETE' : 'AVAILABLE';
+        const availability =
+          o.state === 'PERMISSION_DENIED'
+            ? 'PERMISSION_DENIED'
+            : o.state === 'INCOMPLETE'
+              ? 'INCOMPLETE'
+              : 'AVAILABLE';
         if (changed) {
           changedCount += 1;
           await tx
@@ -199,7 +240,12 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
         if (o.state === 'STILL_WRITING' && ex.probeState !== 'INDEXED') probeState = 'STILL_WRITING';
         else if (o.state === 'STABLE' && ex.probeState === 'STILL_WRITING') probeState = 'PENDING';
         const needsUpdate =
-          wasMissing || probeState !== ex.probeState || availability !== ex.availability || (o.quickSignature && !ex.quickSignature) || o.stableObservations > ex.stableObservations || o.path !== ex.displayPath;
+          wasMissing ||
+          probeState !== ex.probeState ||
+          availability !== ex.availability ||
+          (o.quickSignature && !ex.quickSignature) ||
+          o.stableObservations > ex.stableObservations ||
+          o.path !== ex.displayPath;
         if (needsUpdate) {
           await tx
             .update(fileInstances)
@@ -228,17 +274,29 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
       const withId = moveCandidates.filter((o) => o.fileId);
       const movedFrom = new Map<string, Instance>();
       if (withId.length) {
-        for (const part of chunk(withId.map((o) => o.fileId!), 1000)) {
+        for (const part of chunk(
+          withId.map((o) => o.fileId!),
+          1000,
+        )) {
           const rows = await tx
             .select()
             .from(fileInstances)
-            .where(and(eq(fileInstances.rootId, root.id), isNull(fileInstances.archivedAt), inArray(fileInstances.fileId, part)));
+            .where(
+              and(
+                eq(fileInstances.rootId, root.id),
+                isNull(fileInstances.archivedAt),
+                inArray(fileInstances.fileId, part),
+              ),
+            );
           rows.forEach((r) => movedFrom.set(r.fileId!, r));
         }
       }
       for (const o of moveCandidates) {
         const old = o.fileId ? movedFrom.get(o.fileId) : undefined;
-        const sameContent = old && old.size === o.size && Math.abs((old.mtime?.getTime() ?? 0) - o.mtimeMs) <= MTIME_TOLERANCE_MS;
+        const sameContent =
+          old &&
+          old.size === o.size &&
+          Math.abs((old.mtime?.getTime() ?? 0) - o.mtimeMs) <= MTIME_TOLERANCE_MS;
         const oldStillSeen = old && old.lastSeenRunId === batch.runId; // already reported at its old path in this run -> hard link, not a move
         if (old && sameContent && !oldStillSeen && !existing.has(o.canonical)) {
           await tx
@@ -275,7 +333,12 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           firstSeenAt: now,
           lastSeenAt: now,
           lastSeenRunId: batch.runId,
-          availability: o.state === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED' : o.state === 'INCOMPLETE' ? 'INCOMPLETE' : 'AVAILABLE',
+          availability:
+            o.state === 'PERMISSION_DENIED'
+              ? 'PERMISSION_DENIED'
+              : o.state === 'INCOMPLETE'
+                ? 'INCOMPLETE'
+                : 'AVAILABLE',
           quickSignature: o.quickSignature ?? null,
           fileType: kindFromExtension(ext) as FileKind,
           probeState: o.state === 'STILL_WRITING' ? 'STILL_WRITING' : 'PENDING',
@@ -293,7 +356,9 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
       }
 
       // ---------- pass 2: hash, probe and embedded hash/probe
-      const secondary = fresh.filter((o) => o.kind === 'hash' || o.kind === 'probe' || (o.kind === 'file' && (o.fullHash || o.probe)));
+      const secondary = fresh.filter(
+        (o) => o.kind === 'hash' || o.kind === 'probe' || (o.kind === 'file' && (o.fullHash || o.probe)),
+      );
       if (secondary.length) {
         const keys = [...new Set(secondary.map((o) => o.canonical))];
         const inst = new Map<string, Instance>();
@@ -301,7 +366,13 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           const rows = await tx
             .select()
             .from(fileInstances)
-            .where(and(eq(fileInstances.rootId, root.id), isNull(fileInstances.archivedAt), inArray(fileInstances.canonicalPath, part)));
+            .where(
+              and(
+                eq(fileInstances.rootId, root.id),
+                isNull(fileInstances.archivedAt),
+                inArray(fileInstances.canonicalPath, part),
+              ),
+            );
           rows.forEach((r) => inst.set(r.canonicalPath, r));
         }
         for (const o of secondary) {
@@ -310,7 +381,10 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           if (o.fullHash && (o.kind === 'hash' || o.kind === 'file')) await applyHash(tx, row, o);
           if (o.probe && (o.kind === 'probe' || o.kind === 'file')) await applyProbe(tx, row, o);
           else if (o.kind === 'probe' && o.probeState === 'PROBE_FAILED') {
-            await tx.update(fileInstances).set({ probeState: 'PROBE_FAILED' }).where(eq(fileInstances.id, row.id));
+            await tx
+              .update(fileInstances)
+              .set({ probeState: 'PROBE_FAILED' })
+              .where(eq(fileInstances.id, row.id));
           }
         }
       }
@@ -323,7 +397,13 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           await tx
             .update(fileInstances)
             .set({ availability: 'PERMISSION_DENIED' })
-            .where(and(eq(fileInstances.rootId, root.id), eq(fileInstances.canonicalPath, o.canonical), isNull(fileInstances.archivedAt)));
+            .where(
+              and(
+                eq(fileInstances.rootId, root.id),
+                eq(fileInstances.canonicalPath, o.canonical),
+                isNull(fileInstances.archivedAt),
+              ),
+            );
         }
       }
     }
@@ -337,7 +417,9 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
         newCount: sql`${scanRuns.newCount} + ${newCount}`,
         changedCount: sql`${scanRuns.changedCount} + ${changedCount}`,
         errorCount: sql`${scanRuns.errorCount} + ${errorCount}`,
-        errors: runErrors.length ? sql`(${scanRuns.errors} || ${JSON.stringify(runErrors.slice(0, 100))}::jsonb)` : scanRuns.errors,
+        errors: runErrors.length
+          ? sql`(${scanRuns.errors} || ${JSON.stringify(runErrors.slice(0, 100))}::jsonb)`
+          : scanRuns.errors,
       })
       .where(eq(scanRuns.runId, batch.runId));
 
@@ -348,7 +430,13 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
       const [prior] = await tx
         .select({ n: sql<number>`count(*)::int` })
         .from(fileInstances)
-        .where(and(eq(fileInstances.rootId, root.id), isNull(fileInstances.archivedAt), sql`${fileInstances.lastSeenRunId} is distinct from ${batch.runId}::uuid`));
+        .where(
+          and(
+            eq(fileInstances.rootId, root.id),
+            isNull(fileInstances.archivedAt),
+            sql`${fileInstances.lastSeenRunId} is distinct from ${batch.runId}::uuid`,
+          ),
+        );
       const complete = batch.complete === true;
       const suspicious = complete && (cur?.scannedCount ?? 0) === 0 && (prior?.n ?? 0) > 0;
       let missingCount = 0;
@@ -381,7 +469,12 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           )
           .returning({ id: fileInstances.id });
         missingCount = updated.length;
-        for (const m of newlyMissing.slice(0, 200)) await emit(tx, root.orgId, 'media.file.missing', { fileInstanceId: m.id, path: m.displayPath, rootId: root.id });
+        for (const m of newlyMissing.slice(0, 200))
+          await emit(tx, root.orgId, 'media.file.missing', {
+            fileInstanceId: m.id,
+            path: m.displayPath,
+            rootId: root.id,
+          });
       }
       await tx
         .update(scanRuns)
@@ -390,25 +483,48 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
           completeSuccess: complete && !suspicious,
           status: complete && !suspicious ? 'COMPLETED' : runErrors.length ? 'FAILED' : 'ABORTED',
           missingCount,
-          errors: suspicious ? sql`(${scanRuns.errors} || ${JSON.stringify([{ path: root.displayPath, error: 'Scan reported zero files for a root that previously had files; treated as unreachable, nothing marked missing.' }])}::jsonb)` : scanRuns.errors,
+          errors: suspicious
+            ? sql`(${scanRuns.errors} || ${JSON.stringify([{ path: root.displayPath, error: 'Scan reported zero files for a root that previously had files; treated as unreachable, nothing marked missing.' }])}::jsonb)`
+            : scanRuns.errors,
         })
         .where(eq(scanRuns.runId, batch.runId));
       await tx
         .update(storageRoots)
         .set(
           complete && !suspicious
-            ? { lastSuccessfulScanAt: now, consecutiveCompleteScans: sql`${storageRoots.consecutiveCompleteScans} + 1`, state: root.state === 'UNREACHABLE' ? 'ACTIVE' : root.state }
+            ? {
+                lastSuccessfulScanAt: now,
+                consecutiveCompleteScans: sql`${storageRoots.consecutiveCompleteScans} + 1`,
+                state: root.state === 'UNREACHABLE' ? 'ACTIVE' : root.state,
+              }
             : { consecutiveCompleteScans: 0, ...(suspicious ? { state: 'UNREACHABLE' as const } : {}) },
         )
         .where(eq(storageRoots.id, root.id));
     } else if (batch.phase === 'END' && (isAlias || enrichmentOnly)) {
-      await tx.update(scanRuns).set({ finishedAt: now, status: 'COMPLETED', completeSuccess: false }).where(eq(scanRuns.runId, batch.runId));
+      await tx
+        .update(scanRuns)
+        .set({ finishedAt: now, status: 'COMPLETED', completeSuccess: false })
+        .where(eq(scanRuns.runId, batch.runId));
     }
 
-    for (const d of discovered.slice(0, 200)) await emit(tx, root.orgId, 'media.file.discovered', { fileInstanceId: d.id, path: d.path, rootId: root.id, deviceId: root.deviceId });
-    for (const r of restored.slice(0, 200)) await emit(tx, root.orgId, 'media.file.restored', { fileInstanceId: r.id, path: r.path, rootId: root.id });
+    for (const d of discovered.slice(0, 200))
+      await emit(tx, root.orgId, 'media.file.discovered', {
+        fileInstanceId: d.id,
+        path: d.path,
+        rootId: root.id,
+        deviceId: root.deviceId,
+      });
+    for (const r of restored.slice(0, 200))
+      await emit(tx, root.orgId, 'media.file.restored', {
+        fileInstanceId: r.id,
+        path: r.path,
+        rootId: root.id,
+      });
 
-    const wantHash = root.hashMode === 'candidates' && (batch.phase === 'END' || fresh.length > 0) ? await getHashRequestsForRoot(tx, root.id, 200) : [];
+    const wantHash =
+      root.hashMode === 'candidates' && (batch.phase === 'END' || fresh.length > 0)
+        ? await getHashRequestsForRoot(tx, root.id, 200)
+        : [];
     const wantPreview = await getPreviewRequests(tx, agent.deviceId, 20);
     return {
       ack,
@@ -430,15 +546,35 @@ async function applyHash(tx: Executor, row: Instance, o: Observation): Promise<v
   if (o.mtimeMs && row.mtime && Math.abs(row.mtime.getTime() - o.mtimeMs) > MTIME_TOLERANCE_MS) return;
   await tx
     .insert(mediaObjects)
-    .values({ orgId: row.orgId, exactHash: o.fullHash, hashAlg: 'sha256', size: row.size, kind: row.fileType, mime: row.mime, tech: row.tech ?? {} })
+    .values({
+      orgId: row.orgId,
+      exactHash: o.fullHash,
+      hashAlg: 'sha256',
+      size: row.size,
+      kind: row.fileType,
+      mime: row.mime,
+      tech: row.tech ?? {},
+    })
     .onConflictDoNothing();
   const [mo] = await tx
     .select({ id: mediaObjects.id, tech: mediaObjects.tech })
     .from(mediaObjects)
-    .where(and(eq(mediaObjects.orgId, row.orgId), eq(mediaObjects.hashAlg, 'sha256'), eq(mediaObjects.exactHash, o.fullHash), eq(mediaObjects.size, row.size)));
+    .where(
+      and(
+        eq(mediaObjects.orgId, row.orgId),
+        eq(mediaObjects.hashAlg, 'sha256'),
+        eq(mediaObjects.exactHash, o.fullHash),
+        eq(mediaObjects.size, row.size),
+      ),
+    );
   await tx
     .update(fileInstances)
-    .set({ fullHash: o.fullHash, hashAlg: 'sha256', mediaObjectId: mo?.id ?? null, quickSignature: row.quickSignature ?? o.quickSignature ?? null })
+    .set({
+      fullHash: o.fullHash,
+      hashAlg: 'sha256',
+      mediaObjectId: mo?.id ?? null,
+      quickSignature: row.quickSignature ?? o.quickSignature ?? null,
+    })
     .where(eq(fileInstances.id, row.id));
   if (mo && Object.keys(mo.tech ?? {}).length === 0 && Object.keys(row.tech ?? {}).length > 0) {
     await tx.update(mediaObjects).set({ tech: row.tech }).where(eq(mediaObjects.id, mo.id));
@@ -454,10 +590,18 @@ async function applyProbe(tx: Executor, row: Instance, o: Observation): Promise<
   if (!p.width && p.hasAudio && fileType === 'OTHER') fileType = 'AUDIO';
   await tx
     .update(fileInstances)
-    .set({ tech: p as Record<string, unknown>, mime: p.mime ?? row.mime, probeState: o.probeState ?? 'INDEXED', fileType })
+    .set({
+      tech: p as Record<string, unknown>,
+      mime: p.mime ?? row.mime,
+      probeState: o.probeState ?? 'INDEXED',
+      fileType,
+    })
     .where(eq(fileInstances.id, row.id));
   if (row.mediaObjectId) {
-    await tx.update(mediaObjects).set({ tech: p as Record<string, unknown>, mime: p.mime ?? row.mime ?? undefined }).where(eq(mediaObjects.id, row.mediaObjectId));
+    await tx
+      .update(mediaObjects)
+      .set({ tech: p as Record<string, unknown>, mime: p.mime ?? row.mime ?? undefined })
+      .where(eq(mediaObjects.id, row.mediaObjectId));
   }
 }
 
@@ -485,7 +629,13 @@ export async function getHashRequests(db: Db, agent: AuthedAgent, limit = 200) {
   const roots = await db
     .select({ id: storageRoots.id })
     .from(storageRoots)
-    .where(and(eq(storageRoots.deviceId, agent.deviceId), eq(storageRoots.hashMode, 'candidates'), sql`${storageRoots.state} = 'ACTIVE'`));
+    .where(
+      and(
+        eq(storageRoots.deviceId, agent.deviceId),
+        eq(storageRoots.hashMode, 'candidates'),
+        sql`${storageRoots.state} = 'ACTIVE'`,
+      ),
+    );
   const out: { path: string; rootId: string }[] = [];
   for (const r of roots) out.push(...(await getHashRequestsForRoot(db, r.id, limit)));
   return out.slice(0, limit);

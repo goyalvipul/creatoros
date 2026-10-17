@@ -4,5 +4,10 @@ import path from 'node:path';
 
 const api = `http://127.0.0.1:${process.env.E2E_API_PORT ?? 4100}`;
 const cwd = path.resolve(import.meta.dirname, '../../../apps/web');
-const r = spawnSync('pnpm', ['run', 'build'], { cwd, stdio: 'inherit', shell: true, env: { ...process.env, API_INTERNAL_URL: api } });
+const r = spawnSync('pnpm', ['run', 'build'], {
+  cwd,
+  stdio: 'inherit',
+  shell: true,
+  env: { ...process.env, API_INTERNAL_URL: api },
+});
 process.exit(r.status ?? 1);

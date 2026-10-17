@@ -12,7 +12,12 @@ import {
   type Db,
   type Executor,
 } from '@creatoros/db';
-import { BUILT_IN_TEMPLATES, DEFAULT_FOLLOW_UP_RULES, DEFAULT_TIMEZONE, isValidTimeZone } from '@creatoros/domain';
+import {
+  BUILT_IN_TEMPLATES,
+  DEFAULT_FOLLOW_UP_RULES,
+  DEFAULT_TIMEZONE,
+  isValidTimeZone,
+} from '@creatoros/domain';
 import { audit } from './audit';
 import { badRequest, conflict, type Ctx } from './types';
 
@@ -31,7 +36,12 @@ export interface BootstrapInput {
 }
 
 /** Org-level defaults every organization needs: follow-up rules, built-in templates, notification preferences. */
-export async function seedOrgDefaults(tx: Executor, orgId: string, userId: string, timezone: string): Promise<void> {
+export async function seedOrgDefaults(
+  tx: Executor,
+  orgId: string,
+  userId: string,
+  timezone: string,
+): Promise<void> {
   await tx
     .insert(followUpRules)
     .values(
@@ -39,7 +49,8 @@ export async function seedOrgDefaults(tx: Executor, orgId: string, userId: strin
         orgId,
         key: r.key,
         label: r.label,
-        durationHours: 'hours' in r ? r.hours : 'days' in r && typeof r.days === 'number' ? r.days * 24 : null,
+        durationHours:
+          'hours' in r ? r.hours : 'days' in r && typeof r.days === 'number' ? r.days * 24 : null,
         condition: 'days' in r && Array.isArray(r.days) ? { days: r.days } : {},
       })),
     )
@@ -65,30 +76,63 @@ export async function seedOrgDefaults(tx: Executor, orgId: string, userId: strin
  * First-run only. Refuses once any user exists, so the setup endpoint can never be used to take over an install.
  * There is NO default password: the owner chooses one in the wizard.
  */
-export async function bootstrapOwner(db: Db, input: BootstrapInput): Promise<{ userId: string; orgId: string }> {
+export async function bootstrapOwner(
+  db: Db,
+  input: BootstrapInput,
+): Promise<{ userId: string; orgId: string }> {
   const tz = input.timezone ?? DEFAULT_TIMEZONE;
   if (!isValidTimeZone(tz)) throw badRequest(`Unknown time zone: ${tz}`);
   return db.transaction(async (tx) => {
     // serialise concurrent first-run attempts
     await tx.execute(sql`select pg_advisory_xact_lock(7340321)`);
     const [n] = await tx.select({ n: count() }).from(users);
-    if ((n?.n ?? 0) > 0) throw conflict('This installation is already set up. Sign in instead.', undefined, 'ALREADY_INITIALIZED');
+    if ((n?.n ?? 0) > 0)
+      throw conflict(
+        'This installation is already set up. Sign in instead.',
+        undefined,
+        'ALREADY_INITIALIZED',
+      );
     const [user] = await tx
       .insert(users)
-      .values({ email: input.email.trim(), passwordHash: input.passwordHash, name: input.name, role: 'OWNER', timezone: tz })
+      .values({
+        email: input.email.trim(),
+        passwordHash: input.passwordHash,
+        name: input.name,
+        role: 'OWNER',
+        timezone: tz,
+      })
       .returning({ id: users.id });
     const [org] = await tx
       .insert(organizations)
-      .values({ name: input.orgName, ownerUserId: user.id, baseCurrency: input.currency ?? 'CAD', timezone: tz, setupStep: 'welcome' })
+      .values({
+        name: input.orgName,
+        ownerUserId: user.id,
+        baseCurrency: input.currency ?? 'CAD',
+        timezone: tz,
+        setupStep: 'welcome',
+      })
       .returning({ id: organizations.id });
     await tx.insert(organizationMemberships).values({ orgId: org.id, userId: user.id, role: 'OWNER' });
     await seedOrgDefaults(tx, org.id, user.id, tz);
-    await audit({ db: tx, orgId: org.id, actor: { type: 'user', id: user.id }, userId: user.id }, 'setup.bootstrap', { type: 'organization', id: org.id });
+    await audit(
+      { db: tx, orgId: org.id, actor: { type: 'user', id: user.id }, userId: user.id },
+      'setup.bootstrap',
+      { type: 'organization', id: org.id },
+    );
     return { userId: user.id, orgId: org.id };
   });
 }
 
-export const SETUP_STEPS = ['welcome', 'organization', 'brands', 'devices', 'roots', 'first_scan', 'integrations', 'done'] as const;
+export const SETUP_STEPS = [
+  'welcome',
+  'organization',
+  'brands',
+  'devices',
+  'roots',
+  'first_scan',
+  'integrations',
+  'done',
+] as const;
 
 export async function getSetupState(ctx: Ctx) {
   const [org] = await ctx.db.select().from(organizations).where(eq(organizations.id, ctx.orgId));

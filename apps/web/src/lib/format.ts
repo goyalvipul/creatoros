@@ -36,7 +36,11 @@ export function when(value: unknown, tz?: string, withTime = true): string {
   if (!value) return '—';
   const d = parseDate(value);
   if (Number.isNaN(d.getTime())) return String(value);
-  return new Intl.DateTimeFormat(undefined, { timeZone: tz, dateStyle: 'medium', ...(withTime ? { timeStyle: 'short' } : {}) }).format(d);
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: tz,
+    dateStyle: 'medium',
+    ...(withTime ? { timeStyle: 'short' } : {}),
+  }).format(d);
 }
 
 export function ago(value: unknown): string {
@@ -46,7 +50,14 @@ export function ago(value: unknown): string {
   const s = Math.round((Date.now() - d) / 1000);
   const abs = Math.abs(s);
   const fmt = (n: number, u: string) => `${n}${u}`;
-  const t = abs < 60 ? fmt(abs, 's') : abs < 3600 ? fmt(Math.round(abs / 60), 'm') : abs < 86400 ? fmt(Math.round(abs / 3600), 'h') : fmt(Math.round(abs / 86400), 'd');
+  const t =
+    abs < 60
+      ? fmt(abs, 's')
+      : abs < 3600
+        ? fmt(Math.round(abs / 60), 'm')
+        : abs < 86400
+          ? fmt(Math.round(abs / 3600), 'h')
+          : fmt(Math.round(abs / 86400), 'd');
   return s >= 0 ? `${t} ago` : `in ${t}`;
 }
 
@@ -63,7 +74,9 @@ export function duration(ms: unknown): string {
   const s = Math.round(v / 1000);
   const m = Math.floor(s / 60);
   const h = Math.floor(m / 60);
-  return h ? `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`;
+  return h
+    ? `${h}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+    : `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /** yyyy-mm-dd for <input type="date"> */

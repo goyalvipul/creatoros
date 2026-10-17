@@ -20,7 +20,10 @@ export interface DbHandle {
 // BIGINT (int8) values (sizes, minor-unit money) fit in JS safe integers; parse them as numbers.
 pg.types.setTypeParser(20, (v) => Number(v));
 
-export function createDb(connectionString: string, opts: { max?: number; applicationName?: string } = {}): DbHandle {
+export function createDb(
+  connectionString: string,
+  opts: { max?: number; applicationName?: string } = {},
+): DbHandle {
   const pool = new pg.Pool({
     connectionString,
     max: opts.max ?? 10,

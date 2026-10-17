@@ -45,7 +45,11 @@ function LoginForm() {
     setBusy(true);
     setError(null);
     try {
-      await post('/auth/login', { email: email.trim(), password, totp: totp || undefined }, { silent401: true });
+      await post(
+        '/auth/login',
+        { email: email.trim(), password, totp: totp || undefined },
+        { silent401: true },
+      );
       await refresh();
       router.replace(safeNext(params.get('next')));
     } catch (err) {
@@ -60,20 +64,46 @@ function LoginForm() {
   return (
     <Card className="w-full max-w-sm">
       <div className="mb-5 text-center">
-        <div className="mx-auto mb-3 grid size-12 place-items-center rounded-xl bg-accent text-sm font-extrabold text-accentfg">C/OS</div>
+        <div className="mx-auto mb-3 grid size-12 place-items-center rounded-xl bg-accent text-sm font-extrabold text-accentfg">
+          C/OS
+        </div>
         <h1 className="text-xl font-semibold">Sign in to Creator OS</h1>
-        <p className="mt-1 text-sm text-muted">Private workspace. No account is shared or hosted elsewhere.</p>
+        <p className="mt-1 text-sm text-muted">
+          Private workspace. No account is shared or hosted elsewhere.
+        </p>
       </div>
       <form onSubmit={submit} className="space-y-3" aria-label="Sign in">
         <Field label="E-mail">
-          <Input type="email" autoComplete="username" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input
+            type="email"
+            autoComplete="username"
+            required
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
         </Field>
         <Field label="Password">
-          <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <Input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
         </Field>
         {needTotp && (
           <Field label="Authenticator code" hint="Open your authenticator app and enter the 6-digit code.">
-            <Input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required autoFocus value={totp} onChange={(e) => setTotp(e.target.value)} />
+            <Input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              required
+              autoFocus
+              value={totp}
+              onChange={(e) => setTotp(e.target.value)}
+            />
           </Field>
         )}
         {error != null && <ErrorNote error={error} />}

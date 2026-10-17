@@ -23,7 +23,14 @@ export function computeProjectProgress(scenes: SceneLike[]): ProjectProgress {
   const running = scenes.filter((s) => s.status === 'RUNNING' || s.status === 'QUEUED').length;
   const failed = scenes.filter((s) => s.status === 'FAILED').length;
   const planned = scenes.filter((s) => s.status === 'PLANNED').length;
-  return { total, completed, running, failed, planned, pct: total === 0 ? 0 : Math.round((completed / total) * 100) };
+  return {
+    total,
+    completed,
+    running,
+    failed,
+    planned,
+    pct: total === 0 ? 0 : Math.round((completed / total) * 100),
+  };
 }
 
 export interface StageSuggestion {
@@ -32,10 +39,16 @@ export interface StageSuggestion {
 }
 
 /** Non-binding hint of the next project stage; the owner always makes the change. */
-export function suggestNextStage(current: string, progress: ProjectProgress, hasApprovedFinal: boolean): StageSuggestion | null {
-  if (current === 'APPROVED' && progress.running > 0) return { stage: 'GENERATING', reason: 'Clips are queued or running.' };
+export function suggestNextStage(
+  current: string,
+  progress: ProjectProgress,
+  hasApprovedFinal: boolean,
+): StageSuggestion | null {
+  if (current === 'APPROVED' && progress.running > 0)
+    return { stage: 'GENERATING', reason: 'Clips are queued or running.' };
   if (current === 'GENERATING' && progress.total > 0 && progress.completed === progress.total)
     return { stage: 'EDITING', reason: 'Every scene has a selected final.' };
-  if (current === 'QA' && hasApprovedFinal) return { stage: 'READY', reason: 'An approved final export exists.' };
+  if (current === 'QA' && hasApprovedFinal)
+    return { stage: 'READY', reason: 'An approved final export exists.' };
   return null;
 }

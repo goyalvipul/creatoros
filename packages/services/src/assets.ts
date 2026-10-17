@@ -29,7 +29,10 @@ export interface AssetInput {
 }
 
 async function requireInstance(db: Executor, orgId: string, id: string) {
-  const [i] = await db.select().from(fileInstances).where(and(eq(fileInstances.id, id), eq(fileInstances.orgId, orgId)));
+  const [i] = await db
+    .select()
+    .from(fileInstances)
+    .where(and(eq(fileInstances.id, id), eq(fileInstances.orgId, orgId)));
   if (!i) throw notFound('File');
   return i;
 }
@@ -39,25 +42,65 @@ export async function createAsset(ctx: Ctx, input: AssetInput) {
   if (!title) throw badRequest('Title is required');
   return ctx.db.transaction(async (tx) => {
     const inst = input.fileInstanceId ? await requireInstance(tx, ctx.orgId, input.fileInstanceId) : null;
-    const kind = input.kind ?? (inst && ['VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT'].includes(inst.fileType) ? (inst.fileType as any) : 'VIDEO');
+    const kind =
+      input.kind ??
+      (inst && ['VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT'].includes(inst.fileType)
+        ? (inst.fileType as any)
+        : 'VIDEO');
     const [asset] = await tx
       .insert(logicalAssets)
-      .values({ orgId: ctx.orgId, title, kind, description: input.description ?? null, brandId: input.brandId ?? null, projectId: input.projectId ?? null, source: inst ? 'library' : 'manual' })
+      .values({
+        orgId: ctx.orgId,
+        title,
+        kind,
+        description: input.description ?? null,
+        brandId: input.brandId ?? null,
+        projectId: input.projectId ?? null,
+        source: inst ? 'library' : 'manual',
+      })
       .returning();
     const [v] = await tx
       .insert(assetVersions)
-      .values({ orgId: ctx.orgId, assetId: asset!.id, label: 'v1', number: 1, mediaObjectId: inst?.mediaObjectId ?? null, isMaster: true, createdBy: ctx.userId })
+      .values({
+        orgId: ctx.orgId,
+        assetId: asset!.id,
+        label: 'v1',
+        number: 1,
+        mediaObjectId: inst?.mediaObjectId ?? null,
+        isMaster: true,
+        createdBy: ctx.userId,
+      })
       .returning();
     if (inst) {
-      await tx.insert(assetFileLinks).values({ orgId: ctx.orgId, assetVersionId: v!.id, fileInstanceId: inst.id, linkReason: 'manual', confirmedBy: ctx.userId, primaryPreference: true });
+      await tx.insert(assetFileLinks).values({
+        orgId: ctx.orgId,
+        assetVersionId: v!.id,
+        fileInstanceId: inst.id,
+        linkReason: 'manual',
+        confirmedBy: ctx.userId,
+        primaryPreference: true,
+      });
     }
-    await audit({ ...ctx, db: tx }, 'asset.create', { type: 'asset', id: asset!.id }, undefined, { title, kind });
+    await audit({ ...ctx, db: tx }, 'asset.create', { type: 'asset', id: asset!.id }, undefined, {
+      title,
+      kind,
+    });
     return { ...asset!, versions: [v!] };
   });
 }
 
-export async function updateAsset(ctx: Ctx, id: string, patch: Partial<Pick<AssetInput, 'title' | 'description' | 'brandId' | 'projectId' | 'kind'>> & { creativeState?: any; isArchived?: boolean }) {
-  const [before] = await ctx.db.select().from(logicalAssets).where(and(eq(logicalAssets.id, id), eq(logicalAssets.orgId, ctx.orgId)));
+export async function updateAsset(
+  ctx: Ctx,
+  id: string,
+  patch: Partial<Pick<AssetInput, 'title' | 'description' | 'brandId' | 'projectId' | 'kind'>> & {
+    creativeState?: any;
+    isArchived?: boolean;
+  },
+) {
+  const [before] = await ctx.db
+    .select()
+    .from(logicalAssets)
+    .where(and(eq(logicalAssets.id, id), eq(logicalAssets.orgId, ctx.orgId)));
   if (!before) throw notFound('Asset');
   const [after] = await ctx.db
     .update(logicalAssets)
@@ -77,7 +120,18 @@ export async function updateAsset(ctx: Ctx, id: string, patch: Partial<Pick<Asse
   return after!;
 }
 
-export async function listAssets(ctx: Ctx, q: { q?: string; kind?: string; projectId?: string; brandId?: string; includeArchived?: boolean; limit?: number; cursor?: string }) {
+export async function listAssets(
+  ctx: Ctx,
+  q: {
+    q?: string;
+    kind?: string;
+    projectId?: string;
+    brandId?: string;
+    includeArchived?: boolean;
+    limit?: number;
+    cursor?: string;
+  },
+) {
   const limit = Math.min(Math.max(q.limit ?? 50, 1), 200);
   const where = [sql`a.org_id = ${ctx.orgId}`];
   if (!q.includeArchived) where.push(sql`a.is_archived = false`);
@@ -101,13 +155,26 @@ export async function listAssets(ctx: Ctx, q: { q?: string; kind?: string; proje
   );
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
-  return { items: page, nextCursor: rows.length > limit && last ? Buffer.from(`${new Date(last.createdAt).toISOString()}|${last.id}`).toString('base64url') : null };
+  return {
+    items: page,
+    nextCursor:
+      rows.length > limit && last
+        ? Buffer.from(`${new Date(last.createdAt).toISOString()}|${last.id}`).toString('base64url')
+        : null,
+  };
 }
 
 export async function getAsset(ctx: Ctx, id: string) {
-  const [asset] = await ctx.db.select().from(logicalAssets).where(and(eq(logicalAssets.id, id), eq(logicalAssets.orgId, ctx.orgId)));
+  const [asset] = await ctx.db
+    .select()
+    .from(logicalAssets)
+    .where(and(eq(logicalAssets.id, id), eq(logicalAssets.orgId, ctx.orgId)));
   if (!asset) throw notFound('Asset');
-  const versions = await ctx.db.select().from(assetVersions).where(eq(assetVersions.assetId, id)).orderBy(assetVersions.number);
+  const versions = await ctx.db
+    .select()
+    .from(assetVersions)
+    .where(eq(assetVersions.assetId, id))
+    .orderBy(assetVersions.number);
   const files = rowsOf<any>(
     await ctx.db.execute(sql`
       select l.asset_version_id as "versionId", l.link_reason as "linkReason", l.primary_preference as "primary",
@@ -121,9 +188,18 @@ export async function getAsset(ctx: Ctx, id: string) {
       where v.asset_id = ${id}`),
   ).map((f) => ({
     ...f,
-    copyPaths: copyPathsFor(f, { displayPath: f.rootPath, smbPath: f.rootSmb, mountPath: f.rootMount, pathOs: f.rootOs }),
+    copyPaths: copyPathsFor(f, {
+      displayPath: f.rootPath,
+      smbPath: f.rootSmb,
+      mountPath: f.rootMount,
+      pathOs: f.rootOs,
+    }),
   }));
-  const tags = rowsOf<any>(await ctx.db.execute(sql`select t.id, t.name, t.color from asset_tag_links l join media_tags t on t.id = l.tag_id where l.asset_id = ${id}`));
+  const tags = rowsOf<any>(
+    await ctx.db.execute(
+      sql`select t.id, t.name, t.color from asset_tag_links l join media_tags t on t.id = l.tag_id where l.asset_id = ${id}`,
+    ),
+  );
   return {
     ...asset,
     tags,
@@ -134,17 +210,34 @@ export async function getAsset(ctx: Ctx, id: string) {
 export async function addVersion(
   ctx: Ctx,
   assetId: string,
-  input: { label?: string; variantType?: (typeof assetVersions.$inferInsert)['variantType']; parentVersionId?: string | null; fileInstanceId?: string; notes?: string | null; resolution?: string | null; intendedUse?: string | null },
+  input: {
+    label?: string;
+    variantType?: (typeof assetVersions.$inferInsert)['variantType'];
+    parentVersionId?: string | null;
+    fileInstanceId?: string;
+    notes?: string | null;
+    resolution?: string | null;
+    intendedUse?: string | null;
+  },
 ) {
   return ctx.db.transaction(async (tx) => {
-    const [asset] = await tx.select().from(logicalAssets).where(and(eq(logicalAssets.id, assetId), eq(logicalAssets.orgId, ctx.orgId)));
+    const [asset] = await tx
+      .select()
+      .from(logicalAssets)
+      .where(and(eq(logicalAssets.id, assetId), eq(logicalAssets.orgId, ctx.orgId)));
     if (!asset) throw notFound('Asset');
     if (input.parentVersionId) {
-      const [p] = await tx.select().from(assetVersions).where(and(eq(assetVersions.id, input.parentVersionId), eq(assetVersions.assetId, assetId)));
+      const [p] = await tx
+        .select()
+        .from(assetVersions)
+        .where(and(eq(assetVersions.id, input.parentVersionId), eq(assetVersions.assetId, assetId)));
       if (!p) throw badRequest('Parent version belongs to another asset');
     }
     const inst = input.fileInstanceId ? await requireInstance(tx, ctx.orgId, input.fileInstanceId) : null;
-    const [mx] = await tx.select({ n: sql<number>`coalesce(max(${assetVersions.number}),0)::int` }).from(assetVersions).where(eq(assetVersions.assetId, assetId));
+    const [mx] = await tx
+      .select({ n: sql<number>`coalesce(max(${assetVersions.number}),0)::int` })
+      .from(assetVersions)
+      .where(eq(assetVersions.assetId, assetId));
     const number = (mx?.n ?? 0) + 1;
     const [v] = await tx
       .insert(assetVersions)
@@ -162,7 +255,15 @@ export async function addVersion(
         createdBy: ctx.userId,
       })
       .returning();
-    if (inst) await tx.insert(assetFileLinks).values({ orgId: ctx.orgId, assetVersionId: v!.id, fileInstanceId: inst.id, linkReason: 'manual', confirmedBy: ctx.userId, primaryPreference: true });
+    if (inst)
+      await tx.insert(assetFileLinks).values({
+        orgId: ctx.orgId,
+        assetVersionId: v!.id,
+        fileInstanceId: inst.id,
+        linkReason: 'manual',
+        confirmedBy: ctx.userId,
+        primaryPreference: true,
+      });
     await audit({ ...ctx, db: tx }, 'asset.version.create', { type: 'asset_version', id: v!.id });
     return v!;
   });
@@ -172,20 +273,47 @@ export async function addVersion(
  * Link a physical file to an asset version. One version = one set of bytes; linking a file with different content
  * is refused so versions can never silently point at different media.
  */
-export async function linkFile(ctx: Ctx, versionId: string, fileInstanceId: string, reason = 'manual', confidence?: number) {
+export async function linkFile(
+  ctx: Ctx,
+  versionId: string,
+  fileInstanceId: string,
+  reason = 'manual',
+  confidence?: number,
+) {
   return ctx.db.transaction(async (tx) => {
-    const [v] = await tx.select().from(assetVersions).where(and(eq(assetVersions.id, versionId), eq(assetVersions.orgId, ctx.orgId)));
+    const [v] = await tx
+      .select()
+      .from(assetVersions)
+      .where(and(eq(assetVersions.id, versionId), eq(assetVersions.orgId, ctx.orgId)));
     if (!v) throw notFound('Version');
     const inst = await requireInstance(tx, ctx.orgId, fileInstanceId);
     if (v.mediaObjectId && inst.mediaObjectId && v.mediaObjectId !== inst.mediaObjectId) {
-      throw conflict('This file has different content than the version it is being linked to. Create a new version instead.', undefined, 'VERSION_CONTENT_MISMATCH');
+      throw conflict(
+        'This file has different content than the version it is being linked to. Create a new version instead.',
+        undefined,
+        'VERSION_CONTENT_MISMATCH',
+      );
     }
     await tx
       .insert(assetFileLinks)
-      .values({ orgId: ctx.orgId, assetVersionId: versionId, fileInstanceId, linkReason: reason, confidence: confidence ?? null, confirmedBy: ctx.userId })
+      .values({
+        orgId: ctx.orgId,
+        assetVersionId: versionId,
+        fileInstanceId,
+        linkReason: reason,
+        confidence: confidence ?? null,
+        confirmedBy: ctx.userId,
+      })
       .onConflictDoNothing();
-    if (!v.mediaObjectId && inst.mediaObjectId) await tx.update(assetVersions).set({ mediaObjectId: inst.mediaObjectId }).where(eq(assetVersions.id, versionId));
-    await audit({ ...ctx, db: tx }, 'asset.file.link', { type: 'asset_version', id: versionId }, undefined, { fileInstanceId, reason });
+    if (!v.mediaObjectId && inst.mediaObjectId)
+      await tx
+        .update(assetVersions)
+        .set({ mediaObjectId: inst.mediaObjectId })
+        .where(eq(assetVersions.id, versionId));
+    await audit({ ...ctx, db: tx }, 'asset.file.link', { type: 'asset_version', id: versionId }, undefined, {
+      fileInstanceId,
+      reason,
+    });
     return { versionId, fileInstanceId };
   });
 }
@@ -193,7 +321,13 @@ export async function linkFile(ctx: Ctx, versionId: string, fileInstanceId: stri
 export async function unlinkFile(ctx: Ctx, versionId: string, fileInstanceId: string) {
   const r = await ctx.db
     .delete(assetFileLinks)
-    .where(and(eq(assetFileLinks.orgId, ctx.orgId), eq(assetFileLinks.assetVersionId, versionId), eq(assetFileLinks.fileInstanceId, fileInstanceId)))
+    .where(
+      and(
+        eq(assetFileLinks.orgId, ctx.orgId),
+        eq(assetFileLinks.assetVersionId, versionId),
+        eq(assetFileLinks.fileInstanceId, fileInstanceId),
+      ),
+    )
     .returning({ id: assetFileLinks.id });
   if (!r.length) throw notFound('Link');
   await audit(ctx, 'asset.file.unlink', { type: 'asset_version', id: versionId }, { fileInstanceId });
@@ -203,17 +337,42 @@ export async function unlinkFile(ctx: Ctx, versionId: string, fileInstanceId: st
 /** Owner explicitly picks the final version. This is the only thing that counts as "selected/completed" for progress. */
 export async function selectVersion(ctx: Ctx, assetId: string, versionId: string) {
   return ctx.db.transaction(async (tx) => {
-    const [v] = await tx.select().from(assetVersions).where(and(eq(assetVersions.id, versionId), eq(assetVersions.assetId, assetId), eq(assetVersions.orgId, ctx.orgId)));
+    const [v] = await tx
+      .select()
+      .from(assetVersions)
+      .where(
+        and(
+          eq(assetVersions.id, versionId),
+          eq(assetVersions.assetId, assetId),
+          eq(assetVersions.orgId, ctx.orgId),
+        ),
+      );
     if (!v) throw notFound('Version');
-    await tx.update(logicalAssets).set({ selectedVersionId: versionId, creativeState: 'APPROVED', updatedAt: new Date() }).where(eq(logicalAssets.id, assetId));
-    await tx.update(assetVersions).set({ approvalState: 'APPROVED', updatedAt: new Date() }).where(eq(assetVersions.id, versionId));
-    await audit({ ...ctx, db: tx }, 'asset.version.select', { type: 'asset', id: assetId }, undefined, { versionId });
+    await tx
+      .update(logicalAssets)
+      .set({ selectedVersionId: versionId, creativeState: 'APPROVED', updatedAt: new Date() })
+      .where(eq(logicalAssets.id, assetId));
+    await tx
+      .update(assetVersions)
+      .set({ approvalState: 'APPROVED', updatedAt: new Date() })
+      .where(eq(assetVersions.id, versionId));
+    await audit({ ...ctx, db: tx }, 'asset.version.select', { type: 'asset', id: assetId }, undefined, {
+      versionId,
+    });
     return { assetId, selectedVersionId: versionId };
   });
 }
 
-export async function setVersionApproval(ctx: Ctx, versionId: string, state: (typeof assetVersions.$inferInsert)['approvalState']) {
-  const [v] = await ctx.db.update(assetVersions).set({ approvalState: state, updatedAt: new Date() }).where(and(eq(assetVersions.id, versionId), eq(assetVersions.orgId, ctx.orgId))).returning();
+export async function setVersionApproval(
+  ctx: Ctx,
+  versionId: string,
+  state: (typeof assetVersions.$inferInsert)['approvalState'],
+) {
+  const [v] = await ctx.db
+    .update(assetVersions)
+    .set({ approvalState: state, updatedAt: new Date() })
+    .where(and(eq(assetVersions.id, versionId), eq(assetVersions.orgId, ctx.orgId)))
+    .returning();
   if (!v) throw notFound('Version');
   await audit(ctx, 'asset.version.approval', { type: 'asset_version', id: versionId }, undefined, { state });
   return v;
@@ -221,19 +380,28 @@ export async function setVersionApproval(ctx: Ctx, versionId: string, state: (ty
 
 export async function listTags(ctx: Ctx) {
   return rowsOf<any>(
-    await ctx.db.execute(sql`select t.id, t.name, t.color, (select count(*)::int from asset_tag_links l where l.tag_id = t.id) as "assetCount", (select count(*)::int from file_tag_links l where l.tag_id = t.id) as "fileCount" from media_tags t where t.org_id = ${ctx.orgId} order by lower(t.name)`),
+    await ctx.db.execute(
+      sql`select t.id, t.name, t.color, (select count(*)::int from asset_tag_links l where l.tag_id = t.id) as "assetCount", (select count(*)::int from file_tag_links l where l.tag_id = t.id) as "fileCount" from media_tags t where t.org_id = ${ctx.orgId} order by lower(t.name)`,
+    ),
   );
 }
 
 export async function setAssetTags(ctx: Ctx, assetId: string, tagNames: string[]) {
-  const [a] = await ctx.db.select({ id: logicalAssets.id }).from(logicalAssets).where(and(eq(logicalAssets.id, assetId), eq(logicalAssets.orgId, ctx.orgId)));
+  const [a] = await ctx.db
+    .select({ id: logicalAssets.id })
+    .from(logicalAssets)
+    .where(and(eq(logicalAssets.id, assetId), eq(logicalAssets.orgId, ctx.orgId)));
   if (!a) throw notFound('Asset');
   const names = [...new Set(tagNames.map((t) => t.trim()).filter(Boolean))].slice(0, 30);
   await ctx.db.transaction(async (tx) => {
     await tx.execute(sql`delete from asset_tag_links where asset_id = ${assetId}`);
     for (const name of names) {
-      await tx.execute(sql`insert into media_tags (org_id, name) values (${ctx.orgId}, ${name}) on conflict (org_id, lower(name)) do nothing`);
-      await tx.execute(sql`insert into asset_tag_links (org_id, asset_id, tag_id) select ${ctx.orgId}, ${assetId}, id from media_tags where org_id = ${ctx.orgId} and lower(name) = lower(${name}) on conflict do nothing`);
+      await tx.execute(
+        sql`insert into media_tags (org_id, name) values (${ctx.orgId}, ${name}) on conflict (org_id, lower(name)) do nothing`,
+      );
+      await tx.execute(
+        sql`insert into asset_tag_links (org_id, asset_id, tag_id) select ${ctx.orgId}, ${assetId}, id from media_tags where org_id = ${ctx.orgId} and lower(name) = lower(${name}) on conflict do nothing`,
+      );
     }
   });
   return { tags: names };
@@ -299,7 +467,11 @@ export async function detectNearDuplicates(ctx: Ctx, limit = 500) {
   return { suggested: inserted };
 }
 
-export async function listDuplicateCandidates(ctx: Ctx, state: 'SUGGESTED' | 'CONFIRMED' | 'DISMISSED' = 'SUGGESTED', limit = 100) {
+export async function listDuplicateCandidates(
+  ctx: Ctx,
+  state: 'SUGGESTED' | 'CONFIRMED' | 'DISMISSED' = 'SUGGESTED',
+  limit = 100,
+) {
   return rowsOf<any>(
     await ctx.db.execute(sql`
       select c.id, c.method, c.score, c.reasons, c.state,
@@ -322,7 +494,13 @@ export async function reviewDuplicate(ctx: Ctx, id: string, state: 'CONFIRMED' |
 
 // ------------------------------------------------------ asset match suggestions
 
-const stem = (name: string) => name.replace(/\.[^.]+$/, '').replace(/[_\-.]+/g, ' ').replace(/\b(v|ver|version)\s*\d+\b/gi, '').replace(/\s+/g, ' ').trim();
+const stem = (name: string) =>
+  name
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_\-.]+/g, ' ')
+    .replace(/\b(v|ver|version)\s*\d+\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 /** Suggests assets for an unlinked file by identical content, project context and name similarity. Owner always confirms. */
 export async function suggestMatches(ctx: Ctx, fileInstanceId: string) {
@@ -335,25 +513,44 @@ export async function suggestMatches(ctx: Ctx, fileInstanceId: string) {
     found.set(assetId, cur);
   };
   if (inst.mediaObjectId) {
-    for (const r of rowsOf<{ assetId: string }>(await ctx.db.execute(sql`select v.asset_id as "assetId" from asset_versions v where v.org_id = ${ctx.orgId} and v.media_object_id = ${inst.mediaObjectId}`)))
+    for (const r of rowsOf<{ assetId: string }>(
+      await ctx.db.execute(
+        sql`select v.asset_id as "assetId" from asset_versions v where v.org_id = ${ctx.orgId} and v.media_object_id = ${inst.mediaObjectId}`,
+      ),
+    ))
       add(r.assetId, 'identical content (hash match)', 1);
   }
   const nameStem = stem(inst.fileName);
   if (nameStem.length >= 3) {
     for (const r of rowsOf<{ id: string; sim: number }>(
-      await ctx.db.execute(sql`select id, similarity(title, ${nameStem})::float8 as sim from logical_assets where org_id = ${ctx.orgId} and is_archived = false and similarity(title, ${nameStem}) >= 0.35 order by sim desc limit 5`),
+      await ctx.db.execute(
+        sql`select id, similarity(title, ${nameStem})::float8 as sim from logical_assets where org_id = ${ctx.orgId} and is_archived = false and similarity(title, ${nameStem}) >= 0.35 order by sim desc limit 5`,
+      ),
     ))
       add(r.id, `name similar to "${nameStem}"`, Math.min(0.9, r.sim));
   }
-  const [rt] = await ctx.db.execute(sql`select project_id as "projectId" from storage_roots where id = ${inst.rootId}`).then((r) => rowsOf<{ projectId: string | null }>(r));
+  const [rt] = await ctx.db
+    .execute(sql`select project_id as "projectId" from storage_roots where id = ${inst.rootId}`)
+    .then((r) => rowsOf<{ projectId: string | null }>(r));
   if (rt?.projectId) {
-    for (const r of rowsOf<{ id: string }>(await ctx.db.execute(sql`select id from logical_assets where org_id = ${ctx.orgId} and project_id = ${rt.projectId} and is_archived = false limit 20`)))
+    for (const r of rowsOf<{ id: string }>(
+      await ctx.db.execute(
+        sql`select id from logical_assets where org_id = ${ctx.orgId} and project_id = ${rt.projectId} and is_archived = false limit 20`,
+      ),
+    ))
       add(r.id, 'scan root is assigned to the same project', 0.3);
   }
   for (const [assetId, s] of found) {
     await ctx.db
       .insert(assetMatchSuggestions)
-      .values({ orgId: ctx.orgId, sourceType: 'file_instance', sourceId: fileInstanceId, candidateAssetId: assetId, reasons: s.reasons, confidence: s.confidence })
+      .values({
+        orgId: ctx.orgId,
+        sourceType: 'file_instance',
+        sourceId: fileInstanceId,
+        candidateAssetId: assetId,
+        reasons: s.reasons,
+        confidence: s.confidence,
+      })
       .onConflictDoNothing();
   }
   return listSuggestions(ctx, fileInstanceId);
@@ -370,16 +567,27 @@ export async function listSuggestions(ctx: Ctx, fileInstanceId: string) {
 }
 
 export async function acceptSuggestion(ctx: Ctx, suggestionId: string, versionId?: string) {
-  const [s] = await ctx.db.select().from(assetMatchSuggestions).where(and(eq(assetMatchSuggestions.id, suggestionId), eq(assetMatchSuggestions.orgId, ctx.orgId)));
+  const [s] = await ctx.db
+    .select()
+    .from(assetMatchSuggestions)
+    .where(and(eq(assetMatchSuggestions.id, suggestionId), eq(assetMatchSuggestions.orgId, ctx.orgId)));
   if (!s) throw notFound('Suggestion');
   let vid = versionId;
   if (!vid) {
-    const [latest] = await ctx.db.select().from(assetVersions).where(eq(assetVersions.assetId, s.candidateAssetId)).orderBy(desc(assetVersions.number)).limit(1);
+    const [latest] = await ctx.db
+      .select()
+      .from(assetVersions)
+      .where(eq(assetVersions.assetId, s.candidateAssetId))
+      .orderBy(desc(assetVersions.number))
+      .limit(1);
     vid = latest?.id;
   }
   if (!vid) throw badRequest('The asset has no version to link to');
   await linkFile(ctx, vid, s.sourceId, 'suggestion', s.confidence);
-  await ctx.db.update(assetMatchSuggestions).set({ outcome: 'ACCEPTED', reviewedBy: ctx.userId, reviewedAt: new Date() }).where(eq(assetMatchSuggestions.id, suggestionId));
+  await ctx.db
+    .update(assetMatchSuggestions)
+    .set({ outcome: 'ACCEPTED', reviewedBy: ctx.userId, reviewedAt: new Date() })
+    .where(eq(assetMatchSuggestions.id, suggestionId));
   return { linked: true, versionId: vid };
 }
 

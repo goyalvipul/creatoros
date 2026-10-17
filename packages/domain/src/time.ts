@@ -46,7 +46,14 @@ export interface LocalParts {
 
 /** Convert a wall-clock time in `tz` to the matching UTC instant (non-existent DST gaps roll forward). */
 export function zonedToUtc(local: LocalParts, tz: string): Date {
-  const guess = Date.UTC(local.year, local.month - 1, local.day, local.hour ?? 0, local.minute ?? 0, local.second ?? 0);
+  const guess = Date.UTC(
+    local.year,
+    local.month - 1,
+    local.day,
+    local.hour ?? 0,
+    local.minute ?? 0,
+    local.second ?? 0,
+  );
   let utc = guess - tzOffsetMs(guess, tz);
   const off2 = tzOffsetMs(utc, tz);
   utc = guess - off2;

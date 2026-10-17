@@ -91,10 +91,16 @@ export function classifyMessage(input: ClassificationInput): ClassificationResul
 
 function extractMoney(text: string): { amountMinor: number; currency: string } | null {
   const m =
-    /(?:(USD|CAD|EUR|GBP|INR|AUD)\s?|([$€£₹]))\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s?(USD|CAD|EUR|GBP|INR|AUD)?/i.exec(text);
+    /(?:(USD|CAD|EUR|GBP|INR|AUD)\s?|([$€£₹]))\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s?(USD|CAD|EUR|GBP|INR|AUD)?/i.exec(
+      text,
+    );
   if (!m) return null;
   const sym = m[2];
-  const cur = (m[1] ?? m[5] ?? (sym === '€' ? 'EUR' : sym === '£' ? 'GBP' : sym === '₹' ? 'INR' : 'USD')).toUpperCase();
+  const cur = (
+    m[1] ??
+    m[5] ??
+    (sym === '€' ? 'EUR' : sym === '£' ? 'GBP' : sym === '₹' ? 'INR' : 'USD')
+  ).toUpperCase();
   const whole = Number(m[3].replace(/,/g, ''));
   const frac = m[4] ? Number(m[4].padEnd(2, '0')) : 0;
   return { amountMinor: whole * 100 + frac, currency: cur };
@@ -113,7 +119,15 @@ function extractDeadline(text: string): string | undefined {
 function guessBrand(input: ClassificationInput): string | undefined {
   const email = input.fromEmail ?? '';
   const domain = email.split('@')[1]?.toLowerCase();
-  const free = ['gmail.com', 'outlook.com', 'hotmail.com', 'yahoo.com', 'icloud.com', 'proton.me', 'protonmail.com'];
+  const free = [
+    'gmail.com',
+    'outlook.com',
+    'hotmail.com',
+    'yahoo.com',
+    'icloud.com',
+    'proton.me',
+    'protonmail.com',
+  ];
   if (domain && !free.includes(domain)) {
     const name = domain.split('.')[0];
     return name.charAt(0).toUpperCase() + name.slice(1);

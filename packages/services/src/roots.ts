@@ -1,4 +1,15 @@
-import { and, devices, eq, fileInstances, ne, sql, storageRoots, physicalShares, scanRuns, desc } from '@creatoros/db';
+import {
+  and,
+  devices,
+  eq,
+  fileInstances,
+  ne,
+  sql,
+  storageRoots,
+  physicalShares,
+  scanRuns,
+  desc,
+} from '@creatoros/db';
 import { canonicalPath, isInsideRoot, osToPathOs, type PathOs } from '@creatoros/domain';
 import { audit } from './audit';
 import { badRequest, conflict, notFound, type Ctx } from './types';
@@ -25,7 +36,10 @@ export interface RootInput {
 }
 
 export async function createRoot(ctx: Ctx, input: RootInput) {
-  const [device] = await ctx.db.select().from(devices).where(and(eq(devices.id, input.deviceId), eq(devices.orgId, ctx.orgId)));
+  const [device] = await ctx.db
+    .select()
+    .from(devices)
+    .where(and(eq(devices.id, input.deviceId), eq(devices.orgId, ctx.orgId)));
   if (!device) throw notFound('Device');
   if (device.state === 'REVOKED') throw badRequest('This device has been revoked.');
   const display = input.displayPath.trim();
@@ -39,7 +53,12 @@ export async function createRoot(ctx: Ctx, input: RootInput) {
     .from(storageRoots)
     .where(and(eq(storageRoots.deviceId, device.id), ne(storageRoots.state, 'RETIRED')));
   for (const s of siblings) {
-    if (s.canonicalPath === canonical) throw conflict(`A scan root for ${s.displayPath} already exists on this device.`, { rootId: s.id }, 'ROOT_EXISTS');
+    if (s.canonicalPath === canonical)
+      throw conflict(
+        `A scan root for ${s.displayPath} already exists on this device.`,
+        { rootId: s.id },
+        'ROOT_EXISTS',
+      );
     if (isInsideRoot(s.canonicalPath, canonical, os) || isInsideRoot(canonical, s.canonicalPath, os)) {
       throw conflict(
         `This path overlaps the existing root ${s.displayPath}. Overlapping roots would index the same files twice; use include/exclude globs on one root instead.`,
@@ -51,7 +70,10 @@ export async function createRoot(ctx: Ctx, input: RootInput) {
 
   let config: Record<string, unknown> = {};
   if (input.physicalShareId) {
-    const [share] = await ctx.db.select().from(physicalShares).where(and(eq(physicalShares.id, input.physicalShareId), eq(physicalShares.orgId, ctx.orgId)));
+    const [share] = await ctx.db
+      .select()
+      .from(physicalShares)
+      .where(and(eq(physicalShares.id, input.physicalShareId), eq(physicalShares.orgId, ctx.orgId)));
     if (!share) throw notFound('Physical share');
     // One physical share identity: the first root that scans it is primary; further roots are alternate access paths only.
     const [primary] = await ctx.db
@@ -92,15 +114,40 @@ export async function createRoot(ctx: Ctx, input: RootInput) {
       config,
     })
     .returning();
-  await audit(ctx, 'storage_root.create', { type: 'storage_root', id: root.id }, undefined, { path: display, device: device.displayName });
+  await audit(ctx, 'storage_root.create', { type: 'storage_root', id: root.id }, undefined, {
+    path: display,
+    device: device.displayName,
+  });
   return root;
 }
 
-export async function updateRoot(ctx: Ctx, id: string, patch: Partial<Omit<RootInput, 'deviceId' | 'displayPath'>>) {
-  const [existing] = await ctx.db.select().from(storageRoots).where(and(eq(storageRoots.id, id), eq(storageRoots.orgId, ctx.orgId)));
+export async function updateRoot(
+  ctx: Ctx,
+  id: string,
+  patch: Partial<Omit<RootInput, 'deviceId' | 'displayPath'>>,
+) {
+  const [existing] = await ctx.db
+    .select()
+    .from(storageRoots)
+    .where(and(eq(storageRoots.id, id), eq(storageRoots.orgId, ctx.orgId)));
   if (!existing) throw notFound('Storage root');
   const set: Record<string, unknown> = {};
-  for (const k of ['label', 'recursive', 'includeGlobs', 'excludeGlobs', 'scanIntervalMinutes', 'settleSeconds', 'hashMode', 'followLinks', 'smbPath', 'mountPath', 'brandId', 'projectId', 'autoTagRules', 'accessMethod'] as const) {
+  for (const k of [
+    'label',
+    'recursive',
+    'includeGlobs',
+    'excludeGlobs',
+    'scanIntervalMinutes',
+    'settleSeconds',
+    'hashMode',
+    'followLinks',
+    'smbPath',
+    'mountPath',
+    'brandId',
+    'projectId',
+    'autoTagRules',
+    'accessMethod',
+  ] as const) {
     if ((patch as any)[k] !== undefined) set[k] = (patch as any)[k];
   }
   if (patch.extensions) set.extensions = patch.extensions.map((e) => e.replace(/^\./, '').toLowerCase());
@@ -121,13 +168,22 @@ export async function requestScan(ctx: Ctx, id: string, kind: 'scan' | 'reconcil
 }
 
 export async function setRootState(ctx: Ctx, id: string, state: 'ACTIVE' | 'PAUSED' | 'RETIRED') {
-  const [existing] = await ctx.db.select().from(storageRoots).where(and(eq(storageRoots.id, id), eq(storageRoots.orgId, ctx.orgId)));
+  const [existing] = await ctx.db
+    .select()
+    .from(storageRoots)
+    .where(and(eq(storageRoots.id, id), eq(storageRoots.orgId, ctx.orgId)));
   if (!existing) throw notFound('Storage root');
   await ctx.db.transaction(async (tx) => {
-    await tx.update(storageRoots).set({ state, retiredAt: state === 'RETIRED' ? ctx.now() : null }).where(eq(storageRoots.id, id));
+    await tx
+      .update(storageRoots)
+      .set({ state, retiredAt: state === 'RETIRED' ? ctx.now() : null })
+      .where(eq(storageRoots.id, id));
     if (state === 'RETIRED') {
       // Non-destructive: records are archived (hidden from inventory) but kept for history. Originals are untouched.
-      await tx.update(fileInstances).set({ archivedAt: ctx.now() }).where(and(eq(fileInstances.rootId, id), sql`${fileInstances.archivedAt} is null`));
+      await tx
+        .update(fileInstances)
+        .set({ archivedAt: ctx.now() })
+        .where(and(eq(fileInstances.rootId, id), sql`${fileInstances.archivedAt} is null`));
     }
     await audit({ ...ctx, db: tx }, `storage_root.${state.toLowerCase()}`, { type: 'storage_root', id });
   });
@@ -160,10 +216,20 @@ export async function listScanRuns(ctx: Ctx, rootId?: string, limit = 50) {
     .limit(Math.min(limit, 200));
 }
 
-export async function createPhysicalShare(ctx: Ctx, input: { name: string; host?: string; shareName?: string; uncPath?: string; notes?: string }) {
+export async function createPhysicalShare(
+  ctx: Ctx,
+  input: { name: string; host?: string; shareName?: string; uncPath?: string; notes?: string },
+) {
   const [row] = await ctx.db
     .insert(physicalShares)
-    .values({ orgId: ctx.orgId, name: input.name, host: input.host ?? null, shareName: input.shareName ?? null, uncPath: input.uncPath ?? null, notes: input.notes ?? null })
+    .values({
+      orgId: ctx.orgId,
+      name: input.name,
+      host: input.host ?? null,
+      shareName: input.shareName ?? null,
+      uncPath: input.uncPath ?? null,
+      notes: input.notes ?? null,
+    })
     .returning();
   await audit(ctx, 'physical_share.create', { type: 'physical_share', id: row.id });
   return row;

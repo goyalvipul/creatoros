@@ -79,23 +79,123 @@ admin console (DNS → HTTPS Certificates). The LAN address (`http://<pc-ip>:808
 
 ## Install the scanner agent
 
-The agent is a single Go binary that reads your media folders and reports to Creator OS. It never modifies, moves or deletes a file.
+The agent is one small Go binary that reads your media folders and reports to Creator OS. It never modifies, moves or deletes a file. Install one on **every machine that holds media** (Windows PCs, Ubuntu/Linux machines, and the server itself if it holds media). It does not matter which machine hosts Creator OS.
 
-1. Build (once): `pnpm agent:build` (Windows binary in `apps/scanner-agent/dist/creatoros-agent-windows-amd64.exe`; `pnpm agent:build -- --all` adds Linux and macOS).
-2. In the app: _Storage & Devices → Pair a device_ shows a one-time code (valid 30 minutes, usable once).
-3. On the machine with the media (PowerShell):
+### Before you start (all machines)
+
+1. **Server address.** Use an address the media machine can reach. Examples used below: LAN `http://192.168.1.151:8080`, Tailscale `http://100.108.120.8:8080`. If the agent runs on the same machine as the server, `http://localhost:8080` works. Replace them with yours.
+2. **Pairing code.** In the app: _Storage & Devices → Pair a device_ shows a one-time code (valid 30 minutes, usable once). Make a new code for each machine.
+3. **The binary.** Build it where Go is installed (the Windows PC has it), then copy the right file to each machine:
+
+   ```powershell
+   pnpm agent:build -- --all      # run in the repo root; files land in apps\scanner-agent\dist\
+   ```
+
+   | Machine                    | File                                |
+   | -------------------------- | ----------------------------------- |
+   | Windows                    | `creatoros-agent-windows-amd64.exe` |
+   | Ubuntu / Linux (Intel/AMD) | `creatoros-agent-linux-amd64`       |
+   | Linux on ARM (Pi etc.)     | `creatoros-agent-linux-arm64`       |
+   | Mac (Apple silicon)        | `creatoros-agent-darwin-arm64`      |
+
+   Copy to Ubuntu with, for example: `scp apps\scanner-agent\dist\creatoros-agent-linux-amd64 you@192.168.1.151:~/`. (Ubuntu's own `apt` Go is too old for this project, so it is easier to build on Windows than on the server.)
+
+4. **ffmpeg (recommended).** Without it files are still indexed and hashed, but durations, codecs and thumbnails are skipped. Windows: install ffmpeg and add it to PATH. Ubuntu: `sudo apt install -y ffmpeg`.
+5. **Network.** The server must be able to reach the agent on **TCP 7755** (to stream previews). The Windows install command opens that rule itself (local subnet and Tailscale only). On Ubuntu you open it yourself (see below).
+
+### If you are installing on Windows
+
+Run in PowerShell, in the folder holding the `.exe`:
 
 ```powershell
-.\creatoros-agent-windows-amd64.exe pair --server http://localhost:8080 --code ABCD-EFGH --label "Studio PC"
-.\creatoros-agent-windows-amd64.exe install        # as Administrator: Windows service, starts at boot, firewall for the private profile
+# 1. Pair (normal PowerShell, no Administrator needed)
+.\creatoros-agent-windows-amd64.exe pair --server http://192.168.1.151:8080 --code ABCD-EFGH --label "GPU-24GB"
+
+# 2. Try it in the foreground first (Ctrl+C stops it)
+.\creatoros-agent-windows-amd64.exe run
+
+# 3. Install as a service that starts at boot (PowerShell as Administrator)
+.\creatoros-agent-windows-amd64.exe install
 .\creatoros-agent-windows-amd64.exe status
 ```
 
-For a machine other than the server use the server's LAN or Tailscale address in `--server`. The server must be able to reach the agent's listen port (default 7755) to stream
-previews; if the agent runs on the same PC as Docker, the API reaches it through `host.docker.internal` automatically (`AGENT_LOOPBACK_HOST`).
-Linux: `creatoros-agent systemd-unit` prints a unit file. `creatoros-agent reset-state` clears the local scan cache (next scan re-hashes everything).
+Notes:
 
-4. In the app: _Storage & Devices → Add folder_ on that device.
+- Data and credentials live in `C:\ProgramData\CreatorOS\agent` (logs in `agent.log` there). Keep the `.exe` somewhere permanent (for example `C:\CreatorOS\`) before running `install`, because the service points at that path.
+- A service runs as LocalSystem by default, which usually **cannot see network shares or mapped drives**. For SMB/NAS folders install it under an account that can open them: `install --account ".\youruser" --password "..."` (the password goes to Windows' service manager, not to Creator OS).
+- The label is what you see in the app (for example `GPU-12GB`, `GPU-24GB`). Pairing the same machine again keeps its identity, so its files and folders carry over.
+
+### If you are installing on Ubuntu / Linux
+
+Run in a terminal on that machine:
+
+```bash
+# 1. Put the binary in a permanent place and make it executable
+sudo install -m 0755 ~/creatoros-agent-linux-amd64 /usr/local/bin/creatoros-agent
+
+# 2. Pair as your normal user (not root). Credentials go to ~/.config/creatoros-agent
+creatoros-agent pair --server http://192.168.1.151:8080 --code ABCD-EFGH --label "ubuntu-nas"
+
+# 3. Try it in the foreground first (Ctrl+C stops it)
+creatoros-agent run
+
+# 4. Run it at boot as a systemd service under your user
+creatoros-agent systemd-unit | sed "s/^\[Service\]/[Service]\nUser=$USER/" | sudo tee /etc/systemd/system/creatoros-agent.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now creatoros-agent
+systemctl status creatoros-agent --no-pager
+
+# 5. Let the server reach the agent (only if ufw is on)
+sudo ufw allow from 192.168.1.0/24 to any port 7755 proto tcp     # your LAN range
+sudo ufw allow in on tailscale0 to any port 7755 proto tcp         # if you use Tailscale
+```
+
+Notes:
+
+- `creatoros-agent status`, `install`, `start` and `stop` are Windows-only; on Linux use `systemctl`.
+- The user in step 4 needs read access to the media folders. The unit sets `ProtectSystem=strict`, so the agent can only write its own data folder.
+- Logs: `journalctl -u creatoros-agent -f`, or `~/.config/creatoros-agent/agent.log`.
+- If the agent runs on the **same Ubuntu machine as the Docker server**, the API container reaches it through the Docker host. Set `AGENT_LOOPBACK_HOST=172.17.0.1` in `.env` (Linux has no `host.docker.internal` by default) and run `docker compose up -d`.
+- The Linux/systemd steps have not been run end to end on a real Ubuntu machine yet. If a step differs on your machine, check `journalctl` first.
+
+### Connecting more machines (Windows, Ubuntu, other Linux)
+
+Repeat the same recipe for each machine, with a **new pairing code each time** and a clear `--label`. You can mix any number of Windows and Linux machines. Then, in the app: _Storage & Devices → Add folder_ on each device, and press _Scan now_. A machine that is off shows as **Offline**; its files stay in the library as "temporarily unavailable", never as missing.
+
+If the server's address changes (for example you move it to another machine), pair again with the new `--server`; run `uninstall` or stop the service first.
+
+### Stopping and removing an agent
+
+**Windows (PowerShell as Administrator for the service commands):**
+
+```powershell
+.\creatoros-agent-windows-amd64.exe stop         # stop the service
+.\creatoros-agent-windows-amd64.exe start        # start it again
+.\creatoros-agent-windows-amd64.exe uninstall    # remove the service (files and credentials stay)
+
+# A foreground run: press Ctrl+C in its window. If you cannot find the window:
+Get-Process | Where-Object Name -like "creatoros-agent*" | Stop-Process
+# (or: taskkill /IM creatoros-agent-windows-amd64.exe /F)
+
+# See what holds port 7755
+Get-NetTCPConnection -LocalPort 7755 | Select-Object State, OwningProcess
+```
+
+**Ubuntu / Linux:**
+
+```bash
+sudo systemctl stop creatoros-agent                      # stop the service
+sudo systemctl restart creatoros-agent                   # restart it
+sudo systemctl disable --now creatoros-agent             # stop it and do not start at boot
+sudo rm /etc/systemd/system/creatoros-agent.service && sudo systemctl daemon-reload   # remove the service
+
+# A foreground run: Ctrl+C in its terminal. If you cannot find it:
+pkill -f "creatoros-agent run"
+# See what holds port 7755
+sudo ss -ltnp | grep 7755
+```
+
+Stopping an agent is safe. It only means that machine goes **Offline** in the app after about three minutes; nothing is deleted from the library. To forget a machine completely, revoke it in _Storage & Devices_ (non-destructive: your files are untouched), then delete `C:\ProgramData\CreatorOS\agent` (Windows) or `~/.config/creatoros-agent` (Linux) on that machine. `creatoros-agent reset-state` (with the service stopped) only clears the local scan cache, so the next scan re-hashes everything.
 
 ### Folder (scan root) recipes
 

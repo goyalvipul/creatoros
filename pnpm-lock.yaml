@@ -370,6 +370,9 @@ importers:
       embedded-postgres:
         specifier: 17.10.0-beta.17
         version: 17.10.0-beta.17
+      otpauth:
+        specifier: ^9.5.2
+        version: 9.5.2
       tsx:
         specifier: ^4.23.15
         version: 4.23.15

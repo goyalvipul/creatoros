@@ -17,3 +17,5 @@ export * from './todo';
 export * from './insights';
 export * from './ops';
 export * from './auth';
+export * from './catalog';
+export * from './demo';

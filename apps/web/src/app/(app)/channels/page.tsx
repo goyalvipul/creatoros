@@ -17,7 +17,8 @@ import {
   Select,
   Textarea,
 } from '@/components/ui';
-import { patch, post, refresh } from '@/lib/api';
+import { useMe } from '@/components/shell';
+import { del, patch, post, refresh } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
 import { PLATFORMS, type Brand, useCatalog } from '@/lib/options';
 
@@ -25,10 +26,15 @@ type Dlg =
   | null
   | { kind: 'brand' }
   | { kind: 'channel'; brand: Brand }
-  | { kind: 'account'; channelId: string; channelName: string };
+  | { kind: 'account'; channelId: string; channelName: string }
+  | { kind: 'edit-brand'; id: string }
+  | { kind: 'edit-channel'; id: string }
+  | { kind: 'edit-account'; id: string };
 
 export default function ChannelsPage() {
   const cat = useCatalog();
+  const me = useMe();
+  const owner = me.data?.user.role === 'OWNER';
   const [dlg, setDlg] = useState<Dlg>(null);
   const [f, setF] = useState({
     name: '',
@@ -39,6 +45,18 @@ export default function ChannelsPage() {
     profileUrl: '',
   });
   const reload = () => refresh('/catalog', '/publishing');
+  const startEdit = (d: Dlg, vals: Partial<typeof f>) => {
+    setF({
+      name: '',
+      description: '',
+      purpose: '',
+      platform: 'youtube',
+      handle: '',
+      profileUrl: '',
+      ...vals,
+    });
+    setDlg(d);
+  };
   const close = () => {
     setDlg(null);
     setF({ name: '', description: '', purpose: '', platform: 'youtube', handle: '', profileUrl: '' });
@@ -92,6 +110,33 @@ export default function ChannelsPage() {
                     >
                       {b.active ? 'Deactivate' : 'Activate'}
                     </ActionButton>
+                    <Button
+                      size="sm"
+                      aria-label={`Edit brand ${b.name}`}
+                      onClick={() =>
+                        startEdit(
+                          { kind: 'edit-brand', id: b.id },
+                          { name: b.name, description: b.description ?? '' },
+                        )
+                      }
+                    >
+                      Edit
+                    </Button>
+                    {owner && (
+                      <ActionButton
+                        size="sm"
+                        variant="danger"
+                        aria-label={`Delete brand ${b.name}`}
+                        confirm={`Delete the brand "${b.name}"? Its channels and accounts are removed from the lists. Posts, projects and deals already recorded keep their history.`}
+                        onAction={async () => {
+                          await del(`/brands/${b.id}`);
+                          await reload();
+                        }}
+                        success="Brand deleted"
+                      >
+                        Delete
+                      </ActionButton>
+                    )}
                   </div>
                 </div>
                 {b.channels.length === 0 ? (
@@ -112,6 +157,33 @@ export default function ChannelsPage() {
                           >
                             <Plus className="size-4" /> Account
                           </Button>
+                          <Button
+                            size="sm"
+                            aria-label={`Edit channel ${c.name}`}
+                            onClick={() =>
+                              startEdit(
+                                { kind: 'edit-channel', id: c.id },
+                                { name: c.name, purpose: c.purpose ?? '' },
+                              )
+                            }
+                          >
+                            Edit
+                          </Button>
+                          {owner && (
+                            <ActionButton
+                              size="sm"
+                              variant="danger"
+                              aria-label={`Delete channel ${c.name}`}
+                              confirm={`Delete the channel "${c.name}"? Its accounts are removed from the lists. Posts already recorded keep their history.`}
+                              onAction={async () => {
+                                await del(`/channels/${c.id}`);
+                                await reload();
+                              }}
+                              success="Channel deleted"
+                            >
+                              Delete
+                            </ActionButton>
+                          )}
                         </div>
                         {c.accounts.length === 0 ? (
                           <p className="text-sm text-muted">No accounts yet.</p>
@@ -137,6 +209,39 @@ export default function ChannelsPage() {
                                 ) : (
                                   <span className="text-xs text-muted">manual</span>
                                 )}
+                                <span className="ml-auto flex gap-1">
+                                  <Button
+                                    size="sm"
+                                    aria-label={`Edit account ${a.handle}`}
+                                    onClick={() =>
+                                      startEdit(
+                                        { kind: 'edit-account', id: a.id },
+                                        {
+                                          handle: a.handle,
+                                          profileUrl: a.profileUrl ?? '',
+                                          platform: a.platform,
+                                        },
+                                      )
+                                    }
+                                  >
+                                    Edit
+                                  </Button>
+                                  {owner && (
+                                    <ActionButton
+                                      size="sm"
+                                      variant="danger"
+                                      aria-label={`Delete account ${a.handle}`}
+                                      confirm={`Delete the account ${a.handle} (${titleCase(a.platform)})? Posts already recorded for it keep their history.`}
+                                      onAction={async () => {
+                                        await del(`/social-accounts/${a.id}`);
+                                        await reload();
+                                      }}
+                                      success="Account deleted"
+                                    >
+                                      Delete
+                                    </ActionButton>
+                                  )}
+                                </span>
                               </li>
                             ))}
                           </ul>
@@ -150,7 +255,6 @@ export default function ChannelsPage() {
           </div>
         )}
       </Async>
-
       <FormDialog
         open={dlg?.kind === 'brand'}
         onClose={close}
@@ -238,6 +342,83 @@ export default function ChannelsPage() {
           />
         </Field>
       </FormDialog>
+      <FormDialog
+        open={dlg?.kind === 'edit-brand'}
+        onClose={close}
+        title="Edit brand"
+        submitLabel="Save"
+        onSubmit={async () => {
+          if (dlg?.kind === 'edit-brand')
+            await patch(`/brands/${dlg.id}`, {
+              name: f.name.trim(),
+              description: f.description.trim() || null,
+            });
+          await reload();
+        }}
+      >
+        <Field label="Brand name">
+          <Input required autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Field>
+        <Field label="Description">
+          <Textarea
+            rows={2}
+            value={f.description}
+            onChange={(e) => setF({ ...f, description: e.target.value })}
+          />
+        </Field>
+      </FormDialog>
+      <FormDialog
+        open={dlg?.kind === 'edit-channel'}
+        onClose={close}
+        title="Edit channel"
+        submitLabel="Save"
+        onSubmit={async () => {
+          if (dlg?.kind === 'edit-channel')
+            await patch(`/channels/${dlg.id}`, { name: f.name.trim(), purpose: f.purpose.trim() || null });
+          await reload();
+        }}
+      >
+        <Field label="Channel name">
+          <Input required autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        </Field>
+        <Field label="Purpose">
+          <Input value={f.purpose} onChange={(e) => setF({ ...f, purpose: e.target.value })} />
+        </Field>
+      </FormDialog>
+      <FormDialog
+        open={dlg?.kind === 'edit-account'}
+        onClose={close}
+        title="Edit account"
+        submitLabel="Save"
+        onSubmit={async () => {
+          if (dlg?.kind === 'edit-account')
+            await patch(`/social-accounts/${dlg.id}`, {
+              handle: f.handle.trim(),
+              profileUrl: f.profileUrl.trim() || null,
+            });
+          await reload();
+        }}
+      >
+        <p className="text-sm text-muted">
+          Platform: {titleCase(f.platform)} (to change it, add a new account).
+        </p>
+        <Field label="Handle">
+          <Input
+            required
+            autoFocus
+            value={f.handle}
+            onChange={(e) => setF({ ...f, handle: e.target.value })}
+          />
+        </Field>
+        <Field label="Profile link (optional)">
+          <Input
+            type="url"
+            value={f.profileUrl}
+            onChange={(e) => setF({ ...f, profileUrl: e.target.value })}
+            placeholder="https://…"
+          />
+        </Field>
+      </FormDialog>{' '}
     </>
   );
 }

@@ -35,7 +35,8 @@ export interface Brand {
   channels: {
     id: string;
     name: string;
-    accounts: { id: string; platform: string; handle: string; channelId: string }[];
+    purpose?: string | null;
+    accounts: { id: string; platform: string; handle: string; channelId: string; [k: string]: any }[];
   }[];
   [k: string]: any;
 }

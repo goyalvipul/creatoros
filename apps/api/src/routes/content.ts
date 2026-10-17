@@ -22,6 +22,8 @@ import {
   addVersion,
   applyTemplate,
   archiveBrand,
+  archiveChannel,
+  archiveSocialAccount,
   calendar,
   changeStage,
   convertIdea,
@@ -134,7 +136,7 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       method: 'DELETE',
       url: '/brands/:id',
       tag: 'Channels',
-      summary: 'Archive a brand (records are kept)',
+      summary: 'Delete a brand: archives it with its channels and accounts (history is kept)',
       params: idParam,
       role: 'OWNER',
     },
@@ -181,6 +183,20 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   );
   route(
     {
+      method: 'DELETE',
+      url: '/channels/:id',
+      tag: 'Channels',
+      summary: 'Delete a channel: archives it with its accounts (history is kept)',
+      params: idParam,
+      role: 'OWNER',
+    },
+    async ({ ctx, params }) => {
+      await archiveChannel(ctx, params.id);
+      return { ok: true };
+    },
+  );
+  route(
+    {
       method: 'POST',
       url: '/social-accounts',
       tag: 'Channels',
@@ -216,7 +232,20 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, params, body }) => updateSocialAccount(ctx, params.id, body),
   );
-
+  route(
+    {
+      method: 'DELETE',
+      url: '/social-accounts/:id',
+      tag: 'Channels',
+      summary: 'Delete a social account (posts already recorded for it are kept)',
+      params: idParam,
+      role: 'OWNER',
+    },
+    async ({ ctx, params }) => {
+      await archiveSocialAccount(ctx, params.id);
+      return { ok: true };
+    },
+  );
   // ================================================================ ideas
   const ideaFields = {
     title: z.string().trim().min(1).max(200),

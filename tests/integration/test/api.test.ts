@@ -123,6 +123,14 @@ describe('first run and auth', () => {
     const noWorker = await api.call('POST', `${V1}/backups/restore-test`, { cookie: owner, body: {} });
     expect(noWorker.status).toBe(503);
     expect(noWorker.body.error.code).toBe('QUEUE_UNAVAILABLE');
+    // editors may edit entries but only owners may delete them
+    const anyId = '00000000-0000-4000-8000-000000000000';
+    for (const p of ['brands', 'channels', 'social-accounts', 'roots'])
+      expect([p, (await api.call('DELETE', `${V1}/${p}/${anyId}`, { cookie: editor })).status]).toEqual([
+        p,
+        403,
+      ]);
+    expect((await api.call('DELETE', `${V1}/channels/${anyId}`, { cookie: owner })).status).toBe(404);
     // the last owner cannot be demoted
     const me = j(await api.call('GET', `${V1}/me`, { cookie: owner })).user;
     const demote = await api.call('PATCH', `${V1}/members/${me.id}`, {

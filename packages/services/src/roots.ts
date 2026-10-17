@@ -190,6 +190,42 @@ export async function setRootState(ctx: Ctx, id: string, state: 'ACTIVE' | 'PAUS
   return { ok: true };
 }
 
+/**
+ * Permanently remove a RETIRED folder from the list. Only index records are deleted (the folder entry, its scan history
+ * and the catalogue rows of its files); the files on the machine are never touched. Refused while any of its files is
+ * still linked to an asset, so a project's history is never silently cut: unlink those files first.
+ */
+export async function deleteRoot(ctx: Ctx, id: string) {
+  return ctx.db.transaction(async (tx) => {
+    const [root] = await tx
+      .select()
+      .from(storageRoots)
+      .where(and(eq(storageRoots.id, id), eq(storageRoots.orgId, ctx.orgId)));
+    if (!root) throw notFound('Storage root');
+    if (root.state !== 'RETIRED')
+      throw conflict('Retire the folder first, then remove it.', undefined, 'NOT_RETIRED');
+    const linked = (
+      (await tx.execute(
+        sql`select count(distinct l.file_instance_id)::int as n from asset_file_links l join file_instances f on f.id = l.file_instance_id where f.root_id = ${id}`,
+      )) as unknown as { rows: { n: number }[] }
+    ).rows[0]?.n;
+    if (linked)
+      throw conflict(
+        `${linked} file(s) in this folder are linked to assets. Unlink them (or keep the folder retired) before removing it.`,
+        { linkedFiles: linked },
+        'FILES_LINKED',
+      );
+    const removedFiles = (
+      await tx.delete(fileInstances).where(eq(fileInstances.rootId, id)).returning({ id: fileInstances.id })
+    ).length;
+    await tx.delete(storageRoots).where(eq(storageRoots.id, id)); // scan runs and observations cascade
+    await audit({ ...ctx, db: tx }, 'storage_root.delete', { type: 'storage_root', id }, undefined, {
+      path: root.displayPath,
+      removedFileRecords: removedFiles,
+    });
+    return { ok: true, removedFileRecords: removedFiles };
+  });
+}
 export async function listRoots(ctx: Ctx) {
   return ctx.db
     .select({

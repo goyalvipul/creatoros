@@ -7,6 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq, fileInstances, mediaObjects, sql, type DbHandle } from '@creatoros/db';
 import {
   analytics,
+  archiveBrand,
+  archiveChannel,
+  archiveSocialAccount,
+  deleteRoot,
+  setRootState,
+  listCatalog,
   createAsset,
   createBrand,
   createChannel,
@@ -403,5 +409,78 @@ describe('failure injection (T34)', () => {
     // permissions fixed: the next scan sees the file again
     await w.send(w.agentA, w.rootA.id, [file('D:\\Media\\locked.mp4'), file('D:\\Media\\fine.mp4')]);
     expect(await byName()).toEqual({ 'locked.mp4': 'AVAILABLE', 'fine.mp4': 'AVAILABLE' });
+  });
+});
+
+describe('removing entries (catalogue and folders)', () => {
+  it('deleting an account, channel or brand hides it, keeps posts, and frees the name for reuse', async () => {
+    const w = await world();
+    const brand = await createBrand(w.ctx, { name: 'Gone Brand' });
+    const ch = await createChannel(w.ctx, { brandId: brand.id, name: 'Gone Channel' });
+    const a1 = await createSocialAccount(w.ctx, { channelId: ch.id, platform: 'youtube', handle: '@gone' });
+    const a2 = await createSocialAccount(w.ctx, {
+      channelId: ch.id,
+      platform: 'instagram',
+      handle: '@gone2',
+    });
+    const asset = await createAsset(w.ctx, { title: 'Kept clip', kind: 'VIDEO' });
+    const v = await createVariant(w.ctx, { assetId: asset.id, titleMaster: 'x', type: 'LONG_FORM' } as any);
+    const { record } = await createRecord(w.ctx, {
+      socialAccountId: a1.id,
+      variantId: v.id,
+      title: 'Evidence',
+      canonicalUrl: 'https://youtu.be/keepme',
+    } as any);
+
+    await archiveSocialAccount(w.ctx, a1.id);
+    let cat = await listCatalog(w.ctx);
+    expect(cat[0]!.channels[0]!.accounts.map((a: any) => a.handle)).toEqual(['@gone2']);
+    // the recorded post is still there, still tied to its account
+    const kept = await h.db.execute(
+      sql`select social_account_id from publication_records where id = ${record.id}`,
+    );
+    expect((kept as any).rows[0].social_account_id).toBe(a1.id);
+    // the handle can be added again
+    await createSocialAccount(w.ctx, { channelId: ch.id, platform: 'youtube', handle: '@gone' });
+
+    await archiveChannel(w.ctx, ch.id);
+    cat = await listCatalog(w.ctx);
+    expect(cat[0]!.channels).toEqual([]);
+    const live = await h.db.execute(
+      sql`select count(*)::int as n from social_accounts where channel_id = ${ch.id} and deleted_at is null`,
+    );
+    expect((live as any).rows[0].n).toBe(0); // its accounts went with it
+
+    const brand2 = await createBrand(w.ctx, { name: 'Second Brand' });
+    const ch2 = await createChannel(w.ctx, { brandId: brand2.id, name: 'C2' });
+    await createSocialAccount(w.ctx, { channelId: ch2.id, platform: 'tiktok', handle: '@c2' });
+    await archiveBrand(w.ctx, brand2.id);
+    expect((await listCatalog(w.ctx)).map((b: any) => b.name)).toEqual(['Gone Brand']);
+    await createBrand(w.ctx, { name: 'Second Brand' }); // the name is free again
+    void a2;
+    await expect(archiveSocialAccount(w.ctx, a1.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('a retired folder can be removed, an active one or one with linked files cannot, and no file is touched', async () => {
+    const w = await world();
+    await expect(deleteRoot(w.ctx, w.rootA.id)).rejects.toMatchObject({ code: 'NOT_RETIRED' });
+
+    await w.send(w.agentA, w.rootNas.id, [file('Z:\\Archive\\linked.mp4'), file('Z:\\Archive\\free.mp4')]);
+    const rows = await rowsFor(w.org.orgId);
+    const linked = rows.find((r) => r.fileName === 'linked.mp4')!;
+    await createAsset(w.ctx, { title: 'Uses the file', fileInstanceId: linked.id });
+    await setRootState(w.ctx, w.rootNas.id, 'RETIRED');
+    await expect(deleteRoot(w.ctx, w.rootNas.id)).rejects.toMatchObject({ code: 'FILES_LINKED' });
+
+    // an empty retired folder goes away; the other root and its history are untouched
+    await setRootState(w.ctx, w.rootB.id, 'RETIRED');
+    expect(await deleteRoot(w.ctx, w.rootB.id)).toMatchObject({ ok: true });
+    const left = await h.db.execute(
+      sql`select count(*)::int as n from storage_roots where org_id = ${w.org.orgId}`,
+    );
+    expect((left as any).rows[0].n).toBe(2);
+    // another organisation cannot remove it
+    const other = await makeOrg(h);
+    await expect(deleteRoot(other.ctx, w.rootNas.id)).rejects.toMatchObject({ status: 404 });
   });
 });

@@ -1,4 +1,4 @@
-import { and, asc, brands, channels, eq, isNull, socialAccounts } from '@creatoros/db';
+import { and, asc, brands, channels, eq, inArray, isNull, socialAccounts } from '@creatoros/db';
 import { audit } from './audit';
 import { badRequest, conflict, notFound, type Ctx } from './types';
 
@@ -50,16 +50,80 @@ export async function updateBrand(
   return b;
 }
 
+/**
+ * "Delete" a brand = archive it together with its channels and accounts. Nothing is erased: publications, ideas,
+ * projects and deals that point at them keep their history, and a new brand may reuse the name afterwards.
+ */
 export async function archiveBrand(ctx: Ctx, id: string) {
-  const [b] = await ctx.db
-    .update(brands)
-    .set({ deletedAt: new Date(), active: false })
-    .where(and(eq(brands.id, id), eq(brands.orgId, ctx.orgId)))
-    .returning({ id: brands.id });
-  if (!b) throw notFound('Brand');
-  await audit(ctx, 'brand.archive', { type: 'brand', id });
+  const now = new Date();
+  await ctx.db.transaction(async (tx) => {
+    const [b] = await tx
+      .update(brands)
+      .set({ deletedAt: now, active: false })
+      .where(and(eq(brands.id, id), eq(brands.orgId, ctx.orgId), isNull(brands.deletedAt)))
+      .returning({ id: brands.id });
+    if (!b) throw notFound('Brand');
+    const chans = await tx
+      .update(channels)
+      .set({ deletedAt: now, active: false })
+      .where(and(eq(channels.brandId, id), eq(channels.orgId, ctx.orgId), isNull(channels.deletedAt)))
+      .returning({ id: channels.id });
+    if (chans.length)
+      await tx
+        .update(socialAccounts)
+        .set({ deletedAt: now, active: false })
+        .where(
+          and(
+            eq(socialAccounts.orgId, ctx.orgId),
+            isNull(socialAccounts.deletedAt),
+            inArray(
+              socialAccounts.channelId,
+              chans.map((c) => c.id),
+            ),
+          ),
+        );
+    await audit({ ...ctx, db: tx }, 'brand.archive', { type: 'brand', id }, undefined, {
+      channels: chans.length,
+    });
+  });
 }
 
+/** Archive a channel and its accounts (history is kept; see archiveBrand). */
+export async function archiveChannel(ctx: Ctx, id: string) {
+  const now = new Date();
+  await ctx.db.transaction(async (tx) => {
+    const [c] = await tx
+      .update(channels)
+      .set({ deletedAt: now, active: false })
+      .where(and(eq(channels.id, id), eq(channels.orgId, ctx.orgId), isNull(channels.deletedAt)))
+      .returning({ id: channels.id });
+    if (!c) throw notFound('Channel');
+    await tx
+      .update(socialAccounts)
+      .set({ deletedAt: now, active: false })
+      .where(
+        and(
+          eq(socialAccounts.channelId, id),
+          eq(socialAccounts.orgId, ctx.orgId),
+          isNull(socialAccounts.deletedAt),
+        ),
+      );
+    await audit({ ...ctx, db: tx }, 'channel.archive', { type: 'channel', id });
+  });
+}
+
+/** Archive a social account. Posts already recorded for it stay as evidence; it disappears from the matrix and pickers. */
+export async function archiveSocialAccount(ctx: Ctx, id: string) {
+  const [a] = await ctx.db
+    .update(socialAccounts)
+    .set({ deletedAt: new Date(), active: false })
+    .where(
+      and(eq(socialAccounts.id, id), eq(socialAccounts.orgId, ctx.orgId), isNull(socialAccounts.deletedAt)),
+    )
+    .returning({ id: socialAccounts.id });
+  if (!a) throw notFound('Social account');
+  await audit(ctx, 'social_account.archive', { type: 'social_account', id });
+}
 export async function createChannel(
   ctx: Ctx,
   input: { brandId: string; name: string; purpose?: string | null; language?: string; goals?: string | null },

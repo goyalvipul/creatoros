@@ -17,6 +17,7 @@ import {
   createPairingCode,
   createPhysicalShare,
   createRoot,
+  deleteRoot,
   forbidden,
   getAgentConfig,
   getDeviceSigningKey,
@@ -271,6 +272,17 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object(rootFields).partial(),
     },
     ({ ctx, params, body }) => updateRoot(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/roots/:id',
+      tag: 'Storage',
+      summary: 'Remove a retired folder and its index records (files on disk are never touched)',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteRoot(ctx, params.id),
   );
   route(
     {

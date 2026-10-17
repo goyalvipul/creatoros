@@ -129,6 +129,28 @@ test('channels: add a brand, channel and account', async ({ page }) => {
   await page.getByLabel('Handle').fill('@travelnotes');
   await page.getByRole('dialog').getByRole('button', { name: 'Add' }).click();
   await expect(page.getByText('@travelnotes')).toBeVisible();
+
+  // edit the account handle
+  await page.getByRole('button', { name: 'Edit account @travelnotes' }).click();
+  await page.getByLabel('Handle').fill('@travelnotes2');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('@travelnotes2')).toBeVisible();
+  await expect(page.getByText('@travelnotes', { exact: true })).toHaveCount(0);
+
+  // rename the channel
+  await page.getByRole('button', { name: 'Edit channel Travel Notes Vlogs' }).click();
+  await page.getByLabel('Channel name').fill('Travel Notes Films');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('region', { name: 'Channel Travel Notes Films' })).toBeVisible();
+
+  // delete the account, the channel, then the brand (each asks first)
+  page.on('dialog', (d) => void d.accept());
+  await page.getByRole('button', { name: 'Delete account @travelnotes2' }).click();
+  await expect(page.getByText('@travelnotes2')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Delete channel Travel Notes Films' }).click();
+  await expect(page.getByRole('region', { name: 'Channel Travel Notes Films' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Delete brand Travel Notes' }).click();
+  await expect(page.getByRole('heading', { name: 'Travel Notes', level: 2 })).toHaveCount(0);
 });
 
 test('command palette finds records; quick add captures an idea', async ({ page }) => {

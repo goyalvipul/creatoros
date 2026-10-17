@@ -23,7 +23,7 @@ import {
   Td,
   useToast,
 } from '@/components/ui';
-import { patch, post, refresh, useApi } from '@/lib/api';
+import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
 import { useRoots } from '@/lib/options';
 
@@ -254,26 +254,7 @@ function Folders() {
                 <Td>{r.lastSuccessfulScanAt ? ago(r.lastSuccessfulScanAt) : 'not yet'}</Td>
                 <Td>
                   <div className="flex flex-wrap gap-1">
-                    <ActionButton
-                      size="sm"
-                      onAction={async () => {
-                        await post(`/roots/${r.id}/scan`, {});
-                        await refresh('/roots');
-                      }}
-                      success="Scan requested. The agent will start on its next check-in."
-                    >
-                      Scan now
-                    </ActionButton>
-                    <ActionButton
-                      size="sm"
-                      title="Full check for removed files"
-                      onAction={async () => {
-                        await post(`/roots/${r.id}/scan`, { kind: 'reconcile' });
-                      }}
-                      success="Full check requested"
-                    >
-                      Full check
-                    </ActionButton>
+                    +
                     {r.state === 'PAUSED' ? (
                       <ActionButton
                         size="sm"
@@ -310,6 +291,20 @@ function Folders() {
                         Retire
                       </ActionButton>
                     )}
+                    {r.state === 'RETIRED' && (
+                      <ActionButton
+                        size="sm"
+                        variant="danger"
+                        confirm="Remove this retired folder from the list? Only Creator OS's records of it are deleted. The files on the machine are never touched. This cannot be undone."
+                        onAction={async () => {
+                          await del(`/roots/${r.id}`);
+                          await refresh('/roots');
+                        }}
+                        success="Folder removed"
+                      >
+                        Remove
+                      </ActionButton>
+                    )}{' '}
                   </div>
                 </Td>
               </tr>

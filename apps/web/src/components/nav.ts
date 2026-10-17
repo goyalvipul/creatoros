@@ -31,7 +31,13 @@ export const NAV = [
 ] as const;
 
 /** Sections a read-only viewer cannot open (the API refuses them too): email/CRM, media library, devices, integrations. */
-const VIEWER_HIDDEN: readonly string[] = ['/today', '/library', '/collaborations', '/storage', '/integrations'];
+const VIEWER_HIDDEN: readonly string[] = [
+  '/today',
+  '/library',
+  '/collaborations',
+  '/storage',
+  '/integrations',
+];
 
 export function navFor(role?: string) {
   return role === 'VIEWER' ? NAV.filter((n) => !VIEWER_HIDDEN.includes(n.href)) : NAV;

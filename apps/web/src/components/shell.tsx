@@ -275,20 +275,22 @@ export function Shell({ children }: { children: ReactNode }) {
         aria-label="Primary"
         className="safe-bottom fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-border bg-panel md:hidden"
       >
-        {nav.filter((n) => MOBILE_PRIMARY.includes(n.href)).map((n) => (
-          <Link
-            key={n.href}
-            href={n.href}
-            aria-current={isActive(path, n.href) ? 'page' : undefined}
-            className={clsx(
-              'flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px]',
-              isActive(path, n.href) ? 'text-accent' : 'text-muted',
-            )}
-          >
-            <n.icon className="size-5" aria-hidden />
-            {n.label.split(' ')[0]}
-          </Link>
-        ))}
+        {nav
+          .filter((n) => MOBILE_PRIMARY.includes(n.href))
+          .map((n) => (
+            <Link
+              key={n.href}
+              href={n.href}
+              aria-current={isActive(path, n.href) ? 'page' : undefined}
+              className={clsx(
+                'flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px]',
+                isActive(path, n.href) ? 'text-accent' : 'text-muted',
+              )}
+            >
+              <n.icon className="size-5" aria-hidden />
+              {n.label.split(' ')[0]}
+            </Link>
+          ))}
         <button
           onClick={() => setMoreOpen(true)}
           className="flex min-h-14 flex-col items-center justify-center gap-0.5 text-[11px] text-muted"

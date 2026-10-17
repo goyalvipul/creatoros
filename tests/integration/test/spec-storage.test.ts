@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Spec scenarios T02-T08, T10, T14, T17 and T35 (docs/PRODUCT_SPEC.md, "Critical cases"), exercised against a real Postgres.
  * See docs/TEST_MATRIX.md for the full mapping of T01-T35 to tests.
  */
@@ -372,5 +372,36 @@ describe('counts never multiply (T14, T17, T35)', () => {
     expect((await analytics(w.ctx, { brandId: travel.id })).totals.published).toBe(1);
     expect((await analytics(w.ctx, { socialAccountId: t.id })).totals.published).toBe(1);
     expect((await analytics(w.ctx)).totals.published).toBe(2);
+  });
+});
+
+describe('failure injection (T34)', () => {
+  it('T34 a root permission problem is visible per file and per scan, never reads as deleted, and heals on the next good scan', async () => {
+    const w = await world();
+    await w.send(w.agentA, w.rootA.id, [file('D:\\Media\\locked.mp4'), file('D:\\Media\\fine.mp4')]);
+    await w.send(w.agentA, w.rootA.id, [
+      file('D:\\Media\\fine.mp4'),
+      {
+        eventId: randomUUID(),
+        seq: seq++,
+        kind: 'error' as const,
+        path: 'D:\\Media\\locked.mp4',
+        error: 'Access is denied',
+      },
+    ]);
+    const byName = async () =>
+      Object.fromEntries((await rowsFor(w.org.orgId)).map((r) => [r.fileName, r.availability]));
+    expect(await byName()).toEqual({ 'locked.mp4': 'PERMISSION_DENIED', 'fine.mp4': 'AVAILABLE' });
+    const counts = await libraryCounts(w.ctx);
+    expect(counts.byAvailability.PERMISSION_DENIED).toBe(1);
+    expect(counts.byAvailability.MISSING_CANDIDATE ?? 0).toBe(0);
+    const runs = await h.db.execute(
+      sql`select error_count as n, errors from scan_runs where org_id = ${w.org.orgId} order by started_at desc limit 1`,
+    );
+    expect((runs as any).rows[0].n).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify((runs as any).rows[0].errors)).toMatch(/Access is denied/);
+    // permissions fixed: the next scan sees the file again
+    await w.send(w.agentA, w.rootA.id, [file('D:\\Media\\locked.mp4'), file('D:\\Media\\fine.mp4')]);
+    expect(await byName()).toEqual({ 'locked.mp4': 'AVAILABLE', 'fine.mp4': 'AVAILABLE' });
   });
 });

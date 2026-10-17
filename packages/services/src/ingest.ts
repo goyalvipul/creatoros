@@ -393,18 +393,22 @@ export async function processIngest(
       for (const o of fresh.filter((x) => x.kind === 'error')) {
         errorCount += 1;
         runErrors.push({ path: o.path, error: o.error ?? 'unknown error' });
-        if (/denied|permission|access is denied/i.test(o.error ?? '')) {
-          await tx
-            .update(fileInstances)
-            .set({ availability: 'PERMISSION_DENIED' })
-            .where(
-              and(
-                eq(fileInstances.rootId, root.id),
-                eq(fileInstances.canonicalPath, o.canonical),
-                isNull(fileInstances.archivedAt),
-              ),
-            );
-        }
+        // A path the agent could not read still exists as far as we know: it counts as "seen" in this run so the
+        // missing-file sweep can never mark it missing, even if the agent (wrongly) reported the scan as complete.
+        const denied = /denied|permission|access is denied/i.test(o.error ?? '');
+        await tx
+          .update(fileInstances)
+          .set({
+            lastSeenRunId: batch.runId,
+            ...(denied ? { availability: 'PERMISSION_DENIED' as const } : {}),
+          })
+          .where(
+            and(
+              eq(fileInstances.rootId, root.id),
+              eq(fileInstances.canonicalPath, o.canonical),
+              isNull(fileInstances.archivedAt),
+            ),
+          );
       }
     }
     errorCount += batch.errors?.length ?? 0;

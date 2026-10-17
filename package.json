@@ -29,6 +29,7 @@
     "restore": "node infra/scripts/restore.mjs",
     "diagnostics": "node infra/scripts/diagnostics.mjs",
     "restart-test": "node infra/scripts/restart-test.mjs",
+    "tailscale": "node infra/scripts/tailscale-serve.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit"
   },
   "devDependencies": {

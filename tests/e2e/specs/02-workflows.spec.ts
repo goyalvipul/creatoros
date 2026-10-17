@@ -142,10 +142,14 @@ test('command palette finds records; quick add captures an idea', async ({ page 
 
   await page.getByRole('button', { name: 'Quick add' }).click();
   await page.getByRole('dialog').getByLabel('Title').fill('Idea from quick add');
+  const saved = page.waitForResponse(
+    (r) => r.url().endsWith('/api/v1/ideas') && r.request().method() === 'POST',
+  );
   await page
     .getByRole('dialog')
     .getByRole('button', { name: /^(Add|Save|Capture)/ })
     .click();
+  expect((await saved).ok()).toBeTruthy();
   await page.goto('/content');
   await expect(page.getByText('Idea from quick add')).toBeVisible();
 });

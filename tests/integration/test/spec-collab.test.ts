@@ -3,7 +3,6 @@
  * Connectors run against in-process fakes of the remote APIs (Gmail, YouTube, the owner's Todo app): no network, no real accounts.
  * See docs/TEST_MATRIX.md for the full mapping of T01-T35 to tests.
  */
-import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   and,

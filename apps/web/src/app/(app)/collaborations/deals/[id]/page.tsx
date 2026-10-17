@@ -373,7 +373,8 @@ export default function DealPage() {
                 <option value="">Choose…</option>
                 {(linkable.data ?? []).map((p: any) => (
                   <option key={p.id} value={p.id}>
-                    {titleCase(p.platform)} {p.handle}: {p.title ?? p.url ?? 'Untitled'} ({titleCase(p.state)})
+                    {titleCase(p.platform)} {p.handle}: {p.title ?? p.url ?? 'Untitled'} ({titleCase(p.state)}
+                    )
                   </option>
                 ))}
               </Select>

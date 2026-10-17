@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, types, unit, integration, E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/scanner-agent/go.mod
+          cache-dependency-path: apps/scanner-agent/go.sum
+      - name: Media tools for the fixture library tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pnpm install --frozen-lockfile
+
+      - name: Formatting
+        run: pnpm format:check
+      - name: Lint
+        run: pnpm lint
+      - name: TypeScript
+        run: pnpm typecheck
+      - name: Build
+        run: pnpm build
+      - name: Unit tests (domain, connectors)
+        run: pnpm test:unit
+      - name: Go agent (vet, build, tests)
+        working-directory: apps/scanner-agent
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./...
+      - name: Integration tests (real Postgres in Docker, real Go agent)
+        run: pnpm test:integration
+      - name: Playwright browsers
+        run: pnpm --filter @creatoros/tests-e2e exec playwright install --with-deps chromium
+      - name: Browser E2E (desktop + 360px)
+        run: pnpm test:e2e
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+          retention-days: 7
+
+  compose:
+    name: Docker Compose config and images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create a throwaway .env
+        run: node infra/scripts/init-env.mjs
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Postgres and Redis must not publish ports
+        run: |
+          docker compose config --format json | node -e '
+            const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            for (const s of ["db", "redis"]) {
+              if ((c.services[s].ports ?? []).length) { console.error(s + " publishes ports"); process.exit(1); }
+            }
+            console.log("db and redis publish no ports");'
+      - name: Build images
+        run: docker compose build
+
+  security:
+    name: Dependency audit and secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Dependency vulnerabilities (production, high and above)
+        run: pnpm audit --prod --audit-level high
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

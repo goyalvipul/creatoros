@@ -13,3 +13,4 @@ tests/fixtures
 playwright-report
 test-results
 *.mdc
+apps/web/next-env.d.ts

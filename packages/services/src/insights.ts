@@ -34,7 +34,13 @@ export interface SearchHit {
 }
 
 /** Global search across everything the owner might look for. Trigram-backed ILIKE; owner scoped; capped per type. */
-const PRIVATE_SEARCH_TYPES = new Set<SearchHit['type']>(['file', 'deal', 'thread', 'contact', 'organization']);
+const PRIVATE_SEARCH_TYPES = new Set<SearchHit['type']>([
+  'file',
+  'deal',
+  'thread',
+  'contact',
+  'organization',
+]);
 
 /** `includePrivate=false` (viewers) skips files, email and CRM entities. */
 export async function search(ctx: Ctx, q: string, perType = 6, includePrivate = true): Promise<SearchHit[]> {

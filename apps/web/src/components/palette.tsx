@@ -3,13 +3,21 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, post, refresh } from '@/lib/api';
-import { NAV } from './nav';
+import { navFor } from './nav';
 import { Badge, Dialog, Field, FormDialog, Input, Select, Textarea, useToast } from './ui';
 import { dateInput, title as titleCase } from '@/lib/format';
 
 type Hit = { key: string; label: string; sub?: string; href: string; kind: string };
 
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CommandPalette({
+  open,
+  onClose,
+  role,
+}: {
+  open: boolean;
+  onClose: () => void;
+  role?: string;
+}) {
   const router = useRouter();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Hit[]>([]);
@@ -56,13 +64,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const pages = useMemo<Hit[]>(
     () =>
-      NAV.filter((n) => !q || n.label.toLowerCase().includes(q.toLowerCase())).map((n) => ({
-        key: `nav:${n.href}`,
-        label: n.label,
-        href: n.href,
-        kind: 'page',
-      })),
-    [q],
+      navFor(role)
+        .filter((n) => !q || n.label.toLowerCase().includes(q.toLowerCase()))
+        .map((n) => ({
+          key: `nav:${n.href}`,
+          label: n.label,
+          href: n.href,
+          kind: 'page',
+        })),
+    [q, role],
   );
   const all = [...pages, ...results];
 

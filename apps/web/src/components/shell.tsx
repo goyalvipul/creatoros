@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, post, refresh, setUnauthorizedHandler, useApi } from '@/lib/api';
-import { NAV } from './nav';
+import { navFor } from './nav';
 import { CommandPalette, QuickAdd } from './palette';
 import { Button, Spinner, useToast } from './ui';
 
@@ -118,6 +118,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const toast = useToast();
   const me = useMe();
+  const role: string | undefined = me.data?.user?.role;
+  const nav = navFor(role);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -196,7 +198,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <span className="font-semibold">Creator OS</span>
         </Link>
         <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
-          {NAV.map((n) => (
+          {nav.map((n) => (
             <Link
               key={n.href}
               href={n.href}
@@ -273,7 +275,7 @@ export function Shell({ children }: { children: ReactNode }) {
         aria-label="Primary"
         className="safe-bottom fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-border bg-panel md:hidden"
       >
-        {NAV.filter((n) => MOBILE_PRIMARY.includes(n.href)).map((n) => (
+        {nav.filter((n) => MOBILE_PRIMARY.includes(n.href)).map((n) => (
           <Link
             key={n.href}
             href={n.href}
@@ -312,7 +314,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </button>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {NAV.map((n) => (
+              {nav.map((n) => (
                 <Link
                   key={n.href}
                   href={n.href}
@@ -337,7 +339,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} role={role} />
       <QuickAdd open={addOpen} onClose={() => setAddOpen(false)} />
     </div>
   );

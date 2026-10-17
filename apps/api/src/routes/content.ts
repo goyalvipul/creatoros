@@ -586,7 +586,13 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Asset with versions, copies and publications',
       params: idParam,
     },
-    ({ ctx, params }) => getAsset(ctx, params.id),
+    async ({ ctx, params, session }) => {
+      const asset = await getAsset(ctx, params.id);
+      // Viewers see the creative record but never where the private files live (paths, devices, shares).
+      if (session.role === 'VIEWER')
+        return { ...asset, versions: asset.versions.map((v) => ({ ...v, files: [] })) };
+      return asset;
+    },
   );
   route(
     {

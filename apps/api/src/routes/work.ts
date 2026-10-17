@@ -700,7 +700,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       url: '/integrations',
       tag: 'Integrations',
       summary: 'Every provider with its real state and capabilities',
-      role: 'VIEWER',
+      role: 'EDITOR',
     },
     ({ ctx }) => listIntegrations(ctx, ov()),
   );
@@ -843,7 +843,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Global search across 10 entity types',
       query: z.object({ q: z.string().trim().min(1).max(200) }),
     },
-    ({ ctx, query }) => search(ctx, query.q),
+    ({ ctx, query, session }) => search(ctx, query.q, 6, session.role !== 'VIEWER'),
   );
   route(
     {

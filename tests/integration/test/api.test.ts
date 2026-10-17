@@ -384,6 +384,77 @@ describe('content flow over HTTP', () => {
     ).toBe(403);
   });
 
+  it('a viewer cannot read private CRM, email, finance, media, device or integration data (and nobody gets secrets)', async () => {
+    const privateGets = [
+      '/threads',
+      '/deals',
+      '/deals/pipeline',
+      '/organizations',
+      '/contacts',
+      '/invoices',
+      '/finance/summary',
+      '/devices',
+      '/roots',
+      '/library',
+      '/library/counts',
+      '/integrations',
+      '/todo/status',
+      '/todo/links',
+      '/actions',
+      '/briefing',
+      '/notifications',
+      '/duplicates/exact',
+    ];
+    for (const p of privateGets) {
+      const anon = await api.call('GET', `${V1}${p}`);
+      const v = await api.call('GET', `${V1}${p}`, { cookie: viewer });
+      const e = await api.call('GET', `${V1}${p}`, { cookie: editor });
+      expect([p, anon.status]).toEqual([p, 401]);
+      expect([p, v.status]).toEqual([p, 403]);
+      expect([p, e.status < 400]).toEqual([p, true]);
+    }
+    for (const p of ['/members', '/audit', '/backups', '/pairing-codes']) {
+      expect([p, (await api.call('GET', `${V1}${p}`, { cookie: viewer })).status]).toEqual([p, 403]);
+      expect([p, (await api.call('GET', `${V1}${p}`, { cookie: editor })).status]).toEqual([p, 403]);
+    }
+    // the creative pipeline stays readable
+    for (const p of [
+      '/projects',
+      '/ideas',
+      '/assets',
+      '/publications/unmatched',
+      '/publishing/matrix',
+      '/catalog',
+      '/analytics',
+      '/goals',
+    ]) {
+      const r = await api.call('GET', `${V1}${p}`, { cookie: viewer });
+      expect([p, r.status]).toEqual([p, 200]);
+    }
+    // search hides files, email and CRM entities from viewers
+    const searchTypes = async (cookie: string) =>
+      new Set<string>(
+        j(await api.call('GET', `${V1}/search?q=Acme`, { cookie })).map((h: { type: string }) => h.type),
+      );
+    expect([...(await searchTypes(owner))]).toContain('organization');
+    const vt = await searchTypes(viewer);
+    for (const t of ['organization', 'deal', 'thread', 'contact', 'file']) expect(vt.has(t)).toBe(false);
+    // secrets are write-only: a saved key never comes back from any endpoint
+    const SECRET = 'SUPER-SECRET-TODO-KEY-0123456789';
+    expect(
+      (
+        await api.call('POST', `${V1}/integrations/todo/key`, {
+          cookie: owner,
+          body: { apiKey: SECRET, config: { baseUrl: 'http://127.0.0.1:9/api', clientSecret: SECRET } },
+        })
+      ).status,
+    ).toBe(200);
+    for (const p of ['/integrations', '/todo/status', '/audit', '/devices', '/organization']) {
+      const r = await api.call('GET', `${V1}${p}`, { cookie: owner });
+      expect([p, JSON.stringify(r.body).includes(SECRET)]).toEqual([p, false]);
+    }
+  });
+
   it('workflow webhook requires a valid HMAC and is idempotent', async () => {
     const body = JSON.stringify({ provider: 'comfyui', jobId: 'job-1', status: 'SUCCEEDED', outputs: [] });
     const bad = await api.call('POST', `${V1}/webhooks/workflow`, {

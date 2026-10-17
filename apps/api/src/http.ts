@@ -108,12 +108,20 @@ function originAllowed(req: FastifyRequest, deps: AppDeps): boolean {
 
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Private areas: email/CRM/finance, integrations, devices and the media library. A VIEWER can read the creative
+ * pipeline (ideas, projects, publishing, calendar) but not these; reads here need at least EDITOR.
+ */
+const PRIVATE_GET =
+  /^\/(threads|messages|opportunities|deals|organizations|contacts|invoices|fx-rates|finance|todo|integrations|connections|devices|pairing-codes|roots|scan-runs|physical-shares|library|files|suggestions|duplicates|actions|briefing|notifications)(\/|$)/;
+
 export function makeRouter(app: FastifyInstance, deps: AppDeps) {
   return function route<P = unknown, Q = unknown, B = unknown>(
     opts: RouteOpts<P, Q, B>,
     handler: (c: RouteCtx<P, Q, B>) => Promise<unknown> | unknown,
   ) {
-    const role: Role = opts.role ?? (opts.method === 'GET' ? 'VIEWER' : 'EDITOR');
+    const role: Role =
+      opts.role ?? (opts.method === 'GET' && !PRIVATE_GET.test(opts.url) ? 'VIEWER' : 'EDITOR');
     const schema: Record<string, unknown> = { tags: [opts.tag], summary: opts.summary };
     if (opts.params) schema.params = jsonSchemaOf(opts.params);
     if (opts.query) schema.querystring = jsonSchemaOf(opts.query);

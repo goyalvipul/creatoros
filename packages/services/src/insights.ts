@@ -34,14 +34,19 @@ export interface SearchHit {
 }
 
 /** Global search across everything the owner might look for. Trigram-backed ILIKE; owner scoped; capped per type. */
-export async function search(ctx: Ctx, q: string, perType = 6): Promise<SearchHit[]> {
+const PRIVATE_SEARCH_TYPES = new Set<SearchHit['type']>(['file', 'deal', 'thread', 'contact', 'organization']);
+
+/** `includePrivate=false` (viewers) skips files, email and CRM entities. */
+export async function search(ctx: Ctx, q: string, perType = 6, includePrivate = true): Promise<SearchHit[]> {
   const term = q.trim();
   if (term.length < 2) return [];
   const like = `%${esc(term)}%`;
   const n = perType;
   const org = ctx.orgId;
   const run = async (type: SearchHit['type'], query: ReturnType<typeof sql>) =>
-    rowsOf<any>(await ctx.db.execute(query)).map((r) => ({ type, ...r }) as SearchHit);
+    !includePrivate && PRIVATE_SEARCH_TYPES.has(type)
+      ? []
+      : rowsOf<any>(await ctx.db.execute(query)).map((r) => ({ type, ...r }) as SearchHit);
   const parts = await Promise.all([
     run(
       'file',

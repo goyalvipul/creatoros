@@ -374,3 +374,9 @@ export async function linkPendingGenerationOutputs(db: Ctx['db'], orgId: string)
   }
   return { linked };
 }
+
+export async function listScenes(ctx: Ctx, projectId: string) {
+  const [p] = await ctx.db.select({ id: creativeProjects.id }).from(creativeProjects).where(and(eq(creativeProjects.id, projectId), eq(creativeProjects.orgId, ctx.orgId)));
+  if (!p) throw notFound('Project');
+  return ctx.db.select().from(productionScenes).where(eq(productionScenes.projectId, projectId)).orderBy(asc(productionScenes.ordinal));
+}

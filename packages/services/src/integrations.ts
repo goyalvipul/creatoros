@@ -303,3 +303,5 @@ export async function listConnectionsForSync(db: Db) {
 }
 
 void CONNECTORS;
+
+export type ConnectorOverrides = Partial<ConnectorContext>;

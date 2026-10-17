@@ -485,3 +485,31 @@ export async function financeSummary(ctx: Ctx, range: { from?: Date; to?: Date }
     missingFxRates: missing,
   };
 }
+
+export async function listInvoices(ctx: Ctx, q: { status?: string; dealId?: string; limit?: number } = {}) {
+  return rowsOf<any>(
+    await ctx.db.execute(sql`
+      select i.id, i.invoice_no as "invoiceNo", i.status, i.currency, i.amount_minor::float8 as "amountMinor", i.issued_at as "issuedAt", i.due_at as "dueAt", i.deal_id as "dealId", d.title as "dealTitle",
+             coalesce((select sum(p.amount_minor) from payments p where p.invoice_id = i.id), 0)::float8 as "paidMinor"
+      from invoices i left join deals d on d.id = i.deal_id
+      where i.org_id = ${ctx.orgId} ${q.status ? sql`and i.status = ${q.status}::invoice_status` : sql``} ${q.dealId ? sql`and i.deal_id = ${q.dealId}` : sql``}
+      order by i.issued_at desc nulls last, i.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`),
+  );
+}
+
+export async function getInvoice(ctx: Ctx, id: string) {
+  const [i] = await ctx.db.select().from(invoices).where(and(eq(invoices.id, id), eq(invoices.orgId, ctx.orgId)));
+  if (!i) throw notFound('Invoice');
+  const pays = await ctx.db.select().from(payments).where(eq(payments.invoiceId, id)).orderBy(asc(payments.receivedAt));
+  return { ...i, payments: pays };
+}
+
+export async function listDeals(ctx: Ctx, q: { stage?: string; q?: string; limit?: number } = {}) {
+  return rowsOf<any>(
+    await ctx.db.execute(sql`
+      select d.id, d.title, d.stage, d.currency, d.contracted_value_minor::float8 as "valueMinor", d.next_due_at as "nextDueAt", d.priority, eo.name as brand
+      from deals d left join external_organizations eo on eo.id = d.external_org_id
+      where d.org_id = ${ctx.orgId} and d.deleted_at is null ${q.stage ? sql`and d.stage = ${q.stage}::deal_stage` : sql``} ${q.q ? sql`and d.title ilike ${'%' + q.q + '%'}` : sql``}
+      order by d.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`),
+  );
+}

@@ -1,0 +1,79 @@
+# Creator OS: what works today
+
+Each item is **Enabled** (works with nothing else set up), **Limited** (works, with the stated limit), or **Unavailable** (needs something only you can provide, and says so in the app).
+Proof for each scenario is in [docs/TEST_MATRIX.md](docs/TEST_MATRIX.md). Nothing here is shown with invented data: until you add data (or load the clearly labelled DEMO set), screens are empty.
+
+## Storage and media library
+
+| Feature                                                                                                                  | Status  | Notes                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scanner agent (Go, Windows service / Linux systemd / macOS), one-time pairing code, signed requests, revocable           | Enabled | Read-only: it never modifies, moves or deletes a file.                                                                                                |
+| Multiple folders per machine, multiple machines, SMB/NAS and server-mount path mapping, include/exclude rules            | Enabled |                                                                                                                                                       |
+| Recursive scans with progress, stable-file detection (files still being written wait), bounded CPU/IO, resume after stop | Enabled |                                                                                                                                                       |
+| Fingerprints: quick signature, full SHA-256 on request (or for everything, per folder)                                   | Enabled | A quick-signature match is never reported as an exact duplicate.                                                                                      |
+| One media object, several physical locations; same name but different content stays distinct                             | Enabled |                                                                                                                                                       |
+| Rename/move tracking                                                                                                     | Limited | Exact when the OS gives a stable file id. Otherwise the old copy goes missing and a relink is _suggested_ by content, never guessed.                  |
+| Near-duplicate hints (similar name and duration)                                                                         | Enabled | Hints only; never merges anything.                                                                                                                    |
+| Offline machines and unreachable drives                                                                                  | Enabled | Shown as "temporarily unavailable", with last-seen time. A file becomes _missing_ only after repeated complete scans plus a grace period.             |
+| Durations, codecs, thumbnails                                                                                            | Limited | Needs ffmpeg/ffprobe on the agent machine. Without it files are still indexed and hashed. Truncated media is flagged `PROBE_FAILED` but kept.         |
+| Playing and seeking files from the browser                                                                               | Limited | Streams from the agent with Range support while the machine is on and reachable. Offline machines show a notice and the cached preview if one exists. |
+| Library search, filters, pagination, "copy path" for local / SMB / server paths                                          | Enabled |                                                                                                                                                       |
+| Symlinks / junctions                                                                                                     | Limited | Skipped by default so a link cannot expose files outside a folder; opt-in per folder.                                                                 |
+
+**Measured capacity** (synthetic rows through the real ingest path on the build machine, Postgres 17 in Docker; run `tests/integration/test/capacity.test.ts` to reproduce on yours):
+
+| Indexed files | Ingest rate | Library page | Filter by kind | Text search | Counts | Global search |
+| ------------- | ----------- | ------------ | -------------- | ----------- | ------ | ------------- |
+| 20,000        | 1,779 /s    | 32 ms        | 14 ms          | 14 ms       | 48 ms  | 16 ms         |
+| 100,000       | 1,731 /s    | 68 ms        | 30 ms          | 8 ms        | 55 ms  | 32 ms         |
+
+These measure the database and service layer, not a browser or a real multi-terabyte scan, and the agent's own hashing speed depends on your disks.
+
+## Content and production
+
+| Feature                                                                                                                          | Status  | Notes                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------- |
+| Brands, channels, social accounts (accounts of different channels stay separate)                                                 | Enabled |                                                                                   |
+| Idea inbox, quick add, convert to a project                                                                                      | Enabled |                                                                                   |
+| Projects, scenes/clips, versions, selected final, checklists with stage gates (explicit override is recorded)                    | Enabled |                                                                                   |
+| Link assets and files to projects; one asset can have many files and many posts without being counted twice                      | Enabled |                                                                                   |
+| Publishing records per platform/account with captions, planned and actual times, readiness, status                               | Enabled | Times follow your timezone (default America/Vancouver) including DST changes.     |
+| Pasted post link                                                                                                                 | Enabled | Recorded as `USER_ENTERED`. Only a platform connector can make a post `VERIFIED`. |
+| Calendar, dashboard counts, daily priorities, global search (command palette), goals, analytics (manual and verified kept apart) | Enabled |                                                                                   |
+
+## Collaboration, messages and money
+
+| Feature                                                                                            | Status                                       | Notes                                                                                                   |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Contacts, opportunities, deals, deliverables with separate approval and publication states         | Enabled                                      | A deliverable can be linked to the post that fulfils it, once; linking never changes its status.        |
+| Manual intake and threads; screening of unrelated mail; triage queue (no automatic deals)          | Enabled                                      |                                                                                                         |
+| Gmail inbox triage (read-only)                                                                     | Unavailable until you add Google credentials | Built and tested against a fake Gmail. Never sends mail. Drafts need a separate, optional scope.        |
+| Invoices, partial payments, correct outstanding balance, overdue detection, multiple currencies    | Enabled                                      | Display currency CAD; deals may use others.                                                             |
+| Follow-up actions (one per unanswered message, with snooze and due date), reminders, notifications | Enabled                                      | Quiet hours hold non-critical notices; critical ones (e.g. a failed backup restore test) always arrive. |
+| Nothing is sent, posted or paid automatically                                                      | By design                                    | Every outward step needs the owner.                                                                     |
+
+## Integrations
+
+Each provider is built to its documented contract and always reports one of `ACTIVE`, `NOT_CONFIGURED`, `AUTH_EXPIRED`, `UNSUPPORTED`, with the exact next step. None of the real services below have been contacted from this repository, because they need your accounts.
+
+| Provider                   | Status                                              | What exists                                                                                                                                                                                                                    |
+| -------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Todo app                   | Unavailable until you give URL + token              | Generic adapter ([contract](docs/TODO_ADAPTER_CONTRACT.md)): stable idempotency key, If-Match revisions, pending/synced/conflict/failed/dead-letter states, retry and resolve controls on Today. Tested against a fake server. |
+| YouTube                    | Unavailable until you add Google credentials        | Imports your posts and statistics; unmatched imports wait for review.                                                                                                                                                          |
+| Postiz                     | Unavailable until you point it at a Postiz you host | Reports configuration state; marks `PUBLISHED_VERIFIED` only when Postiz returns a release URL.                                                                                                                                |
+| Instagram/Facebook, TikTok | Unavailable until a developer app is approved       | Connector code and an explanatory setup state. Manual publishing and pasted links work today.                                                                                                                                  |
+| Snapchat                   | Unavailable                                         | No suitable public API; manual records only.                                                                                                                                                                                   |
+
+## Platform and operations
+
+| Feature                                                                                                    | Status  | Notes                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Installable PWA, offline shell, 360px layout, light/dark theme, keyboard navigation                        | Limited | Offline shows the shell and a clear banner; edits are not queued offline, so nothing pretends to have saved.           |
+| Users with Owner / Editor / Viewer roles; viewers cannot read private CRM, mail, finance, media or devices | Enabled |                                                                                                                        |
+| Sign-in: strong passwords, lockout, sessions you can revoke, optional two-factor, CSRF protection          | Enabled | No default password. Password recovery by another owner or a CLI on the host (no e-mail is sent).                      |
+| Nightly verified backups, weekly and on-demand restore tests, retention, CLI restore                       | Enabled | Backups hold the database and attachments, not your media files and not `ENCRYPTION_KEY`.                              |
+| Health page, worker heartbeat, job retries and dead letters, diagnostics bundle                            | Enabled |                                                                                                                        |
+| REST API `/api/v1` with OpenAPI at `/api/docs`; webhooks signed with HMAC                                  | Enabled |                                                                                                                        |
+| Docker Compose stack with restart policy, health checks, log rotation, private database and Redis          | Enabled | Survives restarts (`pnpm restart-test`).                                                                               |
+| HTTPS from your phone away from home                                                                       | Limited | Through Tailscale Serve (`pnpm tailscale enable`), reachable only inside your tailnet.                                 |
+| AI features                                                                                                | Limited | Rules-based only (priorities, screening, similarity). The provider interface exists for a model later, none is called. |

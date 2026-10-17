@@ -1,5 +1,7 @@
 # Notes for AI coding agents
 
+New to this repo? Read [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) first: a one-file briefing with layout, deployment facts, status and traps.
+
 Creator OS is a pnpm monorepo (TypeScript ESM, strict) plus a Go scanner agent. Read [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for intent, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for structure, [docs/DECISIONS.md](docs/DECISIONS.md) before changing a rule, and [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) for current state. Update the ledger when you finish something.
 
 ## Non-negotiable rules

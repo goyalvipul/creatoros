@@ -28,8 +28,8 @@ Run integration tests: `. .\infra\scripts\docker-env.ps1; pnpm --filter @creator
 | 3   | packages/connectors                                                                               | DONE (unit tests TODO)                                  |
 | 4   | packages/services (types, crypto, audit, setup, devices, roots, ingest, library, assets, projects, publishing, crm, actions, integrations, notifications, todo, insights, ops, auth, catalog, demo, settings, config) | DONE; integration-tested: ingest, auth, demo; rest exercised through API tests |
 | 5   | apps/api (Fastify, /api/v1, auth, CSRF, idempotency, agent + stream endpoints, OpenAPI)           | DONE; 13 HTTP integration tests passing                  |
-| 6   | apps/scanner-agent (Go)                                                                           | TODO                                                    |
-| 7   | apps/worker (BullMQ, scheduler, sync jobs, backups)                                               | TODO                                                    |
+| 6   | apps/scanner-agent (Go)                                                                           | DONE; Go unit tests + real-binary E2E (agent-e2e.test.ts, 5 tests) passing |
+| 7   | apps/worker (BullMQ, scheduler, sync jobs, backups)                                               | DONE; 7 ops tests (backup/restore verified on real pg_dump) |
 | 8   | apps/web (Next.js PWA, all sections)                                                              | TODO                                                    |
 | 9   | infra (compose, Caddy, Dockerfiles, scripts, backup/restore)                                      | TODO                                                    |
 | 10  | tests (unit, integration T01-T35, Playwright, Go)                                                 | IN_PROGRESS: 33 integration tests passing (schema, ingest, auth/demo, api) |

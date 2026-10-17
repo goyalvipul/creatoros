@@ -1,0 +1,11 @@
+{
+  "name": "@creatoros/scanner-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Go scanner agent (read-only media indexer + signed file streamer). Built with `pnpm agent:build`.",
+  "scripts": {
+    "build": "node ../../infra/scripts/build-agent.mjs",
+    "test": "node ../../infra/scripts/go.mjs test ./...",
+    "lint": "node ../../infra/scripts/go.mjs vet ./..."
+  }
+}

@@ -85,8 +85,8 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
       await tx
         .update(storageRoots)
         .set({
-          lastScanAt: now,
-          scanRequestedAt: null,
+          // HEARTBEAT runs carry only enrichment (hashes, probes); they are not scans and must not look like one.
+          ...(batch.jobType === 'HEARTBEAT' ? { lastHeartbeatAt: now } : { lastScanAt: now, scanRequestedAt: null }),
           ...(batch.jobType === 'RECONCILE' ? { reconcileRequestedAt: null } : {}),
           ...(root.state === 'UNREACHABLE' ? { state: 'ACTIVE' as const } : {}),
         })
@@ -342,7 +342,8 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
       .where(eq(scanRuns.runId, batch.runId));
 
     // ---- END of run: missing detection (only after a COMPLETE, non-suspicious scan)
-    if (batch.phase === 'END' && !isAlias) {
+    const enrichmentOnly = batch.jobType === 'HEARTBEAT';
+    if (batch.phase === 'END' && !isAlias && !enrichmentOnly) {
       const [cur] = await tx.select().from(scanRuns).where(eq(scanRuns.runId, batch.runId));
       const [prior] = await tx
         .select({ n: sql<number>`count(*)::int` })
@@ -400,7 +401,7 @@ export async function processIngest(db: Db, env: ServiceEnv, agent: AuthedAgent,
             : { consecutiveCompleteScans: 0, ...(suspicious ? { state: 'UNREACHABLE' as const } : {}) },
         )
         .where(eq(storageRoots.id, root.id));
-    } else if (batch.phase === 'END' && isAlias) {
+    } else if (batch.phase === 'END' && (isAlias || enrichmentOnly)) {
       await tx.update(scanRuns).set({ finishedAt: now, status: 'COMPLETED', completeSuccess: false }).where(eq(scanRuns.runId, batch.runId));
     }
 

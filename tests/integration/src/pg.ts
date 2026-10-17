@@ -15,6 +15,8 @@ export interface TestPg {
   url: string;
   stop: () => Promise<void>;
   kind: 'external' | 'docker' | 'embedded';
+  /** Docker container name when kind === 'docker' (lets backup tests run pg_dump inside the container). */
+  container?: string;
 }
 
 async function freePort(): Promise<number> {
@@ -78,6 +80,7 @@ export async function startTestPg(name = 'creatoros_test'): Promise<TestPg> {
         return {
           url,
           kind: 'docker',
+          container: cname,
           stop: async () => {
             spawnSync('docker', ['rm', '-f', cname], { encoding: 'utf8' });
           },

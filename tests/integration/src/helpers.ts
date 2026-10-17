@@ -157,3 +157,38 @@ export async function makeApi(handle: DbHandle, url: string, over: Record<string
   };
   return { app, config, call, login, close: () => app.close() };
 }
+
+/** Runs pg_dump / pg_restore / psql inside the disposable Postgres container (the host has no PostgreSQL client tools). */
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import type { Runner } from '@creatoros/services';
+import { localRunner } from '@creatoros/services';
+
+export function dockerRunner(container: string | undefined = process.env.TEST_PG_CONTAINER): Runner {
+  if (!container) return localRunner;
+  return (cmd, args, opts = {}) => {
+    if (!['pg_dump', 'pg_restore', 'psql'].includes(cmd)) return localRunner(cmd, args, opts);
+    // inside the container Postgres listens on the default socket; drop host/port/user flags aimed at the published port
+    const cleaned: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-h' || args[i] === '-p') {
+        i++;
+        continue;
+      }
+      cleaned.push(args[i]!);
+    }
+    const dockerArgs = ['exec', '-i', ...Object.entries(opts.env ?? {}).flatMap(([k, v]) => ['-e', `${k}=${v}`]), container, cmd, ...cleaned];
+    return new Promise((resolve, reject) => {
+      const child = spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      if (opts.stdoutFile) child.stdout.pipe(fs.createWriteStream(opts.stdoutFile));
+      else child.stdout.on('data', (d) => (stdout += d));
+      child.stderr.on('data', (d) => (stderr += d));
+      if (opts.stdinFile) fs.createReadStream(opts.stdinFile).pipe(child.stdin);
+      else child.stdin.end();
+      child.on('error', reject);
+      child.on('close', (code) => (code === 0 ? resolve({ stdout, stderr }) : reject(new Error(`${cmd} exited with ${code}: ${stderr.slice(0, 800)}`))));
+    });
+  };
+}

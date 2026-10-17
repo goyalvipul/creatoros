@@ -1,5 +1,7 @@
+import { Queue } from 'bullmq';
+import { Redis } from 'ioredis';
 import { createDb, sql } from '@creatoros/db';
-import { loadConfig } from '@creatoros/services';
+import { AppError, loadConfig } from '@creatoros/services';
 import { buildApp } from './app';
 
 async function main() {
@@ -12,7 +14,18 @@ async function main() {
     console.error(JSON.stringify({ level: 'fatal', msg: 'Database not ready. Run `pnpm db:migrate` (or start the migrate service).', err: String(e) }));
     process.exit(1);
   }
-  const app = await buildApp({ db: handle.db, config });
+  // Producer-side queue for on-demand work (sync now, backup now). Fails fast when Redis is down instead of hanging a request.
+  const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1, enableOfflineQueue: false, lazyConnect: false });
+  redis.on('error', () => {});
+  const requests = new Queue('requests', { connection: redis });
+  const enqueue = async (_queue: string, name: string, data: Record<string, unknown>) => {
+    try {
+      await requests.add(name === 'connection' ? 'sync' : name, data, { removeOnComplete: 50, removeOnFail: 100, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+    } catch {
+      throw new AppError(503, 'QUEUE_UNAVAILABLE', 'The background worker queue (Redis) is not reachable right now. Try again shortly.');
+    }
+  };
+  const app = await buildApp({ db: handle.db, config, enqueue });
   await app.listen({ host: config.host, port: config.port });
 
   const stop = async (signal: string) => {

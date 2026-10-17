@@ -15,6 +15,7 @@
     "@creatoros/db": "workspace:*",
     "@creatoros/domain": "workspace:*",
     "@creatoros/services": "workspace:*",
+    "@creatoros/worker": "workspace:*",
     "pg": "^8.23.1"
   },
   "devDependencies": {

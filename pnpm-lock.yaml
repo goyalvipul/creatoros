@@ -320,6 +320,12 @@ importers:
       '@creatoros/domain':
         specifier: workspace:*
         version: link:../domain
+      argon2:
+        specifier: ^0.45.1
+        version: 0.45.1
+      otpauth:
+        specifier: ^9.5.2
+        version: 9.5.2
       zod:
         specifier: ^4.6.7
         version: 4.6.7

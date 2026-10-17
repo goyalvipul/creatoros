@@ -17,6 +17,8 @@
     "@creatoros/connectors": "workspace:*",
     "@creatoros/db": "workspace:*",
     "@creatoros/domain": "workspace:*",
+    "argon2": "^0.45.1",
+    "otpauth": "^9.5.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {

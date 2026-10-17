@@ -23,7 +23,7 @@
     "test:agent": "node infra/scripts/go.mjs test ./...",
     "db:generate": "pnpm --filter @creatoros/db generate",
     "db:migrate": "pnpm --filter @creatoros/db migrate",
-    "db:seed:demo": "pnpm --filter @creatoros/db seed:demo",
+    "db:seed:demo": "pnpm --filter @creatoros/api seed:demo",
     "agent:build": "node infra/scripts/build-agent.mjs",
     "backup": "node infra/scripts/backup.mjs",
     "restore": "node infra/scripts/restore.mjs",

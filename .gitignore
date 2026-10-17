@@ -25,3 +25,4 @@ apps/web/AGENTS.md
 apps/web/.next/
 .next/
 tests/e2e/.e2e-pg-container
+diagnostics/

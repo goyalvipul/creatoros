@@ -30,9 +30,9 @@ Run integration tests: `. .\infra\scripts\docker-env.ps1; pnpm --filter @creator
 | 5   | apps/api (Fastify, /api/v1, auth, CSRF, idempotency, agent + stream endpoints, OpenAPI)           | DONE; 13 HTTP integration tests passing                  |
 | 6   | apps/scanner-agent (Go)                                                                           | DONE; Go unit tests + real-binary E2E (agent-e2e.test.ts, 5 tests) passing |
 | 7   | apps/worker (BullMQ, scheduler, sync jobs, backups)                                               | DONE; 7 ops tests (backup/restore verified on real pg_dump) |
-| 8   | apps/web (Next.js PWA, all sections)                                                              | TODO                                                    |
-| 9   | infra (compose, Caddy, Dockerfiles, scripts, backup/restore)                                      | TODO                                                    |
-| 10  | tests (unit, integration T01-T35, Playwright, Go)                                                 | IN_PROGRESS: 33 integration tests passing (schema, ingest, auth/demo, api) |
+| 8   | apps/web (Next.js PWA, all sections)                                                              | DONE; 32 Playwright specs passing (desktop + 360px) |
+| 9   | infra (compose, Caddy, Dockerfiles, scripts, backup/restore)                                      | IN_PROGRESS: `docker compose up -d --build` verified healthy via Caddy :8080; scripts backup/restore/diagnostics/seed-demo TODO |
+| 10  | tests (unit, integration T01-T35, Playwright, Go)                                                 | IN_PROGRESS: 46 integration tests + 32 Playwright specs passing; domain/connector unit tests, CI, lint TODO |
 | 11  | docs (README, FEATURES, architecture, ops, EXTERNAL_PREREQUISITES, ER + system diagrams)          | TODO                                                    |
 | 12  | Final validation run + evidence                                                                   | TODO                                                    |
 
@@ -51,3 +51,4 @@ Run integration tests: `. .\infra\scripts\docker-env.ps1; pnpm --filter @creator
 - 2026-10-16: repo initialised, tooling verified, skeleton created.
 - 2026-10-16: domain, db, connectors, services (types...ingest) written; integration tests (schema + ingest) pass on Postgres 17.
 - 2026-10-16: remaining services written (library..settings/config), auth + demo tests, API app and routes with HTTP tests (33 tests green).
+- 2026-10-17: web app complete; Playwright E2E harness (isolated API :4100 + web :3100, fresh Postgres) green. Fixed: idea->project redirect, default checklist template, 360px header overflow, near-duplicate SQL (INSERT..RETURNING..LIMIT), Linux native-build approvals, worker argon2 external.

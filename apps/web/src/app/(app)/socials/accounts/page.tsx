@@ -13,6 +13,7 @@ import {
   Notice,
   PageHeader,
 } from '@/components/ui';
+import { InstagramDiagnostics } from '@/components/instagram-diagnostics';
 import { patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
 
@@ -127,6 +128,15 @@ export default function SocialAccountsPage() {
                     </ActionButton>
                   </div>
                   <Prefs a={a} />
+                  <p className="mt-2 text-xs text-muted">
+                    {a.sync?.lastSuccessAt
+                      ? `Last successful sync ${ago(a.sync.lastSuccessAt)}`
+                      : 'Never synced successfully'}
+                    {a.sync?.state === 'PARTIAL' || a.sync?.state === 'FAILED'
+                      ? ` · ${a.sync.state}: ${a.sync.lastError ?? ''}`
+                      : ''}
+                  </p>
+                  <InstagramDiagnostics id={a.id} username={a.username} />
                   <p className="mt-2 text-xs text-muted">
                     Token expires {a.expiresAt ? ago(a.expiresAt) : 'unknown'}
                   </p>

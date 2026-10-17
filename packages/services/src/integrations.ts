@@ -27,6 +27,13 @@ import {
   type NormalizedPost,
 } from '@creatoros/connectors';
 import { PROVIDER, type Provider } from '@creatoros/domain';
+import {
+  autoReconcileConnection,
+  confirmAccountLink,
+  inspectIdentity,
+  needsAccountLink,
+  unlinkAccount,
+} from './identity';
 import { audit, emit } from './audit';
 import { decrypt, decryptJson, encrypt, encryptJson, sha256Hex } from './crypto';
 import { importPublications } from './publishing';
@@ -75,7 +82,8 @@ export function connectorContext(
   };
 }
 
-const publicConn = (c: Conn) => ({
+const publicConn = (c: Conn, identity: unknown = null) => ({
+  identity,
   account: c.provider === 'instagram' ? instagramAccount(c) : undefined,
   id: c.id,
   provider: c.provider,
@@ -125,6 +133,10 @@ export async function listIntegrations(ctx: Ctx, overrides: Partial<ConnectorCon
     .select()
     .from(providerConnections)
     .where(eq(providerConnections.orgId, ctx.orgId));
+  const identityMap = new Map<string, unknown>();
+  for (const c of conns)
+    if (needsAccountLink(c.provider) && c.state !== 'NOT_CONFIGURED')
+      identityMap.set(c.id, await inspectIdentity(ctx, c));
   const out = [];
   for (const provider of PROVIDER) {
     const conn =
@@ -152,11 +164,11 @@ export async function listIntegrations(ctx: Ctx, overrides: Partial<ConnectorCon
       : [];
     out.push({
       provider,
-      connection: conn ? publicConn(conn) : null,
+      connection: conn ? publicConn(conn, identityMap.get(conn.id) ?? null) : null,
       connections: conns
         .filter((c) => c.provider === provider && c.state !== 'NOT_CONFIGURED')
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map(publicConn),
+        .map((c) => publicConn(c, identityMap.get(c.id) ?? null)),
       state: conn && conn.state !== 'NOT_CONFIGURED' ? conn.state : caps.state,
       capabilities: caps,
       cursors: cursors.map((c) => ({
@@ -368,6 +380,8 @@ async function completeInstagramOAuth(
     undefined,
     { provider: 'instagram', accountId, scopes: values.scopes },
   );
+  // Reuse the existing channel account when its verified provider id matches. Username-only matches wait for owner confirmation.
+  await autoReconcileConnection(systemCtx({ db, env }, st.orgId), id).catch(() => null);
   return { connectionId: id, provider: 'instagram' as const, principal: accountId };
 }
 
@@ -553,13 +567,10 @@ export async function linkSocialAccountToConnection(
   socialAccountId: string,
   connectionId: string | null,
 ) {
-  const [a] = await ctx.db
-    .update(socialAccounts)
-    .set({ providerConnectionId: connectionId, updatedAt: new Date() })
-    .where(and(eq(socialAccounts.id, socialAccountId), eq(socialAccounts.orgId, ctx.orgId)))
-    .returning();
-  if (!a) throw notFound('Social account');
-  return a;
+  if (connectionId === null) return unlinkAccount(ctx, socialAccountId);
+  await confirmAccountLink(ctx, connectionId, socialAccountId); // same guards as the confirmation UI
+  const [a] = await ctx.db.select().from(socialAccounts).where(eq(socialAccounts.id, socialAccountId));
+  return a!;
 }
 
 // --------------------------------------------------------------------- sync

@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Async, Badge, Button, Card, EmptyState, Notice, PageHeader } from '@/components/ui';
+import { InstagramDiagnostics } from '@/components/instagram-diagnostics';
 import { useApi } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
 
 const TONE: Record<string, 'ok' | 'warn' | 'neutral' | 'bad'> = {
-  BUILT_UNVERIFIED: 'warn',
+  LIVE_VERIFIED_READ: 'ok',
+  BUILT_MOCK_TESTED_ONLY: 'warn',
+  BUILT_NOT_VERIFIED: 'warn',
   NOT_BUILT: 'neutral',
   UNSUPPORTED_BY_API: 'bad',
 };
@@ -30,7 +33,7 @@ export default function PlatformPage() {
               title={titleCase(p.status)}
             >
               {p.status === 'AVAILABLE_WHEN_CONNECTED'
-                ? 'Code exists but no live call has been verified against this platform.'
+                ? 'Reading is verified against the live API where a row says so. Anything marked mock-tested has not been tried for real.'
                 : 'Not working in CreatorOS. Use the native app for this platform.'}
             </Notice>
             <Card className="mt-4">
@@ -60,6 +63,8 @@ export default function PlatformPage() {
                 </a>
               )}
             </div>
+            {platform === 'instagram' &&
+              mine.map((a) => <InstagramDiagnostics key={a.id} id={a.id} username={a.username} />)}
             {mine.length > 0 && (
               <ul className="mt-4 text-sm">
                 {mine.map((a) => (

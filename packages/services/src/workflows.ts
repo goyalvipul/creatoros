@@ -1042,6 +1042,7 @@ export async function processMetaWebhookEvents(
               direction: e.direction,
               text: e.text,
               hasMedia: e.hasMedia,
+              mediaId: e.mediaId,
               receivedAt: e.receivedAt,
               isLive: Date.now() - e.receivedAt.getTime() < LIVE_WINDOW_MS,
             },

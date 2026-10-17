@@ -132,6 +132,7 @@ export const conversationThreads = pgTable(
     archivedLocal: boolean('archived_local').notNull().default(false),
     internalNotes: text('internal_notes'),
     followUpAt: ts('follow_up_at'),
+    providerMediaId: text('provider_media_id'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

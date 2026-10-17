@@ -155,3 +155,29 @@ export const workflowApprovals = pgTable(
     uniqueIndex('workflow_approvals_exec_uq').on(t.executionId),
   ],
 );
+
+/** Instagram posts we have read from the API, used to show the original media next to a comment. */
+export const socialMediaItems = pgTable(
+  'social_media_items',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => providerConnections.id, { onDelete: 'cascade' }),
+    providerMediaId: text('provider_media_id').notNull(),
+    mediaType: text('media_type'),
+    caption: text('caption'),
+    permalink: text('permalink'),
+    thumbnailUrl: text('thumbnail_url'),
+    postedAt: ts('posted_at'),
+    commentsCount: integer('comments_count').notNull().default(0),
+    commentsSyncedCount: integer('comments_synced_count'),
+    lastSyncedAt: ts('last_synced_at').notNull().defaultNow(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('social_media_items_uq').on(t.connectionId, t.providerMediaId),
+    index('social_media_items_posted_idx').on(t.orgId, t.connectionId, t.postedAt),
+  ],
+);

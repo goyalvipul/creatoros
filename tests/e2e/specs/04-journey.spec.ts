@@ -149,7 +149,7 @@ test('a creator goes from files on disk to a paid collaboration', async ({ page,
     await expect(link.getByLabel('Version').locator('option')).toHaveCount(2);
     await link.getByLabel('Version').selectOption({ index: 1 });
     await link.getByRole('button', { name: 'Link', exact: true }).click();
-    await expect(detail.getByText(assetTitle!)).toBeVisible();
+    await expect(detail.locator('li', { hasText: assetTitle! }).first()).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(detail).toBeHidden();
   }

@@ -252,17 +252,20 @@ interface PlatformInfo {
 }
 
 /** Honest platform matrix. Nothing is reported as working unless code exists; none of it has been live-verified. */
-export function platformCatalog(): PlatformInfo[] {
+export function platformCatalog(live: Record<string, string> = {}): PlatformInfo[] {
+  const mark = (key: string, fallback: string) =>
+    live[key] === 'VERIFIED_LIVE' ? 'LIVE_VERIFIED_READ' : fallback;
   return [
     {
       platform: 'instagram',
       name: 'Instagram',
       status: 'AVAILABLE_WHEN_CONNECTED',
       capabilities: {
-        'Read DMs (webhook, history backfill)': 'BUILT_UNVERIFIED',
-        'Reply to DMs': 'BUILT_UNVERIFIED',
-        'Read comments (webhook)': 'BUILT_UNVERIFIED',
-        'Reply to comments': 'BUILT_UNVERIFIED',
+        'Read DMs (API read + webhook)': mark('conversations', 'BUILT_NOT_VERIFIED'),
+        'Reply to DMs': 'BUILT_MOCK_TESTED_ONLY',
+        'Read comments (API read + webhook)': mark('comments', 'BUILT_NOT_VERIFIED'),
+        'Reply to comments': 'BUILT_MOCK_TESTED_ONLY',
+        'Read posts (media)': mark('media', 'BUILT_NOT_VERIFIED'),
         'Moderate comments': 'NOT_BUILT',
         Publishing: 'NOT_BUILT',
         Insights: 'NOT_BUILT',

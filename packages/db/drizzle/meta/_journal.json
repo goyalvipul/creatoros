@@ -36,6 +36,13 @@
       "when": 1792356400000,
       "tag": "0004_socials_local_state",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792442800000,
+      "tag": "0005_social_media_items",
+      "breakpoints": true
     }
   ]
 }

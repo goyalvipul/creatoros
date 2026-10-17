@@ -10,6 +10,9 @@ import {
   sql,
 } from '@creatoros/db';
 import {
+  instagramDiagnosticsSummary,
+  runInstagramDiagnostics,
+  syncInstagramAccount,
   createThreadCollaboration,
   createThreadTask,
   followUpThread,
@@ -75,8 +78,10 @@ function fake(
       return json({ access_token: t.replace('short', 'long'), expires_in: 5_184_000 });
     }
     if (url.includes('/me?')) {
-      const t = new URL(url).searchParams.get('access_token') ?? '';
-      const u = Object.values(users).find((x) => t.endsWith(x.id))!;
+      const t =
+        new URL(url).searchParams.get('access_token') ??
+        String((init.headers as any)?.authorization ?? '').replace('Bearer ', '');
+      const u = Object.values(users).find((x) => t.endsWith(x.id)) ?? Object.values(users)[0]!;
       return json({
         user_id: u.id,
         username: u.username,
@@ -93,6 +98,66 @@ function fake(
       sends.push({ account, recipient: body.recipient?.id, text: body.message?.text });
       return json({ message_id: `m-${sends.length}-${account}`, recipient_id: body.recipient?.id });
     }
+    if (init.method !== 'POST' && url.includes('/me/media'))
+      return json({
+        data: [
+          {
+            id: 'media1',
+            caption: 'My song',
+            media_type: 'VIDEO',
+            permalink: 'https://ig/p/1',
+            thumbnail_url: 'https://t/1.jpg',
+            timestamp: '2026-10-01T10:00:00+0000',
+            comments_count: 2,
+          },
+        ],
+      });
+    if (url.includes('/media1/comments'))
+      return json({
+        data: [
+          {
+            id: 'c1',
+            text: 'Love it',
+            username: 'fan1',
+            from: { id: 'f1', username: 'fan1' },
+            timestamp: '2026-10-02T10:00:00+0000',
+            replies: {
+              data: [
+                {
+                  id: 'c2',
+                  text: 'Thanks!',
+                  username: 'mehak',
+                  from: { id: '1001', username: 'mehak' },
+                  timestamp: '2026-10-02T11:00:00+0000',
+                },
+              ],
+            },
+          },
+        ],
+      });
+    if (url.includes('/me/conversations'))
+      return json({
+        data: [
+          {
+            id: 'conv1',
+            updated_time: '2026-10-03T10:00:00+0000',
+            participants: { data: [{ id: '1001' }, { id: 'p9', username: 'brandx' }] },
+            messages: {
+              data: [
+                {
+                  id: 'm1',
+                  created_time: '2026-10-03T10:00:00+0000',
+                  from: { id: 'p9', username: 'brandx' },
+                  message: 'Hi, paid collab?',
+                },
+              ],
+            },
+          },
+        ],
+      });
+    if (url.includes('/subscribed_apps'))
+      return json({ data: [{ subscribed_fields: ['messages', 'comments'] }] });
+    if (url.includes('/me?')) return json({ user_id: '1001', username: 'mehak' });
     return json({}, 404);
   };
   return {
@@ -450,5 +515,52 @@ describe('local organisation, follow-ups and collaboration links', () => {
     expect(o.accountsTotal).toBe(2);
     expect(o.leads).toBe(1);
     expect(o.mentions).toBeNull();
+  });
+});
+
+describe('live-shaped synchronisation and diagnostics', () => {
+  it('imports media, comments and DMs as historical, is idempotent, incremental and never triggers workflows', async () => {
+    const s = await setup();
+    const wf: any = await createWorkflow(s.org.ctx, {
+      name: 'W',
+      mode: 'DRAFT_ONLY',
+      connectionIds: [s.A],
+      definition: def(reply),
+    });
+    await activateWorkflow(s.org.ctx, wf.id);
+    const r1 = await syncInstagramAccount(s.org.ctx, s.A, s.ig.overrides);
+    expect(r1.state).toBe('OK');
+    expect(r1.counts).toMatchObject({ media: 1, comments: 2, conversations: 1, messages: 1 });
+    const r2 = await syncInstagramAccount(s.org.ctx, s.A, s.ig.overrides);
+    expect(r2.counts.newMessages).toBe(0);
+    const [{ n }] = (
+      await h.db.execute(
+        sql`select count(*)::int n from messages m join conversation_threads t on t.id = m.thread_id where t.org_id = ${s.org.ctx.orgId}`,
+      )
+    ).rows as any[];
+    expect(n).toBe(3);
+    const ex = await h.db.select().from(workflowExecutions).where(eq(workflowExecutions.workflowId, wf.id));
+    expect(ex).toHaveLength(0);
+    const comments = await listSocialThreads(s.org.ctx, { kind: 'COMMENT' });
+    expect(comments).toHaveLength(1);
+    expect(comments[0].mediaCaption).toBe('My song');
+    const dm = (await listSocialThreads(s.org.ctx, { kind: 'DM' }))[0];
+    expect((await getSocialThread(s.org.ctx, comments[0].id)).media?.permalink).toBe('https://ig/p/1');
+    expect(dm.connectionId).toBe(s.A);
+    // account B has nothing of A's
+    expect(await listSocialThreads(s.org.ctx, { connectionIds: [s.B] })).toHaveLength(0);
+  });
+
+  it('diagnostics store real-looking evidence, never the token, and report honest verdicts', async () => {
+    const s = await setup();
+    await runInstagramDiagnostics(s.org.ctx, s.A, s.ig.overrides);
+    const d: any = await instagramDiagnosticsSummary(s.org.ctx, s.A);
+    expect(JSON.stringify(d)).not.toContain('long-1001');
+    const by = Object.fromEntries(d.items.map((i: any) => [i.key, i.verdict]));
+    expect(by.profile).toBe('VERIFIED_LIVE');
+    expect(by.webhookDelivery).toBe('NOT_RECEIVED');
+    expect(by.replyImplemented).toBe('YES_CODE_MOCK_TESTED');
+    expect(by.replyLive).toBe('NO');
+    expect(by.publishing).toBe('NO');
   });
 });

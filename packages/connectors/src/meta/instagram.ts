@@ -495,6 +495,7 @@ export async function listInstagramConversations(
 /** Normalises a verified Instagram webhook entry into message/comment events. Unknown shapes are ignored, never guessed. */
 export function parseInstagramWebhookEntry(entry: any): {
   accountId: string;
+  mediaId: string | null;
   kind: 'DM' | 'COMMENT';
   providerThreadId: string;
   providerMsgId: string;
@@ -517,6 +518,7 @@ export function parseInstagramWebhookEntry(entry: any): {
     if (!participant || participant === 'undefined') continue;
     out.push({
       accountId,
+      mediaId: null,
       kind: 'DM',
       providerThreadId: `dm:${participant}`,
       providerMsgId: String(mid),
@@ -537,6 +539,7 @@ export function parseInstagramWebhookEntry(entry: any): {
     const root = String(v.parent_id ?? v.id);
     out.push({
       accountId,
+      mediaId: v.media?.id != null ? String(v.media.id) : null,
       kind: 'COMMENT',
       providerThreadId: `comment:${root}`,
       providerMsgId: String(v.id),
@@ -550,4 +553,142 @@ export function parseInstagramWebhookEntry(entry: any): {
     });
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ paged reads (live-verified: profile, media, comments, conversations answered HTTP 200) */
+
+const bearer = (ctx: ConnectorContext) => {
+  if (!ctx.credentials.accessToken) throw new ConnectorError('AUTH_EXPIRED', 'Instagram is not connected');
+  return { authorization: `Bearer ${ctx.credentials.accessToken}` };
+};
+
+export interface IgMediaItem {
+  id: string;
+  mediaType: string | null;
+  caption: string | null;
+  permalink: string | null;
+  thumbnailUrl: string | null;
+  timestamp: string | null;
+  commentsCount: number;
+}
+
+export interface Page<T> {
+  items: T[];
+  after: string | null;
+}
+
+export async function listInstagramMediaPage(
+  ctx: ConnectorContext,
+  opts: { after?: string | null; limit?: number } = {},
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<Page<IgMediaItem>> {
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/media`, {
+    headers: bearer(ctx),
+    query: {
+      fields: 'id,caption,media_type,permalink,thumbnail_url,media_url,timestamp,comments_count',
+      limit: String(opts.limit ?? 25),
+      after: opts.after ?? undefined,
+    },
+  });
+  return {
+    items: (data?.data ?? []).map((m: any) => ({
+      id: String(m.id),
+      mediaType: m.media_type ?? null,
+      caption: typeof m.caption === 'string' ? m.caption : null,
+      permalink: m.permalink ?? null,
+      thumbnailUrl: m.thumbnail_url ?? (m.media_type === 'IMAGE' ? (m.media_url ?? null) : null),
+      timestamp: m.timestamp ?? null,
+      commentsCount: Number(m.comments_count) || 0,
+    })),
+    after: data?.paging?.next ? (data?.paging?.cursors?.after ?? null) : null,
+  };
+}
+
+export interface IgComment {
+  id: string;
+  rootId: string;
+  text: string;
+  username: string | null;
+  fromId: string | null;
+  timestamp: string;
+}
+
+/** One page of top-level comments, each with its replies flattened (replies carry the root id). */
+export async function listInstagramCommentsPage(
+  ctx: ConnectorContext,
+  mediaId: string,
+  opts: { after?: string | null; limit?: number } = {},
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<Page<IgComment>> {
+  const { data } = await http<any>(
+    ctx,
+    `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(mediaId)}/comments`,
+    {
+      headers: bearer(ctx),
+      query: {
+        fields: 'id,text,username,timestamp,from,replies{id,text,username,timestamp,from}',
+        limit: String(opts.limit ?? 25),
+        after: opts.after ?? undefined,
+      },
+    },
+  );
+  const out: IgComment[] = [];
+  for (const c of data?.data ?? []) {
+    const one = (x: any, root: string) => {
+      if (!x?.id || typeof x.text !== 'string') return;
+      out.push({
+        id: String(x.id),
+        rootId: root,
+        text: x.text,
+        username: x.username ?? x.from?.username ?? null,
+        fromId: x.from?.id != null ? String(x.from.id) : null,
+        timestamp: x.timestamp,
+      });
+    };
+    one(c, String(c.id));
+    for (const r of c.replies?.data ?? []) one(r, String(c.id));
+  }
+  return { items: out, after: data?.paging?.next ? (data?.paging?.cursors?.after ?? null) : null };
+}
+
+export interface IgConversationPage {
+  conversations: { id: string; updatedTime: string | null; messages: NormalizedSocialMessage[] }[];
+  after: string | null;
+}
+
+export async function listInstagramConversationPage(
+  ctx: ConnectorContext,
+  accountId: string,
+  opts: { after?: string | null; limit?: number } = {},
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<IgConversationPage> {
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/conversations`, {
+    headers: bearer(ctx),
+    query: {
+      platform: 'instagram',
+      limit: String(opts.limit ?? 10),
+      after: opts.after ?? undefined,
+      fields: 'id,updated_time,participants,messages.limit(25){id,created_time,from,to,message}',
+    },
+  });
+  const conversations = (data?.data ?? []).map((c: any) => {
+    const other = (c.participants?.data ?? []).find((p: any) => String(p.id) !== accountId);
+    const messages: NormalizedSocialMessage[] = [];
+    for (const m of c.messages?.data ?? []) {
+      if (!m?.id || typeof m.message !== 'string') continue;
+      const fromMe = String(m.from?.id) === accountId;
+      const who = fromMe ? other : m.from;
+      messages.push({
+        providerThreadId: String(c.id),
+        providerMsgId: String(m.id),
+        participantId: String(who?.id ?? other?.id ?? 'unknown'),
+        participantName: who?.username ?? who?.name ?? null,
+        direction: fromMe ? 'OUTBOUND' : 'INBOUND',
+        text: m.message,
+        receivedAt: m.created_time,
+      });
+    }
+    return { id: String(c.id), updatedTime: c.updated_time ?? null, messages };
+  });
+  return { conversations, after: data?.paging?.next ? (data?.paging?.cursors?.after ?? null) : null };
 }

@@ -18,6 +18,7 @@ import {
   runSync,
   snapshotAnalytics,
   syncDueTaskLinks,
+  syncInstagramAccount,
   systemCtx,
   verifyBackup,
   type ConnectorOverrides,
@@ -194,10 +195,30 @@ export async function jobMaintenance(d: WorkerDeps) {
   return { evicted };
 }
 
+/** Incremental, read-only Instagram sync for every healthy account. Historical imports never trigger workflows. */
+export async function jobSocialSync(d: WorkerDeps) {
+  const rows = rowsOf<{ id: string; org_id: string }>(
+    await d.db.execute(
+      sql`select id, org_id from provider_connections where provider = 'instagram' and state in ('ACTIVE','PARTIAL_SYNC') and encrypted_token_ref is not null`,
+    ),
+  );
+  const out = { accounts: rows.length, ok: 0, failed: 0 };
+  for (const r of rows) {
+    try {
+      await syncInstagramAccount(systemCtx({ db: d.db, env: d.env }, r.org_id), r.id, d.overrides);
+      out.ok += 1;
+    } catch {
+      out.failed += 1;
+    }
+  }
+  return out;
+}
+
 export const JOB_TABLE = {
   heartbeat: jobHeartbeat,
   events: jobEvents,
   actions: jobActions,
+  'social-sync': jobSocialSync,
   'social-events': (d: WorkerDeps) => processMetaWebhookEvents(d.db, d.env, d.overrides),
   'sync-fast': (d: WorkerDeps) => jobSync(d, 'fast'),
   'sync-slow': (d: WorkerDeps) => jobSync(d, 'slow'),

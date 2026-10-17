@@ -5,6 +5,7 @@ import {
   eq,
   messages,
   providerConnections,
+  socialMediaItems,
   socialOutboundMessages,
   sql,
   type Db,
@@ -12,7 +13,9 @@ import {
 import {
   ConnectorError,
   INSTAGRAM_SCOPES,
-  listInstagramConversations,
+  listInstagramCommentsPage,
+  listInstagramConversationPage,
+  listInstagramMediaPage,
   readInstagramClientConfig,
   replyToInstagramComment,
   sendInstagramDm,
@@ -119,6 +122,19 @@ export async function listSocialAccounts(ctx: Ctx) {
       where t.org_id = ${ctx.orgId} and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK') and t.merged_into_id is null
       group by t.provider_connection_id`),
   );
+  const linkedRows = rowsOf<{
+    conn: string;
+    id: string;
+    handle: string;
+    channel: string;
+    brand: string | null;
+  }>(
+    await ctx.db.execute(sql`
+      select a.provider_connection_id as conn, a.id, a.handle, c.name as channel, b.name as brand
+      from social_accounts a join channels c on c.id = a.channel_id left join brands b on b.id = c.brand_id
+      where a.org_id = ${ctx.orgId} and a.deleted_at is null and a.provider_connection_id is not null and a.platform = 'instagram'`),
+  );
+  const linkedByConn = new Map(linkedRows.map((r) => [r.conn, r]));
   return conns
     .filter((c) => c.state !== 'NOT_CONFIGURED' || c.encryptedTokenRef)
     .map((c) => {
@@ -135,6 +151,8 @@ export async function listSocialAccounts(ctx: Ctx) {
         lastError: c.lastError,
         expiresAt: c.expiresAt,
         settings: accountSettings(c),
+        sync: syncState(c),
+        linked: linkedByConn.get(c.id) ?? null,
         capabilities: instagramCapabilities(c, ctx.env),
         needReply: n?.need ?? 0,
         unread: n?.unread ?? 0,
@@ -175,6 +193,8 @@ export interface SocialEvent {
   direction: 'INBOUND' | 'OUTBOUND';
   text: string;
   hasMedia?: boolean;
+  /** Instagram media id a comment was left on. */
+  mediaId?: string | null;
   receivedAt: Date;
   /** false for backfills and stale redeliveries: they are stored but never trigger automation. */
   isLive: boolean;
@@ -216,46 +236,242 @@ export async function ingestSocialEvent(ctx: Ctx, ev: SocialEvent) {
         kind: ev.kind,
         optedOut: optOut ? true : sql`opted_out`,
         providerConnectionId: conn.id,
+        providerMediaId: ev.mediaId ?? sql`provider_media_id`,
       } as any)
       .where(eq(conversationThreads.id, r.threadId));
   }
   return { ...r, isNewConversation, accountId };
 }
 
-/** Read-only backfill of recent DMs. Everything imported is marked historical so no automation runs on it. */
-export async function syncSocialConversations(
+// ------------------------------------------------------------------ synchronisation
+
+export interface SyncState {
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  state: 'IDLE' | 'RUNNING' | 'OK' | 'PARTIAL' | 'FAILED';
+  lastError: string | null;
+  counts: { media: number; comments: number; conversations: number; messages: number; newMessages: number };
+  steps: { key: string; ok: boolean; error?: string; note?: string; fetched: number }[];
+  /** newest conversation update already imported; later runs skip older conversations. */
+  conversationsSince: string | null;
+}
+
+export function syncState(conn: Pick<Conn, 'config'>): SyncState | null {
+  return (((conn.config ?? {}) as any).social?.sync as SyncState | undefined) ?? null;
+}
+
+async function saveSync(db: Db, conn: Conn, patch: Partial<SyncState>) {
+  const [fresh] = await db.select().from(providerConnections).where(eq(providerConnections.id, conn.id));
+  const cfg = (fresh?.config ?? {}) as any;
+  const next = { ...(cfg.social?.sync ?? {}), ...patch };
+  await db
+    .update(providerConnections)
+    .set({ config: { ...cfg, social: { ...(cfg.social ?? {}), sync: next } } })
+    .where(eq(providerConnections.id, conn.id));
+  return next as SyncState;
+}
+
+const MAX_PAGES = 4;
+const MAX_COMMENT_MEDIA = 30;
+
+/**
+ * Pulls recent media, their comments and DM conversations from Instagram (read-only) into CreatorOS tables.
+ * Everything imported is historical (`isLive: false`): it is stored and searchable but never triggers a workflow.
+ * Incremental: media/comment pages stop early, comments are only re-read when a post's comment count changed, and
+ * conversations older than the last import are skipped. Each step fails independently.
+ */
+export async function syncInstagramAccount(
   ctx: Ctx,
   connectionId: string,
   overrides: Partial<ConnectorContext> = {},
 ) {
   const conn = await loadConnection(ctx.db, ctx.orgId, connectionId);
-  if (!instagramCapabilities(conn, ctx.env).readMessages.startsWith('AVAILABLE'))
-    throw conflict(
-      'Reading messages is not available for this account (permission missing or reconnect needed).',
-      undefined,
-      'CAPABILITY_UNAVAILABLE',
-    );
+  if (conn.state !== 'ACTIVE' && conn.state !== 'PARTIAL_SYNC')
+    throw conflict('Reconnect this account before syncing.', undefined, 'NEEDS_RECONNECT');
+  const [running] = rowsOf<{ n: number }>(
+    await ctx.db.execute(
+      sql`select count(*)::int n from provider_connections where id = ${conn.id} and config->'social'->'sync'->>'state' = 'RUNNING' and (config->'social'->'sync'->>'lastAttemptAt')::timestamptz > now() - interval '5 minutes'`,
+    ),
+  );
+  if (running!.n) throw conflict('A sync is already running for this account.', undefined, 'SYNC_RUNNING');
+  const prev = syncState(conn);
+  const started = new Date().toISOString();
+  await saveSync(ctx.db, conn, { state: 'RUNNING', lastAttemptAt: started });
+  const granted = conn.scopes ?? [];
   const cctx = connectorContext(ctx.db, ctx.env, conn, overrides);
   const version = readInstagramClientConfig(ctx.env.processEnv)?.graphVersion;
-  const list = await listInstagramConversations(cctx, conn.principalHint!, version);
-  let imported = 0;
-  for (const m of list) {
-    const r = await ingestSocialEvent(ctx, {
-      connectionId: conn.id,
-      kind: 'DM',
-      providerThreadId: `dm:${m.participantId}`,
-      providerMsgId: m.providerMsgId,
-      participantId: m.participantId,
-      participantName: m.participantName,
-      direction: m.direction,
-      text: m.text,
-      receivedAt: new Date(m.receivedAt),
-      isLive: false,
+  const accountId = conn.principalHint!;
+  const counts = { media: 0, comments: 0, conversations: 0, messages: 0, newMessages: 0 };
+  const steps: SyncState['steps'] = [];
+  const fail = (key: string, e: unknown, fetched: number) =>
+    steps.push({
+      key,
+      ok: false,
+      fetched,
+      error: ((e as Error).message ?? String(e))
+        .replace(/access_token=[^&\s"]+/gi, 'access_token=[token]')
+        .slice(0, 240),
     });
-    if (!r.duplicate) imported += 1;
+
+  // ---- media + comments
+  if (granted.includes(INSTAGRAM_SCOPES.basic)) {
+    let fetched = 0;
+    try {
+      let after: string | null = null;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const p = await listInstagramMediaPage(cctx, { after, limit: 25 }, version);
+        for (const m of p.items) {
+          fetched += 1;
+          await ctx.db
+            .insert(socialMediaItems)
+            .values({
+              orgId: ctx.orgId,
+              connectionId: conn.id,
+              providerMediaId: m.id,
+              mediaType: m.mediaType,
+              caption: m.caption,
+              permalink: m.permalink,
+              thumbnailUrl: m.thumbnailUrl,
+              postedAt: m.timestamp ? new Date(m.timestamp) : null,
+              commentsCount: m.commentsCount,
+            })
+            .onConflictDoUpdate({
+              target: [socialMediaItems.connectionId, socialMediaItems.providerMediaId],
+              set: {
+                caption: m.caption,
+                permalink: m.permalink,
+                thumbnailUrl: m.thumbnailUrl,
+                commentsCount: m.commentsCount,
+                lastSyncedAt: new Date(),
+              },
+            });
+        }
+        after = p.after;
+        if (!after) break;
+      }
+      counts.media = fetched;
+      steps.push({ key: 'media', ok: true, fetched });
+    } catch (e) {
+      fail('media', e, fetched);
+    }
   }
-  return { fetched: list.length, imported };
+  if (granted.includes(INSTAGRAM_SCOPES.comments)) {
+    let fetched = 0;
+    try {
+      const due = rowsOf<{ id: string; provider_media_id: string; comments_count: number }>(
+        await ctx.db.execute(sql`
+          select id, provider_media_id, comments_count from social_media_items
+          where connection_id = ${conn.id} and comments_count > 0
+            and (comments_synced_count is null or comments_synced_count <> comments_count)
+          order by posted_at desc nulls last limit ${MAX_COMMENT_MEDIA}`),
+      );
+      let emptyReported = 0;
+      for (const m of due) {
+        const before = fetched;
+        let after: string | null = null;
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const p = await listInstagramCommentsPage(cctx, m.provider_media_id, { after }, version);
+          for (const c of p.items) {
+            fetched += 1;
+            await ingestSocialEvent(ctx, {
+              connectionId: conn.id,
+              kind: 'COMMENT',
+              providerThreadId: `comment:${c.rootId}`,
+              providerMsgId: c.id,
+              participantId: c.fromId ?? c.username ?? 'unknown',
+              participantName: c.username,
+              direction:
+                c.fromId === accountId || c.username === (conn.config as any)?.username
+                  ? 'OUTBOUND'
+                  : 'INBOUND',
+              text: c.text,
+              mediaId: m.provider_media_id,
+              receivedAt: new Date(c.timestamp),
+              isLive: false,
+            });
+          }
+          after = p.after;
+          if (!after) break;
+        }
+        if (fetched === before) emptyReported += 1;
+        await ctx.db
+          .update(socialMediaItems)
+          .set({ commentsSyncedCount: m.comments_count })
+          .where(eq(socialMediaItems.id, m.id));
+      }
+      counts.comments = fetched;
+      steps.push({
+        key: 'comments',
+        ok: true,
+        fetched,
+        note: emptyReported
+          ? `${emptyReported} post(s) report comments but Instagram returned none. While the Meta app is in development mode (or without Advanced Access) Instagram may only return comments from accounts that have a role on the app. Not confirmed with Meta.`
+          : undefined,
+      });
+    } catch (e) {
+      fail('comments', e, fetched);
+    }
+  }
+
+  // ---- conversations
+  if (granted.includes(INSTAGRAM_SCOPES.messages)) {
+    let fetched = 0;
+    let newest = prev?.conversationsSince ?? null;
+    try {
+      let after: string | null = null;
+      let stop = false;
+      for (let page = 0; page < MAX_PAGES && !stop; page++) {
+        const p = await listInstagramConversationPage(cctx, accountId, { after }, version);
+        for (const c of p.conversations) {
+          if (prev?.conversationsSince && c.updatedTime && c.updatedTime <= prev.conversationsSince) {
+            stop = true; // conversations are newest-first: everything after this is already imported
+            break;
+          }
+          counts.conversations += 1;
+          if (c.updatedTime && (!newest || c.updatedTime > newest)) newest = c.updatedTime;
+          for (const m of c.messages) {
+            fetched += 1;
+            const r = await ingestSocialEvent(ctx, {
+              connectionId: conn.id,
+              kind: 'DM',
+              providerThreadId: `dm:${m.participantId}`,
+              providerMsgId: m.providerMsgId,
+              participantId: m.participantId,
+              participantName: m.participantName,
+              direction: m.direction,
+              text: m.text,
+              receivedAt: new Date(m.receivedAt),
+              isLive: false,
+            });
+            if (!r.duplicate) counts.newMessages += 1;
+          }
+        }
+        after = p.after;
+        if (!after) break;
+      }
+      counts.messages = fetched;
+      steps.push({ key: 'conversations', ok: true, fetched });
+    } catch (e) {
+      fail('conversations', e, fetched);
+    }
+    await saveSync(ctx.db, conn, { conversationsSince: newest });
+  }
+
+  const ok = steps.length > 0 && steps.every((s) => s.ok);
+  const some = steps.some((s) => s.ok);
+  const done = await saveSync(ctx.db, conn, {
+    state: ok ? 'OK' : some ? 'PARTIAL' : 'FAILED',
+    lastSuccessAt: ok ? new Date().toISOString() : (prev?.lastSuccessAt ?? null),
+    lastError: steps.find((s) => !s.ok)?.error ?? null,
+    counts,
+    steps,
+  });
+  await audit(ctx, 'social.sync', { type: 'provider_connection', id: conn.id }, undefined, { counts, ok });
+  return done;
 }
+
+/** Kept for callers of the former name. */
+export const syncSocialConversations = syncInstagramAccount;
 
 // ------------------------------------------------------------------ reading
 
@@ -318,6 +534,8 @@ export async function listSocialThreads(
              c.config->>'username' as "accountUsername", t.participant_id as "participantId", t.participant_name as "participantName",
              t.last_inbound_at as "lastInboundAt", t.last_outbound_at as "lastOutboundAt", t.opportunity_id as "opportunityId",
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview,
+             (select i.caption from social_media_items i where i.connection_id = t.provider_connection_id and i.provider_media_id = t.provider_media_id) as "mediaCaption",
+             (select i.thumbnail_url from social_media_items i where i.connection_id = t.provider_connection_id and i.provider_media_id = t.provider_media_id) as "mediaThumbnail",
              (select max(m.received_at) from messages m where m.thread_id = t.id) as "lastMessageAt",
              (select count(*)::int from messages m where m.thread_id = t.id and m.direction = 'INBOUND' and not m.is_read) as unread,
              (select cl.category from messages m join inbound_classifications cl on cl.message_id = m.id where m.thread_id = t.id order by cl.confidence desc limit 1) as category
@@ -378,8 +596,30 @@ export async function getSocialThread(ctx: Ctx, id: string) {
     .orderBy(desc(socialOutboundMessages.createdAt))
     .limit(50);
   const cfg = (conn?.config ?? {}) as Record<string, any>;
+  const [media] = t.providerMediaId
+    ? await ctx.db
+        .select()
+        .from(socialMediaItems)
+        .where(
+          and(
+            eq(socialMediaItems.connectionId, t.providerConnectionId ?? ''),
+            eq(socialMediaItems.providerMediaId, t.providerMediaId),
+          ),
+        )
+    : [];
   return {
     id: t.id,
+    media: media
+      ? {
+          id: media.providerMediaId,
+          type: media.mediaType,
+          caption: media.caption,
+          permalink: media.permalink,
+          thumbnailUrl: media.thumbnailUrl,
+          postedAt: media.postedAt,
+          commentsCount: media.commentsCount,
+        }
+      : null,
     platform: t.source,
     kind: t.kind,
     state: t.state,

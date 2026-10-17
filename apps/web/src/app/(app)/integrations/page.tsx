@@ -14,6 +14,7 @@ import {
   PageHeader,
   StateBadge,
 } from '@/components/ui';
+import { IdentityLink } from '@/components/identity-link';
 import { post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
 
@@ -121,6 +122,9 @@ export default function IntegrationsPage() {
                           <p className="mt-1 text-sm text-muted">Account: {conn.principalHint}</p>
                         )}
                         {conn?.lastError && <p className="mt-1 text-sm text-bad">{conn.lastError}</p>}
+                        {conn?.identity && conn.identity.status !== 'LINKED' && (
+                          <IdentityLink connectionId={conn.id} identity={conn.identity} />
+                        )}
                         {caps.blockers?.length > 0 && (
                           <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-muted">
                             {caps.blockers.map((b: string) => (
@@ -335,6 +339,7 @@ function InstagramCard({
                 <StateBadge state={c.state} />
               </div>
               {c.lastError && <p className="mt-2 text-sm text-bad">{c.lastError}</p>}
+              <IdentityLink connectionId={c.id} identity={c.identity} />
               <div className="mt-2 flex flex-wrap gap-1">
                 {Object.entries(CAP_LABELS).map(([k, label]) => (
                   <Badge key={k} tone={a.capabilities?.[k] ? 'ok' : 'neutral'}>

@@ -4,6 +4,13 @@ import { WORKFLOW_MODE, WORKFLOW_TEMPLATES } from '@creatoros/domain';
 import {
   activateWorkflow,
   approveApproval,
+  confirmAccountLink,
+  createAndLinkAccount,
+  getConnectionIdentity,
+  runSync,
+  instagramDiagnosticsSummary,
+  runInstagramDiagnostics,
+  syncInstagramAccount,
   createThreadCollaboration,
   createThreadTask,
   followUpThread,
@@ -33,7 +40,6 @@ import {
   setPauseAllSending,
   simulateWorkflow,
   snoozeApproval,
-  syncSocialConversations,
   updateAccountSettings,
   updateWorkflow,
   workflowOverview,
@@ -98,7 +104,85 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       role: 'EDITOR',
       params: idParam,
     },
-    ({ ctx, params }) => syncSocialConversations(ctx, params.id, ov()),
+    ({ ctx, params }) => syncInstagramAccount(ctx, params.id, ov()),
+  );
+
+  route(
+    {
+      method: 'GET',
+      url: '/socials/accounts/:id/diagnostics',
+      tag: 'Socials',
+      summary: 'Instagram diagnostics: real vs mocked evidence',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    ({ ctx, params }) => instagramDiagnosticsSummary(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/accounts/:id/diagnostics',
+      tag: 'Socials',
+      summary: 'Run read-only live probes (no sends, no changes)',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    async ({ ctx, params }) => {
+      await runInstagramDiagnostics(ctx, params.id, ov());
+      return instagramDiagnosticsSummary(ctx, params.id);
+    },
+  );
+
+  // ================================================================ identity: connection <-> Channels account
+  route(
+    {
+      method: 'GET',
+      url: '/integrations/connections/:id/identity',
+      tag: 'Integrations',
+      summary: 'How this connection maps to a Channels account, with candidates',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    ({ ctx, params }) => getConnectionIdentity(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/integrations/connections/:id/link-account',
+      tag: 'Integrations',
+      summary: 'Owner confirmation: link an existing channel account to this connection',
+      role: 'OWNER',
+      params: idParam,
+      body: z.object({ socialAccountId: uuid }),
+    },
+    async ({ ctx, params, body }) => {
+      const identity = await confirmAccountLink(ctx, params.id, body.socialAccountId);
+      return { identity };
+    },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/integrations/connections/:id/create-account',
+      tag: 'Integrations',
+      summary: 'Create the account under an existing channel and link it (never creates a brand or channel)',
+      role: 'OWNER',
+      params: idParam,
+      body: z.object({ channelId: uuid }),
+    },
+    async ({ ctx, params, body }) => ({
+      identity: await createAndLinkAccount(ctx, params.id, body.channelId),
+    }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/integrations/connections/:id/import',
+      tag: 'Integrations',
+      summary: 'Import posts for a linked connection now (read-only)',
+      params: idParam,
+    },
+    ({ ctx, params }) => runSync(ctx.db, ctx.env, params.id, {}, ov()),
   );
 
   // ================================================================ inbox
@@ -194,7 +278,15 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Honest platform capability catalogue',
       role: 'EDITOR',
     },
-    () => platformCatalog(),
+    async ({ ctx }) => {
+      const accounts: any[] = await listSocialAccounts(ctx);
+      const live: Record<string, string> = {};
+      if (accounts[0]) {
+        const d = await instagramDiagnosticsSummary(ctx, accounts[0].id);
+        for (const i of d.items) live[i.key] = i.verdict;
+      }
+      return platformCatalog(live);
+    },
   );
   route(
     {

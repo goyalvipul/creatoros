@@ -32,6 +32,7 @@ export default function CommentsPage() {
                     <Badge>@{t.accountUsername ?? t.accountId}</Badge>
                     <Badge tone={t.state === 'NEED_REPLY' ? 'warn' : 'neutral'}>{titleCase(t.state)}</Badge>
                   </div>
+                  {t.mediaCaption && <div className="truncate text-xs text-muted">On: {t.mediaCaption}</div>}
                   <div className="truncate text-xs text-muted">
                     {t.preview} · {ago(t.lastMessageAt)}
                   </div>

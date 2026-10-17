@@ -69,3 +69,14 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 
 - Added: Socials sub-navigation, overview dashboard, platform pages with an honest capability catalogue, comments / leads / scheduled pages, accounts settings (nickname, tone, signature, language), inbox saved views, local star/archive/notes, follow-up/task/collaboration actions (idempotent), message notifications, migration 0004. Tests in `socials-workflows.test.ts`.
 - Not built: Facebook/Messenger, YouTube comments, Threads, TikTok connectors; AI reply assist; media/post context; mentions; saved-view persistence; keyboard shortcuts; comment moderation; per-account notification preferences; Playwright specs.
+
+## Instagram live sync, diagnostics and channel identity (2026-10-17)
+
+- Diagnostics (`runInstagramDiagnostics`), paged incremental sync (media, comments, conversations), media context in the inbox.
+- Identity mapping (`packages/services/src/identity.ts`): a connection is tied to a Channels account through `social_accounts.provider_connection_id`.
+  Auto-link happens only on a verified provider id (`external_account_id`). A username match is offered as a candidate and needs
+  one owner confirmation (Integrations > "Connect existing channel"); a missing account can be created under an existing channel only.
+  Links survive reconnect, token refresh and restart. Guards: one account per connection, no cross-connection steal, id mismatch refused.
+- Applied live: @mehakviking account `064daec5...` linked to its connection (verified id stored), 64 posts imported, repeat import is a no-op.
+- Tests: `tests/integration/test/identity-link.test.ts` (mock Instagram). Live evidence is the CLI run above (`instagram-link.js`).
+- Still blocked externally: comments and DMs return 0 records (likely Meta app access level / App Review); no webhook POST received yet.

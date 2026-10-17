@@ -25,3 +25,5 @@ export * from './meta-webhooks';
 export * from './social';
 export * from './workflows';
 export * from './socials-ops';
+export * from './instagram-diagnostics';
+export * from './identity';

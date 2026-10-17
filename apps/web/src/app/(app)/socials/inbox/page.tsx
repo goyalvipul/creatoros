@@ -243,6 +243,29 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
             {t.optedOut && <Badge tone="bad">Asked not to be messaged automatically</Badge>}
           </div>
+          {t.media && (
+            <div className="mb-3 flex gap-2 rounded-lg border border-border bg-panel2 p-2 text-sm">
+              {t.media.thumbnailUrl && (
+                <img src={t.media.thumbnailUrl} alt="" className="size-14 rounded object-cover" />
+              )}
+              <div className="min-w-0">
+                <div className="text-xs text-muted">
+                  Comment on your {String(t.media.type ?? 'post').toLowerCase()}
+                </div>
+                <div className="line-clamp-2">{t.media.caption ?? '(no caption)'}</div>
+                {t.media.permalink && (
+                  <a
+                    href={t.media.permalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-accent"
+                  >
+                    Open on Instagram
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           <Tools t={t} id={id} />
           <ul className="mb-3 max-h-96 space-y-2 overflow-y-auto">
             {t.messages.map((m: any) => (

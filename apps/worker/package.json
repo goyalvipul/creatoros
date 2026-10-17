@@ -21,6 +21,7 @@
     "@creatoros/db": "workspace:*",
     "@creatoros/domain": "workspace:*",
     "@creatoros/services": "workspace:*",
+    "argon2": "^0.45.1",
     "bullmq": "^6.3.15",
     "ioredis": "^5.11.1"
   },

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { and, eq, fileInstances, mediaObjects, scanRuns, storageRoots, type DbHandle } from '@creatoros/db';
-import { processIngest, getHashRequests, type AuthedAgent, type Ctx } from '@creatoros/services';
+import { and, duplicateCandidates, eq, fileInstances, mediaObjects, scanRuns, storageRoots, type DbHandle } from '@creatoros/db';
+import { detectNearDuplicates, processIngest, getHashRequests, type AuthedAgent, type Ctx } from '@creatoros/services';
 import { makeOrg, makeRoot, openDb, pairTestDevice } from '../src/helpers';
 
 let h: DbHandle;
@@ -189,6 +189,31 @@ describe('agent ingest', () => {
     const { root, send } = await setup();
     await send(randomUUID(), 'START', [file('D:\\Media\\a.mp4')]);
     expect((await inst(root.id)).length).toBe(1);
+  });
+});
+
+describe('near-duplicate detection', () => {
+  it('flags similar names with similar duration, ignores unrelated files, is repeatable (T14)', async () => {
+    const { root, dev, ctx } = await setup();
+    const mk = async (name: string, hash: string, size: number, durationMs: number) => {
+      const [mo] = await h.db
+        .insert(mediaObjects)
+        .values({ orgId: ctx.orgId, exactHash: hash.repeat(64).slice(0, 64), size, kind: 'VIDEO', tech: { durationMs, width: 1920, height: 1080 } })
+        .returning();
+      await h.db.insert(fileInstances).values({ orgId: ctx.orgId, rootId: root.id, deviceId: dev.deviceId, canonicalPath: `d:/media/${name}`, displayPath: `D:\\Media\\${name}`, fileName: name, ext: 'mp4', size, mediaObjectId: mo!.id, fileType: 'VIDEO', fullHash: mo!.exactHash });
+      return mo!;
+    };
+    const a = await mk('rooftop_session_final.mp4', 'a', 5_000_000, 180_000);
+    const b = await mk('rooftop_session_final_v2.mp4', 'b', 5_100_000, 180_400);
+    await mk('completely different thing.mp4', 'c', 9_000_000, 30_000);
+
+    const first = await detectNearDuplicates(ctx);
+    expect(first.suggested).toBe(1);
+    const second = await detectNearDuplicates(ctx);
+    expect(second.suggested).toBe(0);
+    const rows = await h.db.select().from(duplicateCandidates).where(eq(duplicateCandidates.orgId, ctx.orgId));
+    expect(rows.length).toBe(1);
+    expect([rows[0]!.mediaAId, rows[0]!.mediaBId].sort()).toEqual([a.id, b.id].sort());
   });
 });
 

@@ -291,9 +291,10 @@ export async function detectNearDuplicates(ctx: Ctx, limit = 500) {
           (a.dur is not null and b.dur is not null and abs(a.dur - b.dur) <= 1000 and a.w is not distinct from b.w and a.h is not distinct from b.h)
           or (a.dur is null and b.dur is null and similarity(a.name, b.name) >= 0.8 and abs(a.size - b.size) <= greatest(a.size, b.size) * 0.02)
         )
+      order by a.id, b.id
+      limit ${limit}
       on conflict do nothing
-      returning id
-      limit ${limit}`),
+      returning id`),
   ).length;
   return { suggested: inserted };
 }

@@ -1,0 +1,41 @@
+{
+	admin off
+	auto_https off
+	servers {
+		# Tailscale Serve (and Docker's NAT) connect from private addresses; trust their X-Forwarded-Proto so the
+		# API sets Secure cookies when the browser is on https.
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		X-Frame-Options SAMEORIGIN
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# One origin for everything: /api -> Fastify, everything else -> Next.js
+	handle /api/* {
+		reverse_proxy api:4000 {
+			# media streaming: never buffer
+			flush_interval -1
+			transport http {
+				response_header_timeout 5m
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

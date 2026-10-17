@@ -1,0 +1,188 @@
+# Creator OS - local 24x7 stack.
+#   docker compose up -d --build                  core stack (db, redis, migrate, api, worker, web, caddy)
+#   docker compose --profile dev up -d db redis db-proxy redis-proxy   data stores only, published on 127.0.0.1 for `pnpm dev`
+#   docker compose --profile integrations ...     reserved for optional integration helpers (none required today)
+# Postgres and Redis are NEVER published unless the dev profile's loopback proxies are started.
+name: creatoros
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgres://${POSTGRES_USER:-creatoros}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-creatoros}
+  REDIS_URL: redis://redis:6379
+  APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
+  AGENT_PAIRING_SECRET: ${AGENT_PAIRING_SECRET:?set AGENT_PAIRING_SECRET in .env}
+  WORKFLOW_WEBHOOK_SECRET: ${WORKFLOW_WEBHOOK_SECRET:-}
+  DATA_DIR: /data
+  MIGRATIONS_DIR: /app/packages/db/drizzle
+  MEDIA_PREVIEW_MAX_GB: ${MEDIA_PREVIEW_MAX_GB:-20}
+  AGENT_LOOPBACK_HOST: ${AGENT_LOOPBACK_HOST:-host.docker.internal}
+  AGENT_TOKEN_TTL_DAYS: ${AGENT_TOKEN_TTL_DAYS:-90}
+  PAIRING_CODE_TTL_MINUTES: ${PAIRING_CODE_TTL_MINUTES:-30}
+  AGENT_OFFLINE_AFTER_SECONDS: ${AGENT_OFFLINE_AFTER_SECONDS:-120}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOGIN_RATE_LIMIT_PER_MINUTE: ${LOGIN_RATE_LIMIT_PER_MINUTE:-10}
+  GLOBAL_RATE_LIMIT_PER_MINUTE: ${GLOBAL_RATE_LIMIT_PER_MINUTE:-600}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-creatoros}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-creatoros}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: 1g }
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000', '--maxmemory', '256mb', '--maxmemory-policy', 'noeviction']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    deploy:
+      resources:
+        limits: { memory: 384m }
+    logging: *logging
+
+  migrate:
+    build: { context: ., dockerfile: infra/docker/Dockerfile, target: migrate }
+    image: creatoros/migrate:local
+    restart: 'no'
+    environment: *app-env
+    depends_on:
+      db: { condition: service_healthy }
+    logging: *logging
+
+  api:
+    build: { context: ., dockerfile: infra/docker/Dockerfile, target: api }
+    image: creatoros/api:local
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      API_HOST: 0.0.0.0
+      API_PORT: '4000'
+    volumes:
+      - appdata:/data
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    logging: *logging
+
+  worker:
+    build: { context: ., dockerfile: infra/docker/Dockerfile, target: worker }
+    image: creatoros/worker:local
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - appdata:/data
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 768m }
+    logging: *logging
+
+  web:
+    build: { context: ., dockerfile: infra/docker/Dockerfile, target: web }
+    image: creatoros/web:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: '3000'
+      API_INTERNAL_URL: http://api:4000
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512m }
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '${HTTP_PORT:-8080}:80'
+    volumes:
+      - ./infra/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { memory: 128m }
+    logging: *logging
+
+  # ---- dev profile: expose the data stores on loopback only, for `pnpm dev` and host-run tests -------------------
+  db-proxy:
+    profiles: [dev]
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: ['TCP-LISTEN:5432,fork,reuseaddr', 'TCP:db:5432']
+    ports:
+      - '127.0.0.1:5432:5432'
+    depends_on:
+      db: { condition: service_healthy }
+
+  redis-proxy:
+    profiles: [dev]
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: ['TCP-LISTEN:6379,fork,reuseaddr', 'TCP:redis:6379']
+    ports:
+      - '127.0.0.1:6379:6379'
+    depends_on:
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  redisdata:
+  appdata:
+  caddydata:

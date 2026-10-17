@@ -8,3 +8,5 @@ allowBuilds:
   argon2: true
   esbuild: true
   msgpackr-extract: true
+minimumReleaseAgeExclude:
+  - lucide-react@1.58.0

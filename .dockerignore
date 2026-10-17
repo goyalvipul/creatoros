@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.next
+.git
+.tools
+.dockercfg
+.data
+.env
+.env.*
+!.env.example
+apps/scanner-agent/dist
+*.log
+.cursor
+docs
+tests/e2e/test-results
+tests/e2e/playwright-report

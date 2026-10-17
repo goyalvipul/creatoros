@@ -1,0 +1,95 @@
+@import 'tailwindcss';
+
+:root {
+  --bg: #f6f7fb;
+  --panel: #ffffff;
+  --panel-2: #f1f3f9;
+  --border: #e2e5ef;
+  --text: #151826;
+  --muted: #616a85;
+  --accent: #5b5bf0;
+  --accent-fg: #ffffff;
+  --ok: #138a52;
+  --warn: #b26a00;
+  --bad: #c62839;
+  --info: #1e6fd9;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #0d0f17;
+  --panel: #151826;
+  --panel-2: #1c2033;
+  --border: #272c45;
+  --text: #e8eaf4;
+  --muted: #98a0c0;
+  --accent: #8b8bff;
+  --accent-fg: #0d0f17;
+  --ok: #4cd08a;
+  --warn: #f0b04a;
+  --bad: #ff7080;
+  --info: #6ab0ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel2: var(--panel-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accentfg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-info: var(--info);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+* {
+  border-color: var(--border);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+dialog::backdrop {
+  background: rgba(10, 12, 24, 0.55);
+}
+
+/* keep iOS from zooming into inputs */
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+@media (min-width: 768px) {
+  input,
+  select,
+  textarea {
+    font-size: 14px;
+  }
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

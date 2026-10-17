@@ -20,3 +20,7 @@ apps/scanner-agent/dist/
 Thumbs.db
 tests/fixtures/library/
 .tools/
+.data/
+apps/web/AGENTS.md
+apps/web/.next/
+.next/

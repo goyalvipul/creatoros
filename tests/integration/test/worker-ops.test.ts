@@ -24,6 +24,7 @@ import {
   recordPayment,
   systemHealth,
   createDeal,
+  seedDemo,
   pruneBackups,
   listBackups,
   requestBackup,
@@ -169,6 +170,7 @@ describe('backup and restore', () => {
     async () => {
       const org = await makeOrg(h);
       await createDeal(org.ctx, { title: 'Backup canary deal' } as any);
+      await seedDemo(org.ctx); // a realistic web of projects, assets, publications, deals, invoices and threads
       const env = testEnv({
         backupDir: path.join(tmp, 'backups'),
         attachmentsDir: path.join(tmp, 'attachments'),
@@ -185,6 +187,20 @@ describe('backup and restore', () => {
       const rt = (await jobRestoreTest(d)) as any;
       expect(rt.ok).toBe(true);
       expect(rt.counts.deals?.restored ?? rt.counts.deals).toBeTruthy();
+      // relationships (not just row counts) survive the round trip
+      const manifestFile = path.join(
+        env.backupDir,
+        files.find((f) => f.endsWith('.manifest.json'))!,
+      );
+      const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+      for (const k of [
+        'publication_variant_asset',
+        'deliverable_in_deal',
+        'invoice_in_deal',
+        'message_in_thread',
+      ])
+        expect([k, manifest.relationCounts[k] > 0]).toEqual([k, true]);
+      expect(rt.relations).toEqual(manifest.relationCounts);
       // corruption is detected
       const dump = path.join(
         env.backupDir,

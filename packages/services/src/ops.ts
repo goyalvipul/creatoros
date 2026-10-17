@@ -177,6 +177,21 @@ async function sha256File(file: string): Promise<string> {
   return h.digest('hex');
 }
 
+/**
+ * Relationship fingerprint: counts of rows reachable through foreign keys. A restore that kept every table but lost or re-pointed
+ * relationships would change these numbers even when plain row counts match.
+ */
+export const RELATION_SQL = `
+  select 'asset_in_project' as t, count(*)::int as n from logical_assets a join creative_projects p on p.id = a.project_id
+  union all select 'publication_variant_asset', count(*)::int from publication_records r join distribution_variants v on v.id = r.variant_id join logical_assets a on a.id = v.asset_id
+  union all select 'publication_account_channel_brand', count(*)::int from publication_records r join social_accounts s on s.id = r.social_account_id join channels c on c.id = s.channel_id join brands b on b.id = c.brand_id
+  union all select 'deliverable_in_deal', count(*)::int from deal_deliverables d join deals x on x.id = d.deal_id
+  union all select 'publication_for_deliverable', count(*)::int from publication_records r join deal_deliverables d on d.id = r.deliverable_id
+  union all select 'invoice_in_deal', count(*)::int from invoices i join deals d on d.id = i.deal_id
+  union all select 'payment_on_invoice', count(*)::int from payments p join invoices i on i.id = p.invoice_id
+  union all select 'file_in_version_asset', count(*)::int from asset_file_links l join asset_versions v on v.id = l.asset_version_id join logical_assets a on a.id = v.asset_id join file_instances f on f.id = l.file_instance_id
+  union all select 'message_in_thread', count(*)::int from messages m join conversation_threads t on t.id = m.thread_id
+  order by 1`;
 export interface BackupManifest {
   app: 'creatoros';
   createdAt: string;
@@ -187,6 +202,8 @@ export interface BackupManifest {
   sizeBytes: number;
   migrations: number;
   rowCounts: Record<string, number>;
+  /** Joined-relationship counts (project->asset->variant->publication, deal->deliverable->publication, file->version->asset...). */
+  relationCounts?: Record<string, number>;
   note: string;
 }
 
@@ -240,6 +257,9 @@ export async function createBackup(
       sizeBytes: size,
       migrations: mig,
       rowCounts: Object.fromEntries(counts.map((c) => [c.t, c.n])),
+      relationCounts: Object.fromEntries(
+        rowsOf<{ t: string; n: number }>(await db.execute(sql.raw(RELATION_SQL))).map((c) => [c.t, c.n]),
+      ),
       note: 'Preview cache excluded (rebuildable). Original media files are never part of the backup; they stay on their machines.',
     };
     await fsp.writeFile(dumpFile + '.manifest.json', JSON.stringify(manifest, null, 2));
@@ -320,6 +340,26 @@ export async function restoreTest(
       });
       counts[k] = Number(out.stdout.trim());
     }
+    const relOut = await run('psql', [...pg.args, '-d', tmp, '-At', '-F', '|', '-c', RELATION_SQL], {
+      env: pg.env,
+    });
+    const relations: Record<string, number> = Object.fromEntries(
+      relOut.stdout
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((l) => {
+          const [k, n] = l.split('|');
+          return [k!, Number(n)];
+        }),
+    );
+    const relMismatches = Object.entries(manifest.relationCounts ?? {}).filter(
+      ([k, n]) => relations[k] !== n,
+    );
+    if (relMismatches.length)
+      throw new Error(
+        `Relationships differ after restore: ${relMismatches.map(([k, n]) => `${k} expected ${n} got ${relations[k]}`).join('; ')}`,
+      );
     const mismatches = Object.entries(manifest.rowCounts).filter(([k, n]) => counts[k] !== n);
     if (mismatches.length)
       throw new Error(
@@ -330,7 +370,7 @@ export async function restoreTest(
         .update(backupRuns)
         .set({ state: 'RESTORED_TEST', restoreTestRef: tmp })
         .where(eq(backupRuns.id, opts.backupRunId));
-    return { ok: true, counts };
+    return { ok: true, counts, relations };
   } finally {
     await run('psql', [...pg.args, '-d', 'postgres', '-c', `drop database if exists ${tmp} with (force)`], {
       env: pg.env,

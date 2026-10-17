@@ -728,6 +728,84 @@ export async function setDeliverableStatus(
   return after!;
 }
 
+/**
+ * Links a deliverable to the post(s) that fulfil it (and optionally to a specific asset version / platform).
+ * Links never change the deliverable's status: approval and publication are tracked independently.
+ */
+export async function linkDeliverable(
+  ctx: Ctx,
+  deliverableId: string,
+  input: { publicationId?: string | null; assetVersionId?: string | null; platform?: string | null },
+) {
+  return ctx.db.transaction(async (tx) => {
+    const [x] = await tx
+      .select()
+      .from(dealDeliverables)
+      .where(and(eq(dealDeliverables.id, deliverableId), eq(dealDeliverables.orgId, ctx.orgId)));
+    if (!x) throw notFound('Deliverable');
+    const patch: Partial<typeof dealDeliverables.$inferInsert> = { updatedAt: new Date() };
+    if (input.platform !== undefined) patch.platform = input.platform;
+    if (input.assetVersionId !== undefined) patch.assetVersionId = input.assetVersionId;
+    if (input.publicationId !== undefined) {
+      if (input.publicationId === null) {
+        await tx.execute(
+          sql`update publication_records set deliverable_id = null where deliverable_id = ${deliverableId} and org_id = ${ctx.orgId}`,
+        );
+        patch.publicationId = null;
+      } else {
+        const rec = rowsOf<{
+          id: string;
+          platform: string;
+          assetVersionId: string | null;
+          other: string | null;
+        }>(
+          await tx.execute(
+            sql`select r.id, sa.platform::text as platform, r.asset_version_id as "assetVersionId", r.deliverable_id as other from publication_records r join social_accounts sa on sa.id = r.social_account_id where r.id = ${input.publicationId} and r.org_id = ${ctx.orgId}`,
+          ),
+        )[0];
+        if (!rec) throw notFound('Publication');
+        if (rec.other && rec.other !== deliverableId)
+          throw conflict('That post is already linked to another deliverable.', undefined, 'ALREADY_LINKED');
+        await tx.execute(
+          sql`update publication_records set deliverable_id = ${deliverableId} where id = ${rec.id}`,
+        );
+        patch.publicationId = rec.id;
+        patch.platform ??= x.platform ?? rec.platform;
+        if (patch.assetVersionId === undefined && !x.assetVersionId && rec.assetVersionId)
+          patch.assetVersionId = rec.assetVersionId;
+      }
+    }
+    const [after] = await tx
+      .update(dealDeliverables)
+      .set(patch)
+      .where(eq(dealDeliverables.id, deliverableId))
+      .returning();
+    await audit(
+      { ...ctx, db: tx },
+      'deliverable.link',
+      { type: 'deliverable', id: deliverableId },
+      undefined,
+      {
+        publicationId: input.publicationId ?? null,
+      },
+    );
+    return after!;
+  });
+}
+
+/** Posts that can be attached to a deliverable (not removed, not already used by another one). */
+export async function listLinkablePublications(ctx: Ctx, deliverableId?: string) {
+  return rowsOf<any>(
+    await ctx.db.execute(sql`
+      select r.id, r.title, r.state, r.state_provenance as provenance, r.canonical_url as url, r.published_at as "publishedAt",
+             sa.platform, sa.handle, r.deliverable_id as "deliverableId"
+      from publication_records r join social_accounts sa on sa.id = r.social_account_id
+      where r.org_id = ${ctx.orgId} and r.state <> 'REMOVED'
+        and (r.deliverable_id is null ${deliverableId ? sql`or r.deliverable_id = ${deliverableId}` : sql``})
+      order by coalesce(r.published_at, r.planned_at, r.created_at) desc limit 200`),
+  );
+}
+
 export async function getDeal(ctx: Ctx, id: string) {
   const [d] = await ctx.db
     .select()
@@ -739,6 +817,18 @@ export async function getDeal(ctx: Ctx, id: string) {
     .from(dealDeliverables)
     .where(eq(dealDeliverables.dealId, id))
     .orderBy(asc(dealDeliverables.dueAt));
+  const linked = deliverables.length
+    ? rowsOf<any>(
+        await ctx.db.execute(
+          sql`select r.id, r.deliverable_id as "deliverableId", r.title, r.state, r.state_provenance as provenance, r.canonical_url as url, r.published_at as "publishedAt", sa.platform, sa.handle
+              from publication_records r join social_accounts sa on sa.id = r.social_account_id
+              where r.deliverable_id in (${sql.join(
+                deliverables.map((x) => sql`${x.id}::uuid`),
+                sql`, `,
+              )}) order by r.created_at`,
+        ),
+      )
+    : [];
   const inv = await ctx.db
     .select()
     .from(invoices)
@@ -769,7 +859,10 @@ export async function getDeal(ctx: Ctx, id: string) {
   const received = inv.reduce((s, i) => s + i.paidTotalMinor, 0);
   return {
     ...d,
-    deliverables,
+    deliverables: deliverables.map((x) => ({
+      ...x,
+      publications: linked.filter((p) => p.deliverableId === x.id),
+    })),
     invoices: inv.map((i) => ({ ...i, payments: pays.filter((p: any) => p.invoice_id === i.id) })),
     threads,
     expenses: exp,

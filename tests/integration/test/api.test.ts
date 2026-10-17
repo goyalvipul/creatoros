@@ -354,6 +354,88 @@ describe('content flow over HTTP', () => {
     expect(fin.perCurrency.received.CAD).toBeGreaterThanOrEqual(100000);
   });
 
+  it('a deliverable links to the post that fulfils it, once, without changing its status', async () => {
+    const brand = j(await api.call('POST', `${V1}/brands`, { cookie: owner, body: { name: 'Link Brand' } }));
+    const channel = j(
+      await api.call('POST', `${V1}/channels`, {
+        cookie: owner,
+        body: { brandId: brand.id, name: 'Link Ch' },
+      }),
+    );
+    const account = j(
+      await api.call('POST', `${V1}/social-accounts`, {
+        cookie: owner,
+        body: { channelId: channel.id, platform: 'instagram', handle: '@linked' },
+      }),
+    );
+    const pubOf = async (title: string) =>
+      j(
+        await api.call('POST', `${V1}/publications`, {
+          cookie: owner,
+          body: {
+            socialAccountId: account.id,
+            title,
+            state: 'PLANNED',
+            plannedAt: new Date(Date.now() + 86400_000).toISOString(),
+          },
+        }),
+      ).record;
+    const p1 = await pubOf('Link post 1');
+    const p2 = await pubOf('Link post 2');
+    const deal = j(
+      await api.call('POST', `${V1}/deals`, {
+        cookie: owner,
+        body: { title: 'Link deal', contractedValueMinor: 5000, currency: 'CAD' },
+      }),
+    );
+    const mk = async (title: string) =>
+      j(await api.call('POST', `${V1}/deals/${deal.id}/deliverables`, { cookie: owner, body: { title } }));
+    const d1 = await mk('Reel A');
+    const d2 = await mk('Reel B');
+
+    const link = await api.call('POST', `${V1}/deliverables/${d1.id}/link`, {
+      cookie: owner,
+      body: { publicationId: p1.id },
+    });
+    expect(link.status).toBe(200);
+    expect(j(link)).toMatchObject({ publicationId: p1.id, platform: 'instagram', status: d1.status });
+
+    // a post fulfils one deliverable only
+    const clash = await api.call('POST', `${V1}/deliverables/${d2.id}/link`, {
+      cookie: owner,
+      body: { publicationId: p1.id },
+    });
+    expect(clash.status).toBe(409);
+    expect(clash.body.error.code).toBe('ALREADY_LINKED');
+
+    // linkable list hides p1 for d2 but shows it for d1
+    const forD2 = j(await api.call('GET', `${V1}/publications?deliverableId=${d2.id}`, { cookie: owner }));
+    expect(forD2.map((p: any) => p.id)).toContain(p2.id);
+    expect(forD2.map((p: any) => p.id)).not.toContain(p1.id);
+    const forD1 = j(await api.call('GET', `${V1}/publications?deliverableId=${d1.id}`, { cookie: owner }));
+    expect(forD1.map((p: any) => p.id)).toContain(p1.id);
+
+    const got = j(await api.call('GET', `${V1}/deals/${deal.id}`, { cookie: owner }));
+    const row = got.deliverables.find((x: any) => x.id === d1.id);
+    expect(row.publications).toHaveLength(1);
+    expect(row.publications[0]).toMatchObject({ id: p1.id, platform: 'instagram', state: 'PLANNED' });
+
+    const unlink = await api.call('POST', `${V1}/deliverables/${d1.id}/link`, {
+      cookie: owner,
+      body: { publicationId: null },
+    });
+    expect(unlink.status).toBe(200);
+    const after = j(await api.call('GET', `${V1}/deals/${deal.id}`, { cookie: owner }));
+    expect(after.deliverables.find((x: any) => x.id === d1.id).publications).toHaveLength(0);
+
+    // viewers cannot link
+    const viewerTry = await api.call('POST', `${V1}/deliverables/${d1.id}/link`, {
+      cookie: viewer,
+      body: { publicationId: p2.id },
+    });
+    expect(viewerTry.status).toBe(403);
+  });
+
   it('global search, briefing, goals and demo data work through the API', async () => {
     const s = j(await api.call('GET', `${V1}/search?q=Flow`, { cookie: owner }));
     expect(JSON.stringify(s)).toContain('Flow');

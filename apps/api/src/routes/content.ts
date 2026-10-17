@@ -48,6 +48,7 @@ import {
   listIdeas,
   listProjects,
   listTags,
+  listLinkablePublications,
   listUnmatchedPublications,
   listVariants,
   markPublishedManual,
@@ -839,6 +840,16 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       body: recordBody,
     },
     ({ ctx, body }) => createRecord(ctx, body as any),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/publications',
+      tag: 'Publishing',
+      summary: 'Publication records that can be linked to a deliverable (not removed, not used elsewhere)',
+      query: z.object({ deliverableId: z.string().uuid().optional() }),
+    },
+    ({ ctx, query }) => listLinkablePublications(ctx, query.deliverableId),
   );
   route(
     {

@@ -49,6 +49,10 @@ export default function TodayPage() {
   const snoozed = useApi<any[]>('/actions', { query: { state: 'SNOOZED', limit: 100 } });
   const done = useApi<any[]>('/actions/recent');
   const notes = useApi<any[]>('/notifications', { query: { limit: 20 } });
+  const todo = useApi<any>('/todo/status');
+  const todoLinks = useApi<any[]>(todo.data?.enabled ? '/todo/links' : null);
+  const todoReady = Boolean(todo.data?.enabled);
+  const linkedActions = new Map((todoLinks.data ?? []).map((l) => [l.actionId, l]));
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ title: '', description: '', dueAt: '', priority: 'NORMAL' });
   const res = tab === 'OPEN' ? open : tab === 'SNOOZED' ? snoozed : done;
@@ -76,6 +80,12 @@ export default function TodayPage() {
           </>
         }
       />
+      {todo.data && !todoReady && (
+        <p className="mb-3 text-xs text-muted" data-testid="todo-not-configured">
+          Todo sync is not configured, so actions stay inside Creator OS. Connect it under Settings →
+          Integrations when you are ready.
+        </p>
+      )}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Tabs
@@ -162,6 +172,24 @@ export default function TodayPage() {
                                   {a.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
                                 </ActionButton>
                                 <Snooze id={a.id} onDone={reload} />
+                                {todoReady &&
+                                  (linkedActions.has(a.id) ? (
+                                    <Badge tone="info">
+                                      In Todo · {String(linkedActions.get(a.id).syncState).toLowerCase()}
+                                    </Badge>
+                                  ) : (
+                                    <ActionButton
+                                      size="sm"
+                                      aria-label={`Send ${a.title} to Todo`}
+                                      onAction={async () => {
+                                        await post(`/actions/${a.id}/todo`, {});
+                                        await refresh('/todo');
+                                      }}
+                                      success="Queued for Todo"
+                                    >
+                                      Send to Todo
+                                    </ActionButton>
+                                  ))}
                                 <ActionButton
                                   size="sm"
                                   aria-label={`Dismiss ${a.title}`}

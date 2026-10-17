@@ -50,6 +50,11 @@ export default function DealPage() {
   const [addDel, setAddDel] = useState(false);
   const [del, setDel] = useState({ title: '', dueAt: '' });
   const [evidence, setEvidence] = useState<{ id: string; status: string } | null>(null);
+  const [linkFor, setLinkFor] = useState<any>(null);
+  const [linkPost, setLinkPost] = useState('');
+  const linkable = useApi<any[]>(linkFor ? '/publications' : null, {
+    query: { deliverableId: linkFor?.id },
+  });
   const [ev, setEv] = useState('');
   const [paying, setPaying] = useState<any>(null);
   const [pay, setPay] = useState({ amount: '', method: 'BANK_TRANSFER', reference: '', verified: true });
@@ -163,6 +168,41 @@ export default function DealPage() {
                             {x.dueAt ? `Due ${when(x.dueAt, tz, false)}` : 'No due date'}
                             {x.approvalEvidence ? ` · Approval: ${x.approvalEvidence}` : ''}
                           </div>
+                        </div>
+                        <div className="flex w-full flex-wrap items-center gap-1.5 text-xs">
+                          {(x.publications ?? []).map((p: any) => (
+                            <span
+                              key={p.id}
+                              className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5"
+                            >
+                              {titleCase(p.platform)} {p.handle} <StateBadge state={p.state} />
+                              {p.url && (
+                                <a className="text-accent" href={p.url} target="_blank" rel="noreferrer">
+                                  open ↗
+                                </a>
+                              )}
+                              <ActionButton
+                                size="sm"
+                                aria-label={`Unlink ${p.title ?? p.platform} from ${x.title}`}
+                                onAction={async () => {
+                                  await post(`/deliverables/${x.id}/link`, { publicationId: null });
+                                  await reload();
+                                }}
+                              >
+                                ×
+                              </ActionButton>
+                            </span>
+                          ))}
+                          <Button
+                            size="sm"
+                            aria-label={`Link a post to ${x.title}`}
+                            onClick={() => {
+                              setLinkPost('');
+                              setLinkFor(x);
+                            }}
+                          >
+                            Link post
+                          </Button>
                         </div>
                         <Select
                           aria-label={`Status of ${x.title}`}
@@ -311,6 +351,32 @@ export default function DealPage() {
                 value={del.dueAt}
                 onChange={(e) => setDel({ ...del, dueAt: e.target.value })}
               />
+            </Field>
+          </FormDialog>
+
+          <FormDialog
+            open={Boolean(linkFor)}
+            onClose={() => setLinkFor(null)}
+            title={`Link a post to ${linkFor?.title ?? ''}`}
+            submitLabel="Link"
+            onSubmit={async () => {
+              await post(`/deliverables/${linkFor.id}/link`, { publicationId: linkPost });
+              await reload();
+            }}
+          >
+            <p className="text-sm text-muted">
+              Linking records which post fulfils this deliverable. It does not change the deliverable&apos;s
+              status, and it never publishes anything.
+            </p>
+            <Field label="Post">
+              <Select required value={linkPost} onChange={(e) => setLinkPost(e.target.value)}>
+                <option value="">Choose…</option>
+                {(linkable.data ?? []).map((p: any) => (
+                  <option key={p.id} value={p.id}>
+                    {titleCase(p.platform)} {p.handle}: {p.title ?? p.url ?? 'Untitled'} ({titleCase(p.state)})
+                  </option>
+                ))}
+              </Select>
             </Field>
           </FormDialog>
 

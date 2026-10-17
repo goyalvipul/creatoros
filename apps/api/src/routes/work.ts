@@ -67,6 +67,7 @@ import {
   saveKeyConnection,
   search,
   setConnectionPaused,
+  linkDeliverable,
   setDeliverableStatus,
   setFxRate,
   setThreadState,
@@ -326,6 +327,21 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object({ status: z.enum(DELIVERABLE_STATUS), evidence: z.string().max(2000).optional() }),
     },
     ({ ctx, params, body }) => setDeliverableStatus(ctx, params.id, body.status, { evidence: body.evidence }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/deliverables/:id/link',
+      tag: 'Collaborations',
+      summary: 'Link a deliverable to the post that fulfils it (never changes its status)',
+      params: idParam,
+      body: z.object({
+        publicationId: z.string().uuid().nullable().optional(),
+        assetVersionId: z.string().uuid().nullable().optional(),
+        platform: z.string().max(40).nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => linkDeliverable(ctx, params.id, body),
   );
   route(
     {

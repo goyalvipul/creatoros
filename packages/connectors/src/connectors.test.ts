@@ -48,7 +48,7 @@ const text = (body: string, status: number, headers: Record<string, string> = {}
 
 const client = { clientId: 'cid', redirectUri: 'https://app.example/cb' };
 
-describe('http wrapper (T24)', () => {
+describe('http wrapper', () => {
   it('retries idempotent GETs on 5xx and 429 with Retry-After, then succeeds', async () => {
     const { ctx, calls, sleeps } = makeCtx([
       () => text('boom', 503),
@@ -148,7 +148,7 @@ describe('token freshness', () => {
   });
 });
 
-describe('Google OAuth (T25)', () => {
+describe('Google OAuth', () => {
   it('builds a PKCE authorize URL with offline access and narrow scopes', () => {
     const p = generatePkce();
     const url = new URL(
@@ -188,7 +188,7 @@ describe('Google OAuth (T25)', () => {
   });
 });
 
-describe('Gmail connector (T25)', () => {
+describe('Gmail connector', () => {
   const gmail = new GmailConnector();
   const b64 = (s: string) => Buffer.from(s).toString('base64url');
 
@@ -315,7 +315,7 @@ describe('Gmail connector (T25)', () => {
   });
 });
 
-describe('Todo adapter (T24)', () => {
+describe('Todo adapter', () => {
   const todo = new TodoConnector();
   const cfg = {
     baseUrl: 'https://todo.test/api/',
@@ -410,7 +410,7 @@ describe('YouTube helpers', () => {
   });
 });
 
-describe('social connectors never claim more than they can verify (T16/T24)', () => {
+describe('social connectors never claim more than they can verify', () => {
   it('Postiz: only a returned release URL counts as verified-published', () => {
     const p = new PostizConnector();
     expect(

@@ -33,7 +33,7 @@ afterAll(async () => {
 const j = (r: { body: any }) => r.body.data;
 
 describe('first run and auth', () => {
-  it('reports a fresh install, refuses weak passwords, bootstraps once (T01)', async () => {
+  it('reports a fresh install, refuses weak passwords, bootstraps once', async () => {
     expect(j(await api.call('GET', `${V1}/setup/status`)).initialized).toBe(false);
     const weak = await api.call('POST', `${V1}/setup/bootstrap`, { body: { ...OWNER, password: 'short' } });
     expect(weak.status).toBe(400);
@@ -93,7 +93,7 @@ describe('first run and auth', () => {
     expect(loginForeign.status).toBe(403);
   });
 
-  it('enforces roles: viewer reads, editor edits, only owner administers (T02)', async () => {
+  it('enforces roles: viewer reads, editor edits, only owner administers', async () => {
     for (const [email, role] of [
       ['editor@creator.test', 'EDITOR'],
       ['viewer@creator.test', 'VIEWER'],
@@ -126,7 +126,7 @@ describe('first run and auth', () => {
     expect(demote.body.error.code).toBe('LAST_OWNER');
   });
 
-  it('validation errors list the offending fields; Idempotency-Key replays (T03)', async () => {
+  it('validation errors list the offending fields; Idempotency-Key replays', async () => {
     const bad = await api.call('POST', `${V1}/projects`, {
       cookie: owner,
       body: { title: '', type: 'NOT_A_TYPE' },
@@ -176,7 +176,7 @@ describe('first run and auth', () => {
 });
 
 describe('content flow over HTTP', () => {
-  it('brand → channel → account → idea → project → stage gate → asset → publication (T04-T07)', async () => {
+  it('brand → channel → account → idea → project → stage gate → asset → publication', async () => {
     const brand = j(await api.call('POST', `${V1}/brands`, { cookie: owner, body: { name: 'HTTP Brand' } }));
     const channel = j(
       await api.call('POST', `${V1}/channels`, {
@@ -278,7 +278,7 @@ describe('content flow over HTTP', () => {
     expect(an.totals).toMatchObject({ verified: 0, manual: 1 });
   });
 
-  it('collaboration: intake → deal → deliverable evidence → invoice → payment → close (T14-T20)', async () => {
+  it('collaboration: intake → deal → deliverable evidence → invoice → payment → close', async () => {
     const intake = j(
       await api.call('POST', `${V1}/intake`, {
         cookie: owner,
@@ -354,7 +354,7 @@ describe('content flow over HTTP', () => {
     expect(fin.perCurrency.received.CAD).toBeGreaterThanOrEqual(100000);
   });
 
-  it('global search, briefing, goals and demo data work through the API (T21-T24)', async () => {
+  it('global search, briefing, goals and demo data work through the API', async () => {
     const s = j(await api.call('GET', `${V1}/search?q=Flow`, { cookie: owner }));
     expect(JSON.stringify(s)).toContain('Flow');
     expect((await api.call('GET', `${V1}/briefing`, { cookie: owner })).status).toBe(200);
@@ -371,7 +371,7 @@ describe('content flow over HTTP', () => {
     expect(j(await api.call('GET', `${V1}/demo`, { cookie: owner })).seeded).toBe(false);
   });
 
-  it('integrations are honest: unconfigured providers say so (T26)', async () => {
+  it('integrations are honest: unconfigured providers say so', async () => {
     const list = j(await api.call('GET', `${V1}/integrations`, { cookie: owner }));
     const text = JSON.stringify(list);
     expect(text).toMatch(/NOT_CONFIGURED|UNCONFIGURED|BLOCKED_EXTERNAL/);
@@ -401,7 +401,7 @@ describe('content flow over HTTP', () => {
   });
 });
 
-describe('agent over HTTP (T10-T13)', () => {
+describe('agent over HTTP', () => {
   let agentServer: http.Server;
   let agentPort = 0;
   const content = Buffer.from('0123456789'.repeat(100));

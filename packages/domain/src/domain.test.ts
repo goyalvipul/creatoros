@@ -37,7 +37,7 @@ import {
   observationSchema,
 } from './index';
 
-describe('money (T20)', () => {
+describe('money', () => {
   it('uses integer minor units with the right exponent per currency', () => {
     expect(minorExponent('CAD')).toBe(2);
     expect(minorExponent('jpy')).toBe(0);
@@ -81,7 +81,7 @@ describe('money (T20)', () => {
   });
 });
 
-describe('paths (T05/T06)', () => {
+describe('paths', () => {
   it('detects the path flavour', () => {
     expect(detectPathOs('D:\\Media\\a.mp4')).toBe('windows');
     expect(detectPathOs('\\\\nas\\share\\a.mp4')).toBe('windows');
@@ -133,7 +133,7 @@ describe('paths (T05/T06)', () => {
   });
 });
 
-describe('time zones and DST (T22)', () => {
+describe('time zones and DST', () => {
   const tz = 'America/Vancouver';
 
   it('validates zones', () => {
@@ -171,7 +171,7 @@ describe('time zones and DST (T22)', () => {
   });
 });
 
-describe('priority engine (T26)', () => {
+describe('priority engine', () => {
   const now = new Date('2026-10-17T12:00:00Z');
   const hours = (h: number) => new Date(now.getTime() + h * 3_600_000).toISOString();
 
@@ -217,7 +217,7 @@ describe('priority engine (T26)', () => {
   });
 });
 
-describe('message screening (T23)', () => {
+describe('message screening', () => {
   it('flags a sponsorship request as a collaboration suggestion and extracts terms', () => {
     const r = classifyMessage({
       subject: 'Paid partnership: sponsored reel',
@@ -266,7 +266,7 @@ describe('message screening (T23)', () => {
   });
 });
 
-describe('publication truthfulness (T15/T16)', () => {
+describe('publication truthfulness', () => {
   it('manual entry can never claim platform verification', () => {
     expect(manualStateFor('PUBLISHED_VERIFIED')).toBe('PUBLISHED_MANUAL');
     expect(manualStateFor('PLANNED')).toBe('PLANNED');
@@ -309,7 +309,7 @@ describe('publication truthfulness (T15/T16)', () => {
   });
 });
 
-describe('production progress (T19)', () => {
+describe('production progress', () => {
   it('counts a scene complete only when a final is SELECTED', () => {
     const p = computeProjectProgress([
       { status: 'SELECTED' },

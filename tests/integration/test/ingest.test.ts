@@ -61,7 +61,7 @@ const inst = async (rootId: string) =>
   h.db.select().from(fileInstances).where(eq(fileInstances.rootId, rootId));
 
 describe('agent ingest', () => {
-  it('records files once and replays are idempotent (T11)', async () => {
+  it('records files once and replays are idempotent', async () => {
     const { root, send } = await setup();
     const run = randomUUID();
     const obs = [file('D:\\Media\\a.mp4'), file('D:\\Media\\b.mp4')];
@@ -75,7 +75,7 @@ describe('agent ingest', () => {
     expect(r!.newCount).toBe(2);
   });
 
-  it('rejects paths outside the root (T12) and foreign roots', async () => {
+  it('rejects paths outside the root and foreign roots', async () => {
     const { root, send, org } = await setup();
     const r = await send(randomUUID(), 'START', [
       file('C:\\Windows\\System32\\evil.dll'),
@@ -96,7 +96,7 @@ describe('agent ingest', () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
-  it('detects moves by file id instead of creating a new instance (T08)', async () => {
+  it('detects moves by file id instead of creating a new instance', async () => {
     const { root, send } = await setup();
     const run1 = randomUUID();
     await send(run1, 'START', [file('D:\\Media\\old.mp4', { fileId: 'FID1' })]);
@@ -112,7 +112,7 @@ describe('agent ingest', () => {
     expect(rows[0]!.availability).toBe('AVAILABLE');
   });
 
-  it('marks missing only after complete scans and the grace period, and restores (T09)', async () => {
+  it('marks missing only after complete scans and the grace period, and restores', async () => {
     const { root, send, org, agent } = await setup();
     const t = (n: number) => new Date(Date.now() + n * 3600_000);
     const keep = file('D:\\Media\\keep.mp4');
@@ -178,7 +178,7 @@ describe('agent ingest', () => {
     expect(rt!.state).toBe('UNREACHABLE');
   });
 
-  it('links identical content to one media object and never trusts stale or still-writing hashes (T04/T10)', async () => {
+  it('links identical content to one media object and never trusts stale or still-writing hashes', async () => {
     const { root, send } = await setup();
     const HASH = 'a'.repeat(64);
     const run = randomUUID();
@@ -292,7 +292,7 @@ describe('agent ingest', () => {
 });
 
 describe('near-duplicate detection', () => {
-  it('flags similar names with similar duration, ignores unrelated files, is repeatable (T14)', async () => {
+  it('flags similar names with similar duration, ignores unrelated files, is repeatable', async () => {
     const { root, dev, ctx } = await setup();
     const mk = async (name: string, hash: string, size: number, durationMs: number) => {
       const [mo] = await h.db

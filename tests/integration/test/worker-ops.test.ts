@@ -37,8 +37,8 @@ const HOUR = 3600_000;
 
 const deps = (env = testEnv()): WorkerDeps => ({ db: h.db, env, runner: dockerRunner() });
 
-describe('worker jobs (T27-T32)', () => {
-  it('actions engine: unanswered inbound creates ONE action, never recreates a closed one (T27)', async () => {
+describe('worker jobs', () => {
+  it('actions engine: unanswered inbound creates ONE action, never recreates a closed one', async () => {
     const org = await makeOrg(h);
     const d = deps(org.env);
     await ingestMessage(org.ctx, {
@@ -64,7 +64,7 @@ describe('worker jobs (T27-T32)', () => {
     expect(again).toHaveLength(0);
   });
 
-  it('actions engine resolves actions whose condition cleared by itself (reply logged) (T28)', async () => {
+  it('actions engine resolves actions whose condition cleared by itself (reply logged)', async () => {
     const org = await makeOrg(h);
     const d = deps(org.env);
     await ingestMessage(org.ctx, {
@@ -94,7 +94,7 @@ describe('worker jobs (T27-T32)', () => {
     ).toBe(false);
   });
 
-  it('overdue invoices are refreshed and notified once; payment emits invoice.paid (T29)', async () => {
+  it('overdue invoices are refreshed and notified once; payment emits invoice.paid', async () => {
     const org = await makeOrg(h);
     const d = deps(org.env);
     const deal = await createDeal(org.ctx, { title: 'Overdue deal', currency: 'CAD' } as any);
@@ -120,7 +120,7 @@ describe('worker jobs (T27-T32)', () => {
     expect((await listNotifications(org.ctx, {})).some((n: any) => n.type === 'invoice.paid')).toBe(true);
   });
 
-  it('stale devices are marked OFFLINE with one notification, not MISSING (T30)', async () => {
+  it('stale devices are marked OFFLINE with one notification, not MISSING', async () => {
     const org = await makeOrg(h);
     const dev = await pairTestDevice(org.ctx);
     await h.db
@@ -141,7 +141,7 @@ describe('worker jobs (T27-T32)', () => {
     expect(n).toHaveLength(1);
   });
 
-  it('heartbeat makes system health report the worker as alive (T31)', async () => {
+  it('heartbeat makes system health report the worker as alive', async () => {
     const d = deps();
     await jobHeartbeat(d);
     const health = await systemHealth(h.db, d.env);
@@ -149,7 +149,7 @@ describe('worker jobs (T27-T32)', () => {
     expect(health.checks.database!.ok).toBe(true);
   });
 
-  it('sync with nothing configured is a no-op, and maintenance runs cleanly (T32)', async () => {
+  it('sync with nothing configured is a no-op, and maintenance runs cleanly', async () => {
     const d = deps();
     const s = await jobSync(d, 'all');
     expect(s.failed).toBe(0);
@@ -160,7 +160,7 @@ describe('worker jobs (T27-T32)', () => {
   });
 });
 
-describe('backup and restore (T33)', () => {
+describe('backup and restore', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'creatoros-bk-'));
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 

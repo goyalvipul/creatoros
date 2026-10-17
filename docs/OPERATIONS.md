@@ -36,6 +36,61 @@ settings; turn on automatic sign-in or run the PC as a kiosk user so sign-in hap
 
 The app's own health endpoints: `/api/v1/health/live` and `/api/v1/health/ready` (database reachable). The worker's heartbeat shows in _Settings → System_.
 
+## Restarting after a change
+
+Run these in the repo folder on the server (on Ubuntu, `docker` needs no extra setup; on Windows see the note at the top).
+
+### After editing `.env`
+
+```bash
+docker compose up -d
+```
+
+Compose recreates only the containers whose settings changed. Data lives in Docker volumes and is kept.
+
+| What you changed                                                                                                    | What to run                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWED_ORIGINS`, `APP_BASE_URL`, `HTTP_PORT`, Google or other keys, `AGENT_LOOPBACK_HOST`, rate limits, log level | `docker compose up -d`                                                                                                            |
+| `API_INTERNAL_URL` (baked into the web image at build time)                                                         | `docker compose up -d --build web`                                                                                                |
+| `ENCRYPTION_KEY`                                                                                                    | `docker compose up -d`, then reconnect integrations and re-enrol two-factor (old encrypted secrets cannot be read with a new key) |
+| `POSTGRES_PASSWORD`                                                                                                 | Do not change it after first start: the database keeps the old password and the API would fail to connect                         |
+
+If a change does not seem to take effect: `docker compose up -d --force-recreate`.
+
+### After changing the application code
+
+```bash
+git pull                          # or copy the new files across
+docker compose up -d --build
+```
+
+This rebuilds the api, worker, web and migrate images. Database migrations run by themselves (the `migrate` container) before the API starts, and your data is untouched. The first build is slow; later ones reuse cached layers. To rebuild one service only: `docker compose up -d --build web`.
+
+### Plain restarts (nothing changed)
+
+```bash
+docker compose restart               # everything
+docker compose restart api worker    # just those two
+docker compose stop && docker compose start
+```
+
+`restart` does **not** reread `.env` or pick up new code. Use `up -d` for that.
+
+### Check that it came back
+
+```bash
+docker compose ps                                     # all healthy / running
+curl -s http://localhost:8080/api/v1/health/ready     # {"data":{"status":"ready"} ...
+docker compose logs --tail 50 api worker              # look for errors
+```
+
+Notes:
+
+- Restarting is safe: containers also restart by themselves after a reboot, and data and queued jobs survive (`pnpm restart-test` proves it).
+- You are offline for a few seconds to a minute. Scanner agents keep their own queue and catch up when the API returns, so nothing is lost.
+- A scanner agent is a separate program on each media machine and is **not** restarted with the server: `sudo systemctl restart creatoros-agent` on Linux, or `creatoros-agent stop` then `start` on Windows (see [Install the scanner agent](#install-the-scanner-agent)).
+- After changing code, run `pnpm check` and the tests on your development machine before deploying: the server only runs the built result.
+
 ## Backup and restore
 
 The worker writes a nightly backup (03:15) and runs a weekly restore test into a scratch database (Sunday 03:45), which also compares nine

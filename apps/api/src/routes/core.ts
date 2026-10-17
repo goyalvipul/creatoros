@@ -24,6 +24,7 @@ import {
   setSetupStep,
   systemHealth,
   updateFollowUpRule,
+  resetMemberPassword,
   updateMember,
   updateOrganization,
   validatePassword,
@@ -337,6 +338,22 @@ export function coreRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     async ({ ctx, params, body }) => {
       await updateMember(ctx, params.id, body);
+      return { ok: true };
+    },
+  );
+
+  route(
+    {
+      method: 'POST',
+      url: '/members/:id/password',
+      tag: 'Settings',
+      summary: 'Set a new password for a person (signs them out everywhere)',
+      role: 'OWNER',
+      params: idParam,
+      body: z.object({ password: z.string().max(256) }),
+    },
+    async ({ ctx, params, body }) => {
+      await resetMemberPassword(ctx, params.id, body.password);
       return { ok: true };
     },
   );

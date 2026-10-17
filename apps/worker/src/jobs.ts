@@ -1,4 +1,4 @@
-import { organizations, sql, type Db } from '@creatoros/db';
+import { backupRuns, desc, eq, organizations, sql, type Db } from '@creatoros/db';
 import {
   createBackup,
   detectNearDuplicates,
@@ -6,6 +6,7 @@ import {
   linkPendingGenerationOutputs,
   listConnectionsForSync,
   markStaleDevicesOffline,
+  notify,
   processOutbox,
   pruneBackups,
   recordHeartbeat,
@@ -127,12 +128,41 @@ export async function jobBackup(d: WorkerDeps, kind: 'manual' | 'scheduled' = 's
   return { file: b.file, verified: v.ok, pruned: pruned.removed.length };
 }
 
+/**
+ * Weekly (and on demand): restore the newest backup into a throw-away database and compare rows + relationships.
+ * The outcome is recorded on the backup run and a failure raises a CRITICAL notification, so a backup that cannot be
+ * restored never goes unnoticed.
+ */
 export async function jobRestoreTest(d: WorkerDeps) {
   const { listBackupFiles } = await import('./backupFiles');
   const latest = await listBackupFiles(d.env.backupDir);
   if (!latest.length) return { skipped: 'no backups yet' };
-  const out = await restoreTest(d.db, d.env, latest[0]!, { runner: d.runner });
-  return { file: latest[0], ...out };
+  const file = latest[0]!;
+  const [run] = await d.db
+    .select({ id: backupRuns.id })
+    .from(backupRuns)
+    .where(eq(backupRuns.target, file))
+    .orderBy(desc(backupRuns.startedAt))
+    .limit(1);
+  try {
+    const out = await restoreTest(d.db, d.env, file, { runner: d.runner, backupRunId: run?.id });
+    return { file, ...out };
+  } catch (e) {
+    const message = `Restore test failed: ${(e as Error).message}`.slice(0, 1000);
+    if (run) await d.db.update(backupRuns).set({ error: message }).where(eq(backupRuns.id, run.id));
+    await each(d, await orgIds(d.db), 'restore-test notification', (orgId) =>
+      notify(d.db, {
+        orgId,
+        type: 'backup.restore_test.failed',
+        dedupeKey: `restore-test:${file}`,
+        title: 'A backup could not be restored',
+        body: message,
+        severity: 'CRITICAL',
+        deepLink: '/settings?tab=backups',
+      }),
+    );
+    throw e;
+  }
 }
 
 /** Housekeeping: preview cache LRU, expired rows, daily analytics snapshot and near-duplicate scan. */

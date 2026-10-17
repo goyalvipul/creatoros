@@ -1,0 +1,127 @@
+openapi: 3.0.3
+info:
+  title: Todo adapter contract (what Creator OS expects from the Todo PWA)
+  version: 1.0.0
+  description: |
+    Default endpoints and field names. Every path and field name is configurable in Creator OS (Integrations -> Todo),
+    so an existing Todo API can be mapped without changing either side. See docs/TODO_ADAPTER_CONTRACT.md.
+servers:
+  - url: https://todo.example.ts.net/api
+security:
+  - bearer: []
+paths:
+  /health:
+    get:
+      summary: Optional liveness check
+      responses:
+        '200': { description: ok }
+  /tasks:
+    post:
+      summary: Create a task (idempotent)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, example: 'creatoros:6f1c...:a1b2...' }
+          description: The same key must always return the same task and must never create a second one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskWrite' }
+      responses:
+        '200':
+          {
+            description: Existing task for this key,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } },
+          }
+        '201':
+          {
+            description: Created,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } },
+          }
+    get:
+      summary: List or look up tasks
+      parameters:
+        - in: query
+          name: external_ref
+          schema: { type: string }
+          description: Return tasks whose external_ref equals this value (used to prevent duplicates).
+        - in: query
+          name: updated_since
+          schema: { type: string, format: date-time }
+          description: Return tasks changed after this instant (incremental reconciliation).
+      responses:
+        '200':
+          description: A bare array, or an object with data / items / tasks
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: { $ref: '#/components/schemas/Task' }
+                  - type: object
+                    properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Task' } }
+  /tasks/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      summary: Read one task
+      responses:
+        '200':
+          {
+            description: ok,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } },
+          }
+        '404': { description: unknown task }
+    patch:
+      summary: Update the provided fields only
+      parameters:
+        - in: header
+          name: If-Match
+          schema: { type: string }
+          description: The revision (updated_at / ETag) Creator OS last saw. Reply 412 when it is stale.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskWrite' }
+      responses:
+        '200':
+          {
+            description: Updated,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Task' } } },
+          }
+        '412': { description: Stale revision. Creator OS records a visible conflict and overwrites nothing. }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    TaskWrite:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        timezone: { type: string, example: America/Vancouver }
+        priority: { description: Mapped through the configured priority map }
+        completed: { type: boolean }
+        external_ref: { type: string, example: 'creatoros:action:a1b2...' }
+        remind_at: { type: string, format: date-time, nullable: true }
+        tags: { type: array, items: { type: string } }
+        project_id: { type: string }
+    Task:
+      allOf:
+        - $ref: '#/components/schemas/TaskWrite'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+            completed_at: { type: string, format: date-time, nullable: true }
+            updated_at: { type: string, description: Used as the revision for If-Match }

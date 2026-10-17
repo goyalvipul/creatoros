@@ -2,7 +2,7 @@ import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
 import { createDb } from '@creatoros/db';
 import { loadConfig } from '@creatoros/services';
-import { JOB_TABLE, jobBackup, jobSync, type JobName, type WorkerDeps } from './jobs';
+import { JOB_TABLE, jobBackup, jobRestoreTest, jobSync, type JobName, type WorkerDeps } from './jobs';
 
 /**
  * Scheduler + processor. Repeatable jobs are registered with deterministic scheduler ids, so restarting the worker
@@ -64,6 +64,7 @@ async function main() {
     'requests',
     async (job: Job) => {
       if (job.name === 'backup') return jobBackup(deps, 'manual');
+      if (job.name === 'restore-test') return jobRestoreTest(deps) as Promise<object>;
       if (job.name === 'sync') {
         const { runSync } = await import('@creatoros/services');
         return runSync(handle.db, config.env, String(job.data.connectionId), {

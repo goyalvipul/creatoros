@@ -20,7 +20,6 @@ import {
   ingestMessage,
   issueInvoice,
   listActions,
-  listNotifications,
   recordPayment,
   systemHealth,
   createDeal,
@@ -35,6 +34,12 @@ const h = openDb();
 afterAll(() => h.close());
 const rows = <T>(r: unknown) => (r as { rows: T[] }).rows;
 const HOUR = 3600_000;
+
+/** Every notification the org was sent, including ones held back by quiet hours (so tests do not depend on the time of day). */
+const sentNotifications = async (orgId: string) =>
+  rows<{ type: string; severity: string }>(
+    await h.db.execute(sql`select type, severity from notifications where org_id = ${orgId}`),
+  );
 
 const deps = (env = testEnv()): WorkerDeps => ({ db: h.db, env, runner: dockerRunner() });
 
@@ -114,11 +119,11 @@ describe('worker jobs', () => {
       await h.db.execute(sql`select status from invoices where id = ${inv.id}`),
     )[0]!.status;
     expect(st).toBe('OVERDUE');
-    const overdue = (await listNotifications(org.ctx, {})).filter((n: any) => n.type === 'invoice.overdue');
+    const overdue = (await sentNotifications(org.orgId)).filter((n) => n.type === 'invoice.overdue');
     expect(overdue.length).toBe(1);
     await recordPayment(org.ctx, inv.id, { amountMinor: 50000 });
     await jobEvents(d);
-    expect((await listNotifications(org.ctx, {})).some((n: any) => n.type === 'invoice.paid')).toBe(true);
+    expect((await sentNotifications(org.orgId)).some((n) => n.type === 'invoice.paid')).toBe(true);
   });
 
   it('stale devices are marked OFFLINE with one notification, not MISSING', async () => {
@@ -138,7 +143,7 @@ describe('worker jobs', () => {
       .from(devices)
       .where(and(eq(devices.id, dev.deviceId)));
     expect(row!.state).toBe('OFFLINE');
-    const n = (await listNotifications(org.ctx, {})).filter((x: any) => x.type === 'agent.offline');
+    const n = (await sentNotifications(org.orgId)).filter((x) => x.type === 'agent.offline');
     expect(n).toHaveLength(1);
   });
 
@@ -201,6 +206,8 @@ describe('backup and restore', () => {
       ])
         expect([k, manifest.relationCounts[k] > 0]).toEqual([k, true]);
       expect(rt.relations).toEqual(manifest.relationCounts);
+      // the passing restore test is recorded on the backup run, visible in Settings -> Backups
+      expect((await listBackups(org.ctx)).some((b) => b.state === 'RESTORED_TEST')).toBe(true);
       // corruption is detected
       const dump = path.join(
         env.backupDir,
@@ -222,6 +229,12 @@ describe('backup and restore', () => {
         const t = new Date(base - i * 86400_000 * 3);
         fs.utimesSync(f, t, t);
       }
+      // a backup that cannot be restored is loud: the job fails and a CRITICAL notification is raised
+      await expect(jobRestoreTest(d)).rejects.toThrow();
+      const note = (await h.db.execute(
+        sql`select severity from notifications where org_id = ${org.orgId} and type = 'backup.restore_test.failed'`,
+      )) as unknown as { rows: { severity: string }[] };
+      expect(note.rows.map((r) => r.severity)).toEqual(['CRITICAL']);
       const pruned = await pruneBackups(env, { daily: 7, weekly: 4, monthly: 6 });
       expect(pruned.kept.length).toBeLessThan(13);
       expect(pruned.removed.length).toBeGreaterThan(0);

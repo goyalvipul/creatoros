@@ -116,6 +116,13 @@ describe('first run and auth', () => {
     expect((await api.call('GET', `${V1}/members`, { cookie: editor })).status).toBe(403);
     expect((await api.call('POST', `${V1}/pairing-codes`, { cookie: editor, body: {} })).status).toBe(403);
     expect((await api.call('GET', `${V1}/members`, { cookie: owner })).status).toBe(200);
+    // restore tests are owner-only, and say so plainly when no worker is attached (never a fake "queued")
+    expect((await api.call('POST', `${V1}/backups/restore-test`, { cookie: editor, body: {} })).status).toBe(
+      403,
+    );
+    const noWorker = await api.call('POST', `${V1}/backups/restore-test`, { cookie: owner, body: {} });
+    expect(noWorker.status).toBe(503);
+    expect(noWorker.body.error.code).toBe('QUEUE_UNAVAILABLE');
     // the last owner cannot be demoted
     const me = j(await api.call('GET', `${V1}/me`, { cookie: owner })).user;
     const demote = await api.call('PATCH', `${V1}/members/${me.id}`, {
@@ -124,6 +131,50 @@ describe('first run and auth', () => {
     });
     expect(demote.status).toBe(409);
     expect(demote.body.error.code).toBe('LAST_OWNER');
+  });
+
+  it('an owner can set a new password for someone: old password and sessions stop working, weak ones are refused', async () => {
+    const created = j(
+      await api.call('POST', `${V1}/members`, {
+        cookie: owner,
+        body: {
+          email: 'forgetful@creator.test',
+          name: 'Forgetful',
+          role: 'EDITOR',
+          password: 'first long passphrase 123',
+        },
+      }),
+    );
+    const old = await api.login('forgetful@creator.test', 'first long passphrase 123');
+    expect((await api.call('GET', `${V1}/me`, { cookie: old })).status).toBe(200);
+
+    const weak = await api.call('POST', `${V1}/members/${created.id}/password`, {
+      cookie: owner,
+      body: { password: 'short' },
+    });
+    expect(weak.status).toBe(400);
+    expect(weak.body.error.code).toBe('WEAK_PASSWORD');
+    expect(
+      (
+        await api.call('POST', `${V1}/members/${created.id}/password`, {
+          cookie: editor,
+          body: { password: 'x' },
+        })
+      ).status,
+    ).toBe(403);
+
+    const ok = await api.call('POST', `${V1}/members/${created.id}/password`, {
+      cookie: owner,
+      body: { password: 'second long passphrase 456' },
+    });
+    expect(ok.status).toBe(200);
+    expect((await api.call('GET', `${V1}/me`, { cookie: old })).status).toBe(401); // signed out everywhere
+    const again = await api.call('POST', `${V1}/auth/login`, {
+      body: { email: 'forgetful@creator.test', password: 'first long passphrase 123' },
+    });
+    expect(again.status).toBe(401);
+    const fresh = await api.login('forgetful@creator.test', 'second long passphrase 456');
+    expect((await api.call('GET', `${V1}/me`, { cookie: fresh })).status).toBe(200);
   });
 
   it('validation errors list the offending fields; Idempotency-Key replays', async () => {

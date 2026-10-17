@@ -129,6 +129,34 @@ export async function createMember(
   });
 }
 
+/**
+ * Owner sets a new password for a member (nothing in this product sends e-mail, so there is no "forgot password" link).
+ * Also clears a login lock-out and signs the person out everywhere.
+ */
+export async function resetMemberPassword(ctx: Ctx, userId: string, password: string) {
+  const [m] = await ctx.db
+    .select({ email: users.email })
+    .from(organizationMemberships)
+    .innerJoin(users, eq(users.id, organizationMemberships.userId))
+    .where(and(eq(organizationMemberships.orgId, ctx.orgId), eq(organizationMemberships.userId, userId)));
+  if (!m) throw notFound('Member');
+  const errs = validatePassword(password, m.email);
+  if (errs.length) throw badRequest(errs[0]!, { errors: errs }, 'WEAK_PASSWORD');
+  await ctx.db
+    .update(users)
+    .set({
+      passwordHash: await hashPassword(password),
+      failedLogins: 0,
+      lockedUntil: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
+  await ctx.db.execute(
+    sql`update sessions set revoked_at = now() where user_id = ${userId} and revoked_at is null`,
+  );
+  await audit(ctx, 'member.password.reset', { type: 'user', id: userId });
+}
+
 export async function updateMember(
   ctx: Ctx,
   userId: string,

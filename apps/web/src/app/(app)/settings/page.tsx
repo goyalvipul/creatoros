@@ -228,6 +228,8 @@ function Team() {
   const me = useMe();
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ name: '', email: '', role: 'EDITOR', password: '' });
+  const [resetFor, setResetFor] = useState<any>(null);
+  const [newPw, setNewPw] = useState('');
   const owner = me.data?.user.role === 'OWNER';
   return (
     <>
@@ -269,6 +271,18 @@ function Team() {
                 </Td>
                 <Td>{m.totp ? 'On' : 'Off'}</Td>
                 <Td>
+                  {owner && (
+                    <Button
+                      size="sm"
+                      aria-label={`Set a new password for ${m.name}`}
+                      onClick={() => {
+                        setNewPw('');
+                        setResetFor(m);
+                      }}
+                    >
+                      New password
+                    </Button>
+                  )}{' '}
                   {owner && m.id !== me.data?.user.id && (
                     <ActionButton
                       size="sm"
@@ -289,6 +303,31 @@ function Team() {
           </Table>
         )}
       </Async>
+      <FormDialog
+        open={Boolean(resetFor)}
+        onClose={() => setResetFor(null)}
+        title={`New password for ${resetFor?.name ?? ''}`}
+        submitLabel="Set password"
+        onSubmit={async () => {
+          await post(`/members/${resetFor.id}/password`, { password: newPw });
+          await refresh('/members');
+        }}
+      >
+        <p className="text-sm text-muted">
+          They are signed out everywhere and any sign-in lock is cleared. Share the password privately and ask
+          them to change it. Nothing is e-mailed.
+        </p>
+        <Field label="New password" hint="At least 12 characters.">
+          <Input
+            required
+            type="password"
+            autoComplete="new-password"
+            minLength={12}
+            value={newPw}
+            onChange={(e) => setNewPw(e.target.value)}
+          />
+        </Field>
+      </FormDialog>
       <FormDialog
         open={adding}
         onClose={() => setAdding(false)}
@@ -655,6 +694,16 @@ function Backups() {
           success="Backup finished"
         >
           Back up now
+        </ActionButton>
+        <ActionButton
+          className="ml-2"
+          onAction={async () => {
+            await post('/backups/restore-test', {});
+            await refresh('/backups', '/notifications');
+          }}
+          success="Restore test queued. It restores into a scratch database, never your live data."
+        >
+          Run restore test
         </ActionButton>
       </div>
       <Async

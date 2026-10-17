@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 // Bundle our own workspace packages (they ship TypeScript sources); leave third-party packages as runtime dependencies.
 export default defineConfig({
-  entry: ['src/main.ts', 'src/migrate.ts'],
+  entry: ['src/main.ts', 'src/migrate.ts', 'src/cli/reset-password.ts'],
   format: ['esm'],
   target: 'node22',
   platform: 'node',

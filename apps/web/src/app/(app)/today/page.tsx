@@ -52,6 +52,9 @@ export default function TodayPage() {
   const todo = useApi<any>('/todo/status');
   const todoLinks = useApi<any[]>(todo.data?.enabled ? '/todo/links' : null);
   const todoReady = Boolean(todo.data?.enabled);
+  const todoNeedsYou = (todoLinks.data ?? []).filter((l) =>
+    ['CONFLICT', 'DEAD_LETTER', 'FAILED'].includes(l.syncState),
+  );
   const linkedActions = new Map((todoLinks.data ?? []).map((l) => [l.actionId, l]));
   const [adding, setAdding] = useState(false);
   const [f, setF] = useState({ title: '', description: '', dueAt: '', priority: 'NORMAL' });
@@ -82,8 +85,8 @@ export default function TodayPage() {
       />
       {todo.data && !todoReady && (
         <p className="mb-3 text-xs text-muted" data-testid="todo-not-configured">
-          Todo sync is not configured, so actions stay inside Creator OS. Connect it under Settings →
-          Integrations when you are ready.
+          Todo sync is not configured, so actions stay inside Creator OS. Connect it under Integrations when
+          you are ready.
         </p>
       )}
       <div className="grid gap-4 lg:grid-cols-3">
@@ -224,53 +227,108 @@ export default function TodayPage() {
           </div>
         </div>
 
-        <Card>
-          <CardTitle
-            action={
-              (notes.data?.length ?? 0) > 0 && (
-                <ActionButton
-                  size="sm"
-                  variant="ghost"
-                  onAction={async () => {
-                    await post('/notifications/read', { all: true });
-                    await refresh('/notifications');
-                  }}
-                >
-                  Mark all read
-                </ActionButton>
-              )
-            }
-          >
-            Notifications
-          </CardTitle>
-          <Async res={notes} empty={<p className="text-sm text-muted">No notifications.</p>}>
-            {(rows) => (
-              <ul className="space-y-2">
-                {rows.map((n) => (
-                  <li
-                    key={n.id}
-                    className={clsx(
-                      'rounded-lg border p-2 text-sm',
-                      n.readAt ? 'border-border text-muted' : 'border-accent/40',
-                    )}
-                  >
-                    <div className="font-medium">
-                      {n.deepLink ? (
-                        <Link href={n.deepLink} className="hover:underline">
-                          {n.title}
-                        </Link>
+        <div className="space-y-4">
+          {todoNeedsYou.length > 0 && (
+            <Card>
+              <CardTitle>Todo sync needs you</CardTitle>
+              <ul className="space-y-2" aria-label="Todo sync problems">
+                {todoNeedsYou.map((l) => (
+                  <li key={l.id} className="rounded-lg border border-warn/40 p-2 text-sm">
+                    <div className="font-medium">{l.title}</div>
+                    <div className="mt-0.5 text-xs text-muted">
+                      {l.syncState === 'CONFLICT'
+                        ? 'Changed in both places. Nothing was overwritten. Choose which version wins.'
+                        : l.syncState === 'DEAD_LETTER'
+                          ? `Gave up after ${l.attempts} attempts. ${l.lastError ?? ''}`
+                          : `Not synced yet${l.lastError ? `: ${l.lastError}` : ''}.`}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {l.syncState === 'CONFLICT' ? (
+                        <>
+                          <ActionButton
+                            size="sm"
+                            onAction={async () => {
+                              await post(`/todo/links/${l.id}/resolve`, { resolution: 'USE_LOCAL' });
+                              await refresh('/todo');
+                            }}
+                          >
+                            Keep Creator OS version
+                          </ActionButton>
+                          <ActionButton
+                            size="sm"
+                            onAction={async () => {
+                              await post(`/todo/links/${l.id}/resolve`, { resolution: 'USE_REMOTE' });
+                              await refresh('/todo', '/actions');
+                            }}
+                          >
+                            Keep Todo version
+                          </ActionButton>
+                        </>
                       ) : (
-                        n.title
+                        <ActionButton
+                          size="sm"
+                          onAction={async () => {
+                            await post(`/todo/links/${l.id}/retry`, {});
+                            await refresh('/todo');
+                          }}
+                        >
+                          Retry now
+                        </ActionButton>
                       )}
                     </div>
-                    {n.body && <div className="text-xs text-muted">{n.body}</div>}
-                    <div className="mt-0.5 text-xs text-muted">{ago(n.createdAt)}</div>
                   </li>
                 ))}
               </ul>
-            )}
-          </Async>
-        </Card>
+            </Card>
+          )}
+          <Card>
+            <CardTitle
+              action={
+                (notes.data?.length ?? 0) > 0 && (
+                  <ActionButton
+                    size="sm"
+                    variant="ghost"
+                    onAction={async () => {
+                      await post('/notifications/read', { all: true });
+                      await refresh('/notifications');
+                    }}
+                  >
+                    Mark all read
+                  </ActionButton>
+                )
+              }
+            >
+              Notifications
+            </CardTitle>
+            <Async res={notes} empty={<p className="text-sm text-muted">No notifications.</p>}>
+              {(rows) => (
+                <ul className="space-y-2">
+                  {rows.map((n) => (
+                    <li
+                      key={n.id}
+                      className={clsx(
+                        'rounded-lg border p-2 text-sm',
+                        n.readAt ? 'border-border text-muted' : 'border-accent/40',
+                      )}
+                    >
+                      <div className="font-medium">
+                        {n.deepLink ? (
+                          <Link href={n.deepLink} className="hover:underline">
+                            {n.title}
+                          </Link>
+                        ) : (
+                          n.title
+                        )}
+                      </div>
+                      {n.body && <div className="text-xs text-muted">{n.body}</div>}
+                      <div className="mt-0.5 text-xs text-muted">{ago(n.createdAt)}</div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Async>
+          </Card>
+        </div>
       </div>
 
       <FormDialog

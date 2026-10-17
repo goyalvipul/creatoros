@@ -960,6 +960,23 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   );
   route(
     {
+      method: 'POST',
+      url: '/backups/restore-test',
+      tag: 'System',
+      summary:
+        'Restore the newest backup into a throw-away database and verify it (live data is never touched)',
+      role: 'OWNER',
+      status: 202,
+    },
+    async () => {
+      if (!deps.enqueue)
+        throw new AppError(503, 'QUEUE_UNAVAILABLE', 'The background worker is not attached to this server.');
+      await deps.enqueue('maintenance', 'restore-test', {});
+      return { queued: true };
+    },
+  );
+  route(
+    {
       method: 'GET',
       url: '/backups/:id',
       tag: 'System',

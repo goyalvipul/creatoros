@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+coverage
+pnpm-lock.yaml
+drizzle
+docs/PRODUCT_SPEC.md
+Creator_OS_Cursor_Master_Prompt.md
+.cursor
+.dockercfg
+apps/scanner-agent
+tests/fixtures
+playwright-report
+test-results
+*.mdc

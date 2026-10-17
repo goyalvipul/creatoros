@@ -1,0 +1,28 @@
+{
+  "name": "@creatoros/tests-integration",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "echo \"integration tests run via pnpm test:integration\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "pg": "tsx src/start-pg.ts"
+  },
+  "dependencies": {
+    "@creatoros/api": "workspace:*",
+    "@creatoros/connectors": "workspace:*",
+    "@creatoros/db": "workspace:*",
+    "@creatoros/domain": "workspace:*",
+    "@creatoros/services": "workspace:*",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/pg": "^8.15.0",
+    "embedded-postgres": "17.10.0-beta.17",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

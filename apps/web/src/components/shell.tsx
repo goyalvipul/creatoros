@@ -189,7 +189,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <Link href="/" className="mr-1 grid size-8 place-items-center rounded-lg bg-accent text-[10px] font-extrabold text-accentfg md:hidden" aria-label="Home">
             C/OS
           </Link>
-          <button onClick={() => setPaletteOpen(true)} className="flex min-h-10 flex-1 items-center gap-2 rounded-lg border border-border bg-bg px-3 text-left text-sm text-muted md:max-w-md">
+          <button onClick={() => setPaletteOpen(true)} className="flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-bg px-3 text-left text-sm text-muted md:max-w-md">
             <Search className="size-4" aria-hidden />
             <span className="flex-1 truncate">Search everything…</span>
             <kbd className="hidden rounded border border-border px-1.5 text-[10px] md:inline">Ctrl K</kbd>

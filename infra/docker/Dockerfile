@@ -20,6 +20,8 @@ COPY tests/integration/package.json tests/integration/
 COPY tests/e2e/package.json tests/e2e/
 RUN pnpm install --frozen-lockfile
 COPY . .
+# Next.js bakes rewrites at build time; Caddy normally routes /api itself, this keeps direct web access working too.
+ENV API_INTERNAL_URL=http://api:4000
 RUN pnpm --filter @creatoros/api build && pnpm --filter @creatoros/worker build && pnpm --filter @creatoros/web build
 
 # ---- shared runtime base: Node + a Postgres 17 client (pg_dump/pg_restore must be >= the server version) ----

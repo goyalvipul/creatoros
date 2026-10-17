@@ -20,6 +20,7 @@ import {
   type Executor,
 } from '@creatoros/db';
 import {
+  BUILT_IN_TEMPLATES,
   PROJECT_STAGE,
   canonicalPath,
   computeProjectProgress,
@@ -117,7 +118,13 @@ export async function createProject(ctx: Ctx, input: ProjectInput) {
 }
 
 async function applyTemplateTx(tx: Executor, orgId: string, projectId: string, format: string, key?: string) {
-  const templates = await tx.select().from(projectChecklistTemplates).where(eq(projectChecklistTemplates.orgId, orgId));
+  let templates = await tx.select().from(projectChecklistTemplates).where(eq(projectChecklistTemplates.orgId, orgId));
+  if (!templates.some((t) => t.contentType === 'OTHER')) {
+    // installs created before the general template existed get it on demand
+    const g = BUILT_IN_TEMPLATES.find((t) => t.key === 'general')!;
+    await tx.insert(projectChecklistTemplates).values({ orgId, key: g.key, name: g.name, contentType: g.contentType as any, items: g.items, variants: g.variants, builtIn: true }).onConflictDoNothing();
+    templates = await tx.select().from(projectChecklistTemplates).where(eq(projectChecklistTemplates.orgId, orgId));
+  }
   const tpl = (key ? templates.find((t) => t.key === key) : undefined) ?? templates.find((t) => t.contentType === format) ?? templates.find((t) => t.contentType === 'OTHER');
   if (key && !templates.some((t) => t.key === key)) throw badRequest(`Unknown checklist template: ${key}`);
   if (!tpl || tpl.items.length === 0) return 0;

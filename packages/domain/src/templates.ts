@@ -24,6 +24,13 @@ const common: TemplateItem[] = [
 
 export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   {
+    key: 'general',
+    name: 'General project',
+    contentType: 'OTHER',
+    variants: ['MASTER', 'SHORT_FORM'],
+    items: [{ label: 'Goal and audience written down', required: true, stage: 'DRAFT' }, ...common],
+  },
+  {
     key: 'music_single',
     name: 'Music single',
     contentType: 'MUSIC_SINGLE',

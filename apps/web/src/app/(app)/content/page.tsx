@@ -94,7 +94,7 @@ export default function ContentPage() {
         const p = await post(`/ideas/${converting.id}/convert`, { title: cv.title.trim() || undefined, type: cv.type, dueAt: cv.dueAt ? new Date(cv.dueAt).toISOString() : undefined });
         await reload();
         setConverting(null);
-        router.push(`/production/${p.id ?? p.projectId}`);
+        router.push(`/production/${p.project?.id ?? p.id}`);
       }}>
         <Field label="Project title"><Input required value={cv.title} onChange={(e) => setCv({ ...cv, title: e.target.value })} /></Field>
         <div className="grid grid-cols-2 gap-3">

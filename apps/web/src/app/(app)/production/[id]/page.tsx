@@ -69,7 +69,7 @@ export default function ProjectPage() {
                       {p.checklist.map((c: any) => (
                         <li key={c.id}>
                           <label className="flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-2 hover:bg-panel2">
-                            <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={Boolean(c.doneAt)} onChange={async (e) => { await patch(`/checklist-items/${c.id}`, { done: e.target.checked }); await reload(); }} />
+                            <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={Boolean(c.doneAt)} onChange={async (e) => { setStageError(null); try { await patch(`/checklist-items/${c.id}`, { done: e.target.checked }); } catch (err) { setStageError(err instanceof Error ? err.message : 'Could not update the checklist item'); } await reload(); }} />
                             <span className={clsx('flex-1 text-sm', c.doneAt && 'text-muted line-through')}>{c.label}</span>
                             {c.required && <Badge tone={c.doneAt ? 'ok' : 'warn'}>required</Badge>}
                             <span className="text-xs text-muted">{titleCase(c.stage)}</span>

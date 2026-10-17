@@ -10,3 +10,9 @@ Reuses the existing CRM message pipeline instead of adding a parallel one.
 - Routes: `apps/api/src/routes/socials.ts`. UI: `/socials`, `/socials/inbox`, `/workflows`, `/workflows/approvals`, `/workflows/[id]`.
 
 Not built: Facebook Pages/Messenger, YouTube comment replies, Threads, TikTok, publishing and temporary public media delivery, AI drafting.
+
+## Additions (local state and CRM links)
+
+Migration `0004_socials_local_state.sql` adds `starred`, `archived_local`, `internal_notes`, `follow_up_at` to `conversation_threads`: CreatorOS-only state that never changes the platform. Follow-ups and tasks are `internal_actions` with dedupe keys `social-followup:<thread>` / `social-task:<thread>` (one open item per conversation; the Todo sync picks them up like any action). "Create collaboration" calls the existing `triageThread(CONFIRMED)`, which is idempotent per source conversation. The overview (`/socials/overview`) counts only synchronised rows; mentions are reported as "not collected". New live messages raise one `SOCIAL_MESSAGE` notification per provider message id.
+
+Pages: `/socials` (overview), `/socials/inbox`, `/socials/platform/[platform]`, `/socials/comments`, `/socials/leads`, `/socials/scheduled`, `/socials/accounts`.

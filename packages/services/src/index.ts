@@ -24,3 +24,4 @@ export * from './settings';
 export * from './meta-webhooks';
 export * from './social';
 export * from './workflows';
+export * from './socials-ops';

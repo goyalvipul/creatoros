@@ -4,6 +4,13 @@ import { WORKFLOW_MODE, WORKFLOW_TEMPLATES } from '@creatoros/domain';
 import {
   activateWorkflow,
   approveApproval,
+  createThreadCollaboration,
+  createThreadTask,
+  followUpThread,
+  platformCatalog,
+  scheduledContent,
+  socialsOverview,
+  updateThreadLocal,
   createWorkflow,
   deleteWorkflow,
   duplicateWorkflow,
@@ -109,6 +116,11 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
         kind: z.enum(['DM', 'COMMENT']).optional(),
         q: z.string().max(200).optional(),
         leads: z.enum(['true', 'false']).optional(),
+        starred: z.enum(['true', 'false']).optional(),
+        archived: z.enum(['true', 'false']).optional(),
+        followUp: z.enum(['true', 'false']).optional(),
+        unread: z.enum(['true', 'false']).optional(),
+        needsReply: z.enum(['true', 'false']).optional(),
       }),
     },
     ({ ctx, query }) => {
@@ -160,6 +172,94 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       }),
     },
     ({ ctx, params, body }) => replyToThread(ctx, params.id, body, ov()),
+  );
+
+  // ================================================================ overview, platforms, local organisation
+  route(
+    {
+      method: 'GET',
+      url: '/socials/overview',
+      tag: 'Socials',
+      summary: 'Dashboard numbers computed from synchronised data',
+      role: 'EDITOR',
+      query: z.object({ account: uuid.optional(), days: z.coerce.number().int().min(1).max(365).optional() }),
+    },
+    ({ ctx, query }) => socialsOverview(ctx, { connectionId: query.account, days: query.days }),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/socials/platforms',
+      tag: 'Socials',
+      summary: 'Honest platform capability catalogue',
+      role: 'EDITOR',
+    },
+    () => platformCatalog(),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/socials/scheduled',
+      tag: 'Socials',
+      summary: 'Planned posts from the Publishing module',
+      role: 'EDITOR',
+    },
+    ({ ctx }) => scheduledContent(ctx),
+  );
+  route(
+    {
+      method: 'PATCH',
+      url: '/socials/threads/:id/local',
+      tag: 'Socials',
+      summary: 'CreatorOS-only star, archive, labels, priority and notes (never changes the platform)',
+      params: idParam,
+      body: z
+        .object({
+          starred: z.boolean(),
+          archivedLocal: z.boolean(),
+          labels: z.array(z.string().max(40)).max(20),
+          priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']),
+          internalNotes: z.string().max(4000).nullable(),
+        })
+        .partial(),
+    },
+    ({ ctx, params, body }) => updateThreadLocal(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/threads/:id/follow-up',
+      tag: 'Socials',
+      summary: 'Set or clear the follow-up (one open task per conversation)',
+      params: idParam,
+      body: z.object({
+        preset: z.enum(['tomorrow', 'next_week', 'custom', 'clear']),
+        at: z.coerce.date().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => followUpThread(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/threads/:id/create-task',
+      tag: 'Socials',
+      summary: 'Create a task linked to this conversation (idempotent)',
+      params: idParam,
+      body: z.object({ title: z.string().max(200).optional(), dueAt: z.coerce.date().nullable().optional() }),
+    },
+    ({ ctx, params, body }) => createThreadTask(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/threads/:id/create-collaboration',
+      tag: 'Socials',
+      summary: 'Confirm as a collaboration lead (idempotent, keeps the source conversation)',
+      params: idParam,
+      body: z.object({ title: z.string().max(200).optional() }),
+    },
+    ({ ctx, params, body }) => createThreadCollaboration(ctx, params.id, body),
   );
 
   // ================================================================ workflows

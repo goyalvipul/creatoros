@@ -10,6 +10,11 @@ import {
   sql,
 } from '@creatoros/db';
 import {
+  createThreadCollaboration,
+  createThreadTask,
+  followUpThread,
+  socialsOverview,
+  updateThreadLocal,
   activateWorkflow,
   approveApproval,
   completeOAuth,
@@ -409,5 +414,41 @@ describe('workflows', () => {
       .where(eq(conversationThreads.orgId, s.org.ctx.orgId));
     expect(t2!.optedOut).toBe(true);
     void messages;
+  });
+});
+
+describe('local organisation, follow-ups and collaboration links', () => {
+  it('archives/stars locally, keeps one task and one follow-up per conversation, and one collaboration per conversation', async () => {
+    const s = await setup();
+    const a = await inbound(s, s.A, 'We would love a paid partnership, budget 500', { sender: 'brand1' });
+    await updateThreadLocal(s.org.ctx, a.threadId, { starred: true, archivedLocal: true });
+    expect((await listSocialThreads(s.org.ctx, {})).length).toBe(0);
+    expect((await listSocialThreads(s.org.ctx, { archived: true })).length).toBe(1);
+    expect((await listSocialThreads(s.org.ctx, { archived: true, starred: true })).length).toBe(1);
+    await updateThreadLocal(s.org.ctx, a.threadId, { archivedLocal: false });
+
+    const t1: any = await createThreadTask(s.org.ctx, a.threadId, {});
+    const t2: any = await createThreadTask(s.org.ctx, a.threadId, {});
+    expect(t2.id).toBe(t1.id);
+    expect(t2.alreadyExists).toBe(true);
+
+    await followUpThread(s.org.ctx, a.threadId, { preset: 'tomorrow' });
+    await followUpThread(s.org.ctx, a.threadId, { preset: 'next_week' });
+    const fu = (
+      await h.db.execute(
+        sql`select count(*)::int c from internal_actions where org_id = ${s.org.ctx.orgId} and dedupe_key = ${'social-followup:' + a.threadId}`,
+      )
+    ).rows as any[];
+    expect(fu[0].c).toBe(1);
+
+    const c1: any = await createThreadCollaboration(s.org.ctx, a.threadId, {});
+    const c2: any = await createThreadCollaboration(s.org.ctx, a.threadId, {});
+    expect(c1.opportunityId).toBeTruthy();
+    expect(c2.opportunityId).toBe(c1.opportunityId);
+
+    const o: any = await socialsOverview(s.org.ctx, {});
+    expect(o.accountsTotal).toBe(2);
+    expect(o.leads).toBe(1);
+    expect(o.mentions).toBeNull();
   });
 });

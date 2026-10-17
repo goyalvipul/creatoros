@@ -17,3 +17,5 @@ Meta developer documentation could not be fetched while implementing (HTTP 403),
 Scopes requested for Instagram: `instagram_business_basic`, `instagram_business_content_publish`, `instagram_business_manage_comments`, `instagram_business_manage_messages`. Advanced access / app review may be required for use outside test users: unverified.
 The 24-hour DM reply window (`DM_WINDOW_HOURS`) is an assumption from memory and is unverified.
 Each account card in Socials shows its own state per capability: Available, Missing permission, Needs reconnect, Not implemented, Not configured.
+
+The same matrix is served live at `GET /api/v1/socials/platforms` and shown on each platform page in Socials.

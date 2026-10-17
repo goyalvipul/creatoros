@@ -270,6 +270,11 @@ export async function listSocialThreads(
     kind?: string;
     q?: string;
     leads?: boolean;
+    starred?: boolean;
+    archived?: boolean;
+    followUp?: boolean;
+    unread?: boolean;
+    needsReply?: boolean;
     limit?: number;
   } = {},
 ) {
@@ -288,6 +293,14 @@ export async function listSocialThreads(
   if (q.platform) where.push(sql`t.source = ${q.platform}::message_source`);
   if (q.state) where.push(sql`t.state = ${q.state}::actionable_state`);
   if (q.kind) where.push(sql`t.kind = ${q.kind}`);
+  where.push(q.archived ? sql`t.archived_local` : sql`not t.archived_local`);
+  if (q.starred) where.push(sql`t.starred`);
+  if (q.followUp) where.push(sql`t.follow_up_at is not null`);
+  if (q.needsReply) where.push(sql`t.state = 'NEED_REPLY'`);
+  if (q.unread)
+    where.push(
+      sql`exists (select 1 from messages m where m.thread_id = t.id and m.direction = 'INBOUND' and not m.is_read)`,
+    );
   if (q.leads)
     where.push(
       sql`(t.opportunity_id is not null or exists (select 1 from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id and c.category = 'COLLABORATION'))`,
@@ -300,7 +313,7 @@ export async function listSocialThreads(
   }
   return rowsOf<any>(
     await ctx.db.execute(sql`
-      select t.id, t.source as platform, t.kind, t.state, t.priority, t.labels, t.opted_out as "optedOut",
+      select t.id, t.source as platform, t.kind, t.state, t.priority, t.labels, t.opted_out as "optedOut", t.starred, t.archived_local as "archivedLocal", t.follow_up_at as "followUpAt",
              t.provider_connection_id as "connectionId", t.principal as "accountId", c.label as "accountLabel",
              c.config->>'username' as "accountUsername", t.participant_id as "participantId", t.participant_name as "participantName",
              t.last_inbound_at as "lastInboundAt", t.last_outbound_at as "lastOutboundAt", t.opportunity_id as "opportunityId",
@@ -373,6 +386,10 @@ export async function getSocialThread(ctx: Ctx, id: string) {
     priority: t.priority,
     labels: t.labels,
     optedOut: t.optedOut,
+    starred: t.starred,
+    archivedLocal: t.archivedLocal,
+    internalNotes: t.internalNotes,
+    followUpAt: t.followUpAt,
     opportunityId: t.opportunityId,
     // The identity a reply will be sent from. Fixed by the conversation; the client cannot choose another.
     replyAs: conn

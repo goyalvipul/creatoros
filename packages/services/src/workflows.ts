@@ -951,6 +951,18 @@ export async function processSocialEvent(
   const r = await ingestSocialEvent(sys, ev);
   // outgoing messages (our own replies, echoes) and redeliveries never trigger anything: this is the loop guard
   if (r.duplicate || ev.direction !== 'INBOUND' || !r.messageId) return { ...r, runs: [] as any[] };
+  if (ev.isLive)
+    await notify(db, {
+      orgId,
+      type: 'SOCIAL_MESSAGE',
+      dedupeKey: `social-msg:${ev.connectionId}:${ev.providerMsgId}`,
+      title: `${ev.kind === 'COMMENT' ? 'New comment' : 'New message'} from ${ev.participantName ?? ev.participantId}`,
+      body: ev.text.slice(0, 120),
+      severity: 'INFO',
+      deepLink: `/socials/inbox?thread=${r.threadId}`,
+      sourceType: 'social_thread',
+      sourceId: r.threadId,
+    }).catch(() => false);
   const [cls] = await db
     .select()
     .from(inboundClassifications)

@@ -2,7 +2,7 @@
 
 import clsx from 'clsx';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import {
   ActionButton,
   Async,
@@ -16,16 +16,18 @@ import {
   Textarea,
   Input,
 } from '@/components/ui';
-import { post, refresh, useApi } from '@/lib/api';
+import { patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase, when } from '@/lib/format';
 
 function Inbox() {
-  const initial = useSearchParams().get('account') ?? '';
+  const params = useSearchParams();
+  const initial = params.get('account') ?? '';
+  const [view, setView] = useState('');
   const [account, setAccount] = useState(initial);
   const [state, setState] = useState('');
   const [kind, setKind] = useState('');
   const [q, setQ] = useState('');
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(params.get('thread'));
   const accounts = useApi<any[]>('/socials/accounts');
   const threads = useApi<any[]>('/socials/threads', {
     query: {
@@ -62,6 +64,27 @@ function Inbox() {
           <option value="COMMENT">Comments</option>
         </Select>
         <Input aria-label="Search" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+      </div>
+      <div className="mb-3 flex flex-wrap gap-1.5" role="group" aria-label="Saved views">
+        {[
+          ['', 'All'],
+          ['unread', 'Unread'],
+          ['starred', 'Starred'],
+          ['followup', 'Follow up'],
+          ['leads', 'Collaboration leads'],
+          ['archived', 'Archived (local)'],
+        ].map(([k, l]) => (
+          <button
+            key={k}
+            onClick={() => setView(k!)}
+            className={clsx(
+              'rounded-full border border-border px-3 py-1 text-xs',
+              view === k ? 'bg-accent text-accentfg' : 'bg-panel hover:bg-panel2',
+            )}
+          >
+            {l}
+          </button>
+        ))}
       </div>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,22rem)_1fr]">
         <div className={clsx(sel && 'hidden lg:block')}>
@@ -115,8 +138,88 @@ function Inbox() {
   );
 }
 
+function Tools({ t, id }: { t: any; id: string }) {
+  const [notes, setNotes] = useState(t.internalNotes ?? '');
+  const done = async (fn: () => Promise<unknown>) => {
+    await fn();
+    await refresh('/socials');
+  };
+  return (
+    <div className="mb-3 space-y-2 text-sm">
+      <div className="flex flex-wrap gap-1.5">
+        <ActionButton
+          size="sm"
+          onAction={() => done(() => patch(`/socials/threads/${id}/local`, { starred: !t.starred }))}
+        >
+          {t.starred ? 'Unstar' : 'Star'}
+        </ActionButton>
+        <ActionButton
+          size="sm"
+          onAction={() =>
+            done(() => patch(`/socials/threads/${id}/local`, { archivedLocal: !t.archivedLocal }))
+          }
+        >
+          {t.archivedLocal ? 'Unarchive (CreatorOS only)' : 'Archive (CreatorOS only)'}
+        </ActionButton>
+        <ActionButton
+          size="sm"
+          success="Follow-up set for tomorrow"
+          onAction={() => done(() => post(`/socials/threads/${id}/follow-up`, { preset: 'tomorrow' }))}
+        >
+          Follow up tomorrow
+        </ActionButton>
+        <ActionButton
+          size="sm"
+          success="Follow-up set for next week"
+          onAction={() => done(() => post(`/socials/threads/${id}/follow-up`, { preset: 'next_week' }))}
+        >
+          Next week
+        </ActionButton>
+        <ActionButton
+          size="sm"
+          success="Task ready in Actions"
+          onAction={() => done(() => post(`/socials/threads/${id}/create-task`, {}))}
+        >
+          Create task
+        </ActionButton>
+        <ActionButton
+          size="sm"
+          success={t.opportunityId ? 'Already a collaboration' : 'Collaboration created'}
+          onAction={() => done(() => post(`/socials/threads/${id}/create-collaboration`, {}))}
+        >
+          {t.opportunityId ? 'Collaboration linked' : 'Create collaboration'}
+        </ActionButton>
+      </div>
+      {t.followUpAt && <p className="text-xs text-muted">Follow-up due {when(t.followUpAt)}</p>}
+      <p className="text-xs text-muted">
+        Star, archive, notes and read state only exist in CreatorOS. They do not change anything on Instagram.
+      </p>
+      <Textarea
+        aria-label="Internal notes"
+        rows={2}
+        placeholder="Internal notes (private to CreatorOS)"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+      />
+      <ActionButton
+        size="sm"
+        success="Notes saved"
+        onAction={() => done(() => patch(`/socials/threads/${id}/local`, { internalNotes: notes }))}
+      >
+        Save notes
+      </ActionButton>
+    </div>
+  );
+}
+
 function Thread({ id, onBack }: { id: string; onBack: () => void }) {
   const res = useApi<any>(`/socials/threads/${id}`);
+  useEffect(() => {
+    void post(`/socials/threads/${id}/read`).then(
+      () => refresh('/socials/threads', '/socials/overview'),
+      () => {},
+    );
+  }, [id]);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   return (
@@ -140,6 +243,7 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
             </div>
             {t.optedOut && <Badge tone="bad">Asked not to be messaged automatically</Badge>}
           </div>
+          <Tools t={t} id={id} />
           <ul className="mb-3 max-h-96 space-y-2 overflow-y-auto">
             {t.messages.map((m: any) => (
               <li

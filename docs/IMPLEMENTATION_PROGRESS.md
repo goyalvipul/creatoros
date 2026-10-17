@@ -64,3 +64,8 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - Status: implemented, locally verified against fake HTTP only. **No live Meta call has been made**; endpoints/versions are unverified (see `docs/socials/PROVIDER_CAPABILITIES.md`).
 - Not built: Facebook Pages/Messenger, YouTube comment replies, Threads, TikTok, publishing + temporary public media, AI nodes, delay nodes, drag-and-drop canvas, Playwright specs for the new pages.
 - Public ingress (Tailscale Funnel) remains disabled; needs owner authorization.
+
+### Socials module completion pass
+
+- Added: Socials sub-navigation, overview dashboard, platform pages with an honest capability catalogue, comments / leads / scheduled pages, accounts settings (nickname, tone, signature, language), inbox saved views, local star/archive/notes, follow-up/task/collaboration actions (idempotent), message notifications, migration 0004. Tests in `socials-workflows.test.ts`.
+- Not built: Facebook/Messenger, YouTube comments, Threads, TikTok connectors; AI reply assist; media/post context; mentions; saved-view persistence; keyboard shortcuts; comment moderation; per-account notification preferences; Playwright specs.

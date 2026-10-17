@@ -37,4 +37,5 @@ docker compose up -d --build
 - `cd` into folders named `(app)` or `[id]` fails in PowerShell; use `-LiteralPath` or the file tools.
 - Keep commands simple. Do not chain `git commit` with other inspection.
 - Tests that count notifications must not depend on the clock (quiet hours): read the table, not the visible list.
+- Run browser tests with `pnpm test:e2e` (its pretest builds the web app against the test API). Running bare `playwright` after `pnpm build` uses a bundle built for another API address and every test fails at sign-in.
 - Next.js bakes `rewrites()` at build time, so `API_INTERNAL_URL` must be set when building the web image.

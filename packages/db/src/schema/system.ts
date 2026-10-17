@@ -430,3 +430,23 @@ export const webhookReceipts = pgTable(
   },
   (t) => [uniqueIndex('webhook_receipts_uq').on(t.source, t.eventId)],
 );
+
+/** Signed provider webhooks (Meta). `dedupeKey` makes redelivery idempotent; processing happens asynchronously. */
+export const providerWebhookEvents = pgTable(
+  'provider_webhook_events',
+  {
+    id: pk(),
+    provider: provider('provider').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    objectType: text('object_type'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    status: text('status').notNull().default('PENDING'), // PENDING | PROCESSED | IGNORED | FAILED
+    receivedAt: ts('received_at').notNull().defaultNow(),
+    processedAt: ts('processed_at'),
+    error: text('error'),
+  },
+  (t) => [
+    uniqueIndex('provider_webhook_events_dedupe_uq').on(t.provider, t.dedupeKey),
+    index('provider_webhook_events_status_idx').on(t.status, t.receivedAt),
+  ],
+);

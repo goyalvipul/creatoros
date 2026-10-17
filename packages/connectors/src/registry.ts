@@ -2,6 +2,7 @@ import type { Provider } from '@creatoros/domain';
 import { GmailConnector } from './google/gmail';
 import { YouTubeConnector } from './google/youtube';
 import { TodoConnector } from './todo';
+import { InstagramLoginConnector } from './meta/instagram';
 import { GatedConnector, InstagramConnector, PostizConnector, TikTokConnector } from './social';
 import type { Connector } from './types';
 
@@ -11,6 +12,17 @@ const todo = new TodoConnector();
 const postiz = new PostizConnector();
 const meta = new InstagramConnector();
 const tiktok = new TikTokConnector();
+const instagram = new InstagramLoginConnector();
+const facebook = new GatedConnector(
+  'facebook',
+  ['Facebook Pages integration (Facebook Login) is not implemented yet.'],
+  ['Use manual publication records for Facebook Pages for now.'],
+);
+const threads = new GatedConnector(
+  'threads',
+  ['Threads integration is not implemented yet.'],
+  ['Use manual publication records for Threads for now.'],
+);
 const snapchat = new GatedConnector(
   'snapchat',
   ['Snapchat has no public read/publish API suitable for a creator profile; use manual publication records.'],
@@ -33,6 +45,9 @@ export const CONNECTORS: Record<Provider, Connector<any, any>> = {
   todo,
   postiz,
   meta,
+  instagram,
+  facebook,
+  threads,
   tiktok,
   snapchat,
   google,

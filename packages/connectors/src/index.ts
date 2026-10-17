@@ -4,6 +4,7 @@ export * from './pkce';
 export * from './google/oauth';
 export * from './google/gmail';
 export * from './google/youtube';
+export * from './meta/instagram';
 export * from './todo';
 export * from './social';
 export * from './registry';

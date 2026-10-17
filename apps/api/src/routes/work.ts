@@ -20,6 +20,8 @@ import {
   changeDealStage,
   completeAction,
   completeOAuth,
+  receiveInstagramWebhook,
+  verifyMetaHandshake,
   connectorContext,
   convertOpportunityToDeal,
   createAction,
@@ -727,8 +729,12 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       tag: 'Integrations',
       summary: 'Begin OAuth (PKCE). Returns the consent URL; nothing is connected until you approve.',
       role: 'OWNER',
-      params: z.object({ provider: z.enum(['gmail', 'youtube']) }),
+      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram']) }),
       body: z.object({
+        publish: z.boolean().optional(),
+        comments: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        reconnect: z.boolean().optional(),
         drafts: z.boolean().optional(),
         analytics: z.boolean().optional(),
         loginHint: z.string().max(254).optional(),
@@ -737,26 +743,62 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
     ({ ctx, params, body }) => startOAuth(ctx, params.provider, body, ov()),
   );
   // Provider redirects the browser here. State is single-use and hashed in the DB.
+  const oauthCallback = async (req: any, reply: any) => {
+    const q = z
+      .object({
+        state: z.string().max(500),
+        code: z.string().max(2000).optional(),
+        error: z.string().max(200).optional(),
+      })
+      .parse(req.query);
+    try {
+      const r: any = await completeOAuth(db, env, q, ov());
+      // Only the provider name goes in the URL; tokens never leave the server.
+      return reply.redirect(
+        `${env.appBaseUrl}/integrations?connected=${encodeURIComponent(r?.provider ?? '')}`,
+      );
+    } catch (e) {
+      const msg = e instanceof AppError ? e.code : 'ERROR';
+      return reply.redirect(`${env.appBaseUrl}/integrations?error=${encodeURIComponent(msg)}`);
+    }
+  };
+  const oauthCallbackSchema = { schema: { tags: ['Integrations'], summary: 'OAuth redirect target' } };
+  app.get('/integrations/oauth/callback', oauthCallbackSchema, oauthCallback);
+  // Instagram Login has its own redirect URI, separate from the Google one and from the webhook.
+  app.get('/integrations/meta/instagram/callback', oauthCallbackSchema, oauthCallback);
+
+  // Meta webhooks: separate from OAuth. Handshake echoes hub.challenge; deliveries are HMAC-verified over the raw body.
   app.get(
-    '/integrations/oauth/callback',
-    { schema: { tags: ['Integrations'], summary: 'OAuth redirect target' } },
+    '/integrations/meta/instagram/webhook',
+    { schema: { tags: ['Integrations'], summary: 'Meta webhook verification handshake' } },
     async (req, reply) => {
       const q = z
         .object({
-          state: z.string().max(500),
-          code: z.string().max(2000).optional(),
-          error: z.string().max(200).optional(),
+          'hub.mode': z.string().max(50).optional(),
+          'hub.verify_token': z.string().max(500).optional(),
+          'hub.challenge': z.string().max(500).optional(),
         })
         .parse(req.query);
-      try {
-        const r: any = await completeOAuth(db, env, q, ov());
-        return reply.redirect(
-          `${env.appBaseUrl}/integrations?connected=${encodeURIComponent(r?.provider ?? '')}`,
-        );
-      } catch (e) {
-        const msg = e instanceof AppError ? e.code : 'ERROR';
-        return reply.redirect(`${env.appBaseUrl}/integrations?error=${encodeURIComponent(msg)}`);
-      }
+      const challenge = verifyMetaHandshake(env, {
+        mode: q['hub.mode'],
+        verifyToken: q['hub.verify_token'],
+        challenge: q['hub.challenge'],
+      });
+      return reply.type('text/plain').send(challenge);
+    },
+  );
+  app.post(
+    '/integrations/meta/instagram/webhook',
+    { bodyLimit: 256 * 1024, schema: { tags: ['Integrations'], summary: 'Meta webhook delivery (signed)' } },
+    async (req, reply) => {
+      const raw = typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody) ? req.rawBody : '';
+      const r = await receiveInstagramWebhook(
+        db,
+        env,
+        raw,
+        req.headers['x-hub-signature-256'] as string | undefined,
+      );
+      return reply.send({ data: r, meta: {}, error: null });
     },
   );
   route(
@@ -784,8 +826,9 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Test the connection',
       role: 'OWNER',
       params: z.object({ provider: z.enum(PROVIDER) }),
+      body: z.object({ connectionId: uuid.optional() }).optional(),
     },
-    ({ ctx, params }) => testConnection(ctx, params.provider, ov()),
+    ({ ctx, params, body }) => testConnection(ctx, params.provider, ov(), body?.connectionId),
   );
   route(
     {

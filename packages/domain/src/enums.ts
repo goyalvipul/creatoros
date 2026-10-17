@@ -27,10 +27,13 @@ export const PROVIDER = [
   'youtube',
   'postiz',
   'todo',
-  'meta',
+  'meta', // LEGACY: Instagram Graph API via Facebook Login, token pasted by the owner
   'tiktok',
   'snapchat',
   'manual',
+  'instagram', // Instagram API with Instagram Login (OAuth)
+  'facebook', // Facebook Pages API with Facebook Login (not implemented yet)
+  'threads', // Threads API (not implemented yet)
 ] as const;
 export type Provider = (typeof PROVIDER)[number];
 

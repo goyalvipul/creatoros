@@ -11,6 +11,7 @@ import {
   pruneBackups,
   recordHeartbeat,
   refreshInvoiceStatuses,
+  renewInstagramTokens,
   restoreTest,
   runActionsEngine,
   runSync,
@@ -100,6 +101,10 @@ export async function jobActions(d: WorkerDeps) {
 
 /** Provider syncs. `fast` = mailbox/Todo (every 5 minutes), `slow` = platform imports (every 30 minutes). */
 export async function jobSync(d: WorkerDeps, scope: 'fast' | 'slow' | 'all' = 'all') {
+  if (scope !== 'fast')
+    await renewInstagramTokens(d.db, d.env, d.overrides).catch((e) =>
+      log(d, 'error', 'instagram token renewal failed', { err: String(e) }),
+    );
   const conns = await listConnectionsForSync(d.db);
   const fastProviders = new Set(['gmail']);
   const picked = conns.filter((c) =>

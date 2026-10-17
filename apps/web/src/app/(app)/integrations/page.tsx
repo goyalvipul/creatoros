@@ -22,12 +22,22 @@ const NAMES: Record<string, string> = {
   youtube: 'YouTube',
   postiz: 'Postiz (scheduling)',
   todo: 'Todo app',
-  meta: 'Instagram / Facebook',
+  meta: 'Instagram (legacy: Facebook Login token)',
+  instagram: 'Instagram',
+  facebook: 'Facebook Pages',
+  threads: 'Threads',
   tiktok: 'TikTok',
   snapchat: 'Snapchat',
   google: 'Google (umbrella)',
 };
 const OAUTH = ['gmail', 'youtube'];
+const CAP_LABELS: Record<string, string> = {
+  importMedia: 'Import posts',
+  insights: 'Insights',
+  publish: 'Publish',
+  comments: 'Comments',
+  messages: 'Messages',
+};
 const KEYED: Record<
   string,
   {
@@ -91,7 +101,13 @@ export default function IntegrationsPage() {
                 .map((p) => {
                   const caps = p.capabilities;
                   const conn = p.connection;
-                  const connected = p.state === 'CONNECTED' || p.state === 'DEGRADED';
+                  const connected = p.state === 'ACTIVE' || p.state === 'PARTIAL_SYNC';
+                  if (p.provider === 'instagram')
+                    return (
+                      <li key={p.provider} className="md:col-span-2">
+                        <InstagramCard row={p} connect={connect} reload={reload} />
+                      </li>
+                    );
                   return (
                     <li key={p.provider}>
                       <Card className="h-full">
@@ -241,5 +257,140 @@ export default function IntegrationsPage() {
         </FormDialog>
       )}
     </>
+  );
+}
+
+const TOKEN_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'neutral'> = {
+  OK: 'ok',
+  RENEWAL_DUE: 'warn',
+  EXPIRED: 'bad',
+  UNKNOWN: 'neutral',
+};
+
+/** Instagram API with Instagram Login: one block per connected account, with permissions, capabilities and token health. */
+function InstagramCard({
+  row,
+  connect,
+  reload,
+}: {
+  row: any;
+  connect: (provider: string) => Promise<void>;
+  reload: () => unknown;
+}) {
+  const accounts: any[] = row.connections ?? [];
+  const caps = row.capabilities;
+  return (
+    <Card>
+      <div className="flex items-start gap-2">
+        <h2 className="flex-1 font-semibold">Instagram</h2>
+        <StateBadge state={row.state} />
+      </div>
+      <p className="mt-1 text-sm text-muted">
+        Instagram API with Instagram Login for professional (Creator/Business) accounts. No Facebook Page is
+        needed. Connect more than one account to manage several brands.
+      </p>
+      {accounts.length === 0 && caps.blockers?.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-muted">
+          {caps.blockers.map((b: string) => (
+            <li key={b}>{b}</li>
+          ))}
+        </ul>
+      )}
+      {accounts.length === 0 && caps.setupSteps?.length > 0 && (
+        <details className="mt-2 text-sm">
+          <summary className="cursor-pointer text-accent">How to set this up</summary>
+          <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted">
+            {caps.setupSteps.map((s: string) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+        </details>
+      )}
+      <ul className="mt-3 grid gap-3 md:grid-cols-2">
+        {accounts.map((c) => {
+          const a = c.account;
+          return (
+            <li key={c.id} className="rounded-lg border border-border p-3">
+              <div className="flex items-center gap-3">
+                {a.profilePictureUrl ? (
+                  <img
+                    src={a.profilePictureUrl}
+                    alt=""
+                    width={40}
+                    height={40}
+                    className="h-10 w-10 rounded-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span className="h-10 w-10 rounded-full bg-panel2" aria-hidden />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{a.username ? `@${a.username}` : c.label}</p>
+                  <p className="truncate text-xs text-muted">
+                    {a.name ? `${a.name} · ` : ''}
+                    ID {a.accountId}
+                    {a.accountType ? ` · ${a.accountType}` : ''}
+                  </p>
+                </div>
+                <StateBadge state={c.state} />
+              </div>
+              {c.lastError && <p className="mt-2 text-sm text-bad">{c.lastError}</p>}
+              <div className="mt-2 flex flex-wrap gap-1">
+                {Object.entries(CAP_LABELS).map(([k, label]) => (
+                  <Badge key={k} tone={a.capabilities?.[k] ? 'ok' : 'neutral'}>
+                    {a.capabilities?.[k] ? label : `${label}: off`}
+                  </Badge>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-muted">Granted: {a.grantedPermissions.join(', ') || 'none'}</p>
+              {a.missingPermissions.length > 0 && (
+                <p className="mt-1 text-xs text-muted">
+                  Missing: {a.missingPermissions.join(', ')}. Reconnect to grant them; for accounts that are
+                  not your own testers Meta App Review is required.
+                </p>
+              )}
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                <Badge tone={TOKEN_TONE[a.token.status] ?? 'neutral'}>
+                  Token {a.token.status === 'OK' ? 'healthy' : titleCase(a.token.status)}
+                </Badge>
+                {a.token.expiresAt && (
+                  <span>
+                    expires {new Date(a.token.expiresAt).toLocaleDateString()} ({a.token.daysRemaining} days)
+                  </span>
+                )}
+                <span>Last API check: {a.lastApiCheckAt ? ago(a.lastApiCheckAt) : 'never'}</span>
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <ActionButton
+                  onAction={async () => {
+                    await post('/integrations/instagram/test', { connectionId: c.id });
+                    await reload();
+                  }}
+                  success="Connection checked"
+                >
+                  Test
+                </ActionButton>
+                <ActionButton onAction={() => connect('instagram')}>Reconnect</ActionButton>
+                <ActionButton
+                  variant="danger"
+                  confirm="Disconnect this Instagram account and delete the stored token? Imported posts stay."
+                  onAction={async () => {
+                    await post(`/connections/${c.id}/disconnect`, {});
+                    await reload();
+                  }}
+                >
+                  Disconnect
+                </ActionButton>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-3">
+        <ActionButton variant="primary" onAction={() => connect('instagram')}>
+          {accounts.length ? 'Connect another account' : 'Connect Instagram'}
+        </ActionButton>
+      </div>
+    </Card>
   );
 }

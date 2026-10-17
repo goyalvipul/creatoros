@@ -39,3 +39,18 @@
 		format console
 	}
 }
+
+# Restricted public gateway for Meta webhooks ONLY. Everything else answers 404, so exposing this port (for example with
+# `tailscale funnel --bg --https=10000 http://127.0.0.1:8081`) never exposes the dashboard or the rest of the API.
+:8081 {
+	@webhook path /api/v1/integrations/meta/instagram/webhook
+	handle @webhook {
+		request_body {
+			max_size 256KB
+		}
+		reverse_proxy api:4000
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

@@ -33,6 +33,11 @@ x-app-env: &app-env
   GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
   GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
   GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+  INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+  INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+  INSTAGRAM_REDIRECT_URI: ${INSTAGRAM_REDIRECT_URI:-}
+  META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+  META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
 
 services:
   db:
@@ -173,6 +178,8 @@ services:
     restart: unless-stopped
     ports:
       - '${HTTP_PORT:-8080}:80'
+      # Restricted gateway for Meta webhooks only (loopback; expose with Tailscale Funnel, see docs/META_SETUP.md)
+      - '127.0.0.1:${META_GATEWAY_PORT:-8081}:8081'
     volumes:
       - ./infra/docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddydata:/data

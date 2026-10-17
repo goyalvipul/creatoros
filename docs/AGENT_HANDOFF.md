@@ -138,6 +138,7 @@ Later commits added edit/delete of brands/channels/accounts and removal of retir
 Remove-folder button has no browser test).
 
 Not verified / known gaps:
+
 - Linux systemd agent steps and the Ubuntu install have not been fully tested by an agent; the owner ran the stack there.
 - The newest code (edit/delete, restart docs) reaches Ubuntu only after pull/copy and `docker compose up -d --build`.
 - Agent memory use not measured.
@@ -148,6 +149,7 @@ Not verified / known gaps:
 ## 10. Environment traps
 
 Windows/PowerShell (dev PC):
+
 - Agent shells need `. .\infra\scripts\docker-env.ps1` before docker; dot-sourcing can change cwd, so `cd` afterwards.
 - Unset `TEST_DATABASE_URL` before integration tests so the harness starts its own container.
 - `Set-Content -Encoding UTF8` writes a BOM; use editor tools or `[IO.File]::WriteAllText(path, text, (New-Object Text.UTF8Encoding $false))`.
@@ -158,7 +160,8 @@ Windows/PowerShell (dev PC):
 
 Ubuntu (production host): Docker is installed; 2 cores and 3.8 GB RAM, so avoid running the full test suites there
 (integration and e2e build images and use a lot of RAM). Develop and test on the Windows PC or a bigger machine, deploy by pull
-+ `docker compose up -d --build`. Use `docker compose logs -f api` for diagnosis and `pnpm diagnostics` for a bundle.
+
+- `docker compose up -d --build`. Use `docker compose logs -f api` for diagnosis and `pnpm diagnostics` for a bundle.
 
 ## 11. Working agreement with the owner
 

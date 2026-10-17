@@ -13,8 +13,13 @@ import {
   CONNECTORS,
   ConnectorError,
   exchangeGoogleCode,
+  exchangeInstagramCode,
+  fetchInstagramProfile,
   getConnector,
+  instagramCapabilityMatrix,
   readGoogleClientConfig,
+  readInstagramClientConfig,
+  refreshInstagramToken,
   revokeGoogleToken,
   type ConnectorContext,
   type Credentials,
@@ -50,7 +55,11 @@ export function connectorContext(
     fetch: (input, init) => fetch(input, init),
     now: () => Date.now(),
     credentials: loadCredentials(env, conn),
-    config: { googleClient: readGoogleClientConfig(env.processEnv) ?? undefined, ...(conn?.config ?? {}) },
+    config: {
+      googleClient: readGoogleClientConfig(env.processEnv) ?? undefined,
+      instagramClient: readInstagramClientConfig(env.processEnv) ?? undefined,
+      ...(conn?.config ?? {}),
+    },
     onCredentials: async (c) => {
       if (!conn) return;
       await db
@@ -67,6 +76,7 @@ export function connectorContext(
 }
 
 const publicConn = (c: Conn) => ({
+  account: c.provider === 'instagram' ? instagramAccount(c) : undefined,
   id: c.id,
   provider: c.provider,
   label: c.label,
@@ -78,6 +88,31 @@ const publicConn = (c: Conn) => ({
   lastError: c.lastError,
   config: redactConfig(c.config),
 });
+/** Browser-safe summary of a connected Instagram account: profile, permissions, capabilities, token health. Never tokens. */
+function instagramAccount(c: Conn) {
+  const cfg = (c.config ?? {}) as Record<string, any>;
+  const { flags, missing } = instagramCapabilityMatrix(c.scopes ?? []);
+  const days = c.expiresAt ? Math.floor((c.expiresAt.getTime() - Date.now()) / 86_400_000) : null;
+  return {
+    accountId: c.principalHint,
+    username: cfg.username ?? null,
+    name: cfg.name ?? null,
+    accountType: cfg.accountType ?? null,
+    profilePictureUrl: cfg.profilePictureUrl ?? null,
+    followersCount: cfg.followersCount ?? null,
+    mediaCount: cfg.mediaCount ?? null,
+    grantedPermissions: c.scopes ?? [],
+    missingPermissions: missing,
+    capabilities: flags,
+    token: {
+      expiresAt: c.expiresAt,
+      daysRemaining: days,
+      status: days === null ? 'UNKNOWN' : days < 0 ? 'EXPIRED' : days <= 10 ? 'RENEWAL_DUE' : 'OK',
+      lastRenewedAt: cfg.issuedAt ?? null,
+    },
+    lastApiCheckAt: cfg.lastCheckAt ?? null,
+  };
+}
 function redactConfig(cfg: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(cfg ?? {})) out[k] = /secret|token|key|password/i.test(k) ? '***' : v;
@@ -118,6 +153,10 @@ export async function listIntegrations(ctx: Ctx, overrides: Partial<ConnectorCon
     out.push({
       provider,
       connection: conn ? publicConn(conn) : null,
+      connections: conns
+        .filter((c) => c.provider === provider && c.state !== 'NOT_CONFIGURED')
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .map(publicConn),
       state: conn && conn.state !== 'NOT_CONFIGURED' ? conn.state : caps.state,
       capabilities: caps,
       cursors: cursors.map((c) => ({
@@ -141,8 +180,16 @@ async function setState(db: Db, conn: Conn, state: Conn['state'], lastError: str
 
 export async function startOAuth(
   ctx: Ctx,
-  provider: 'gmail' | 'youtube',
-  input: { drafts?: boolean; analytics?: boolean; loginHint?: string } = {},
+  provider: 'gmail' | 'youtube' | 'instagram',
+  input: {
+    drafts?: boolean;
+    analytics?: boolean;
+    loginHint?: string;
+    publish?: boolean;
+    comments?: boolean;
+    messages?: boolean;
+    reconnect?: boolean;
+  } = {},
   overrides: Partial<ConnectorContext> = {},
 ) {
   const connector = getConnector(provider);
@@ -157,7 +204,9 @@ export async function startOAuth(
     stateHash: sha256Hex(res.oauth.state),
     codeVerifierEnc: encrypt(res.oauth.verifier, ctx.env.encryptionKey),
     scopes: res.oauth.scopes,
-    redirectUri: (cctx.config.googleClient as any)?.redirectUri ?? '',
+    redirectUri:
+      ((provider === 'instagram' ? cctx.config.instagramClient : cctx.config.googleClient) as any)
+        ?.redirectUri ?? '',
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
   await audit(ctx, 'integration.oauth.start', { type: 'provider', id: provider }, undefined, {
@@ -190,6 +239,7 @@ export async function completeOAuth(
       undefined,
       'OAUTH_DENIED',
     );
+  if (st.provider === 'instagram') return completeInstagramOAuth(db, env, st, input.code, overrides);
   const client = readGoogleClientConfig(env.processEnv);
   if (!client)
     throw badRequest('Google OAuth client is not configured on the server.', undefined, 'NOT_CONFIGURED');
@@ -249,6 +299,131 @@ export async function completeOAuth(
     { provider: st.provider, scopes: values.scopes },
   );
   return { connectionId: id, provider: st.provider, principal: creds.principal ?? null };
+}
+
+/**
+ * Instagram Login callback: exchange the code, discover the account, verify permissions and store the token
+ * encrypted. One connection per Instagram account (multiple accounts supported); reconnecting updates the row.
+ */
+async function completeInstagramOAuth(
+  db: Db,
+  env: ServiceEnv,
+  st: typeof oauthStates.$inferSelect,
+  code: string,
+  overrides: Partial<ConnectorContext>,
+) {
+  const client = readInstagramClientConfig(env.processEnv);
+  if (!client)
+    throw badRequest('Instagram app is not configured on the server.', undefined, 'NOT_CONFIGURED');
+  const cctx = connectorContext(db, env, null, overrides);
+  const creds = await exchangeInstagramCode(cctx, client, code);
+  const profile = await fetchInstagramProfile(
+    { ...cctx, credentials: creds, config: { ...cctx.config, instagramClient: client } },
+    client.graphVersion,
+  );
+  const accountId = profile.userId;
+  const nowIso = new Date().toISOString();
+  const existing = (
+    await db
+      .select()
+      .from(providerConnections)
+      .where(and(eq(providerConnections.orgId, st.orgId), eq(providerConnections.provider, 'instagram')))
+  ).find((c) => c.principalHint === accountId);
+  const values = {
+    label: profile.username ? `@${profile.username}` : accountId,
+    principalHint: accountId,
+    encryptedTokenRef: encryptJson({ ...creds, principal: accountId }, env.encryptionKey),
+    scopes: creds.scopes?.length ? creds.scopes : st.scopes,
+    expiresAt: creds.expiresAt ? new Date(creds.expiresAt) : null,
+    state: 'ACTIVE' as const,
+    lastError: null,
+    config: {
+      ...((existing?.config as Record<string, unknown>) ?? {}),
+      username: profile.username,
+      name: profile.name,
+      accountType: profile.accountType,
+      profilePictureUrl: profile.profilePictureUrl,
+      followersCount: profile.followersCount,
+      mediaCount: profile.mediaCount,
+      issuedAt: nowIso,
+      lastCheckAt: nowIso,
+    },
+    updatedAt: new Date(),
+  };
+  let id: string;
+  if (existing) {
+    await db.update(providerConnections).set(values).where(eq(providerConnections.id, existing.id));
+    id = existing.id;
+  } else {
+    const [c] = await db
+      .insert(providerConnections)
+      .values({ orgId: st.orgId, provider: 'instagram', ...values })
+      .returning({ id: providerConnections.id });
+    id = c!.id;
+  }
+  await audit(
+    { db, orgId: st.orgId, actor: { type: 'user', id: st.userId }, userId: st.userId },
+    existing ? 'integration.reconnected' : 'integration.connected',
+    { type: 'provider_connection', id },
+    undefined,
+    { provider: 'instagram', accountId, scopes: values.scopes },
+  );
+  return { connectionId: id, provider: 'instagram' as const, principal: accountId };
+}
+
+/**
+ * Renews Instagram long-lived tokens that expire within `withinDays`. Meta only allows renewal once the token is
+ * at least 24h old and not yet expired; an expired token becomes AUTH_EXPIRED and needs Reconnect.
+ */
+export async function renewInstagramTokens(
+  db: Db,
+  env: ServiceEnv,
+  overrides: Partial<ConnectorContext> = {},
+  withinDays = 10,
+) {
+  const conns = await db
+    .select()
+    .from(providerConnections)
+    .where(eq(providerConnections.provider, 'instagram'));
+  const result = { renewed: 0, expired: 0, skipped: 0, failed: 0 };
+  for (const conn of conns) {
+    if (!conn.encryptedTokenRef || !['ACTIVE', 'PARTIAL_SYNC', 'AUTH_EXPIRED'].includes(conn.state)) continue;
+    const cfg = (conn.config ?? {}) as Record<string, any>;
+    const msLeft = conn.expiresAt ? conn.expiresAt.getTime() - Date.now() : Infinity;
+    if (msLeft <= 0) {
+      await setState(db, conn, 'AUTH_EXPIRED', 'Instagram token expired. Reconnect the account.');
+      result.expired += 1;
+      continue;
+    }
+    const young = cfg.issuedAt && Date.now() - Date.parse(cfg.issuedAt) < 24 * 3_600_000;
+    if (msLeft > withinDays * 86_400_000 || young) {
+      result.skipped += 1;
+      continue;
+    }
+    try {
+      const cctx = connectorContext(db, env, conn, overrides);
+      const fresh = await refreshInstagramToken(cctx);
+      await db
+        .update(providerConnections)
+        .set({
+          encryptedTokenRef: encryptJson(fresh, env.encryptionKey),
+          expiresAt: fresh.expiresAt ? new Date(fresh.expiresAt) : null,
+          config: { ...cfg, issuedAt: new Date().toISOString() },
+          state: 'ACTIVE',
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(providerConnections.id, conn.id));
+      result.renewed += 1;
+    } catch (e) {
+      const err = e instanceof ConnectorError ? e : new ConnectorError('SERVER', (e as Error).message);
+      if (err.kind === 'AUTH_REVOKED' || err.kind === 'AUTH_EXPIRED')
+        await setState(db, conn, 'AUTH_EXPIRED', err.message);
+      else await setState(db, conn, conn.state, err.message);
+      result.failed += 1;
+    }
+  }
+  return result;
 }
 
 export async function disconnect(ctx: Ctx, connectionId: string, overrides: Partial<ConnectorContext> = {}) {
@@ -344,15 +519,27 @@ export async function testConnection(
   ctx: Ctx,
   provider: Provider,
   overrides: Partial<ConnectorContext> = {},
+  connectionId?: string,
 ) {
   const [conn] = await ctx.db
     .select()
     .from(providerConnections)
-    .where(and(eq(providerConnections.orgId, ctx.orgId), eq(providerConnections.provider, provider)));
+    .where(
+      and(
+        eq(providerConnections.orgId, ctx.orgId),
+        eq(providerConnections.provider, provider),
+        connectionId ? eq(providerConnections.id, connectionId) : undefined,
+      ),
+    );
   if (!conn) throw notFound('Connection');
   const connector = getConnector(provider);
   const h = await connector.health(connectorContext(ctx.db, ctx.env, conn, overrides));
   await setState(ctx.db, conn, h.state, h.ok ? null : (h.detail ?? 'health check failed'));
+  if (provider === 'instagram' && h.ok)
+    await ctx.db
+      .update(providerConnections)
+      .set({ config: { ...(conn.config as object), lastCheckAt: new Date().toISOString() } })
+      .where(eq(providerConnections.id, conn.id));
   if (provider === 'todo' && h.ok)
     await ctx.db
       .update(taskIntegrations)
@@ -456,7 +643,13 @@ export async function runSync(
       return { provider, mode: cur ? 'incremental' : 'full', imported, duplicates, resynced: res.resynced };
     }
 
-    if (provider === 'youtube' || provider === 'meta' || provider === 'tiktok' || provider === 'postiz') {
+    if (
+      provider === 'youtube' ||
+      provider === 'meta' ||
+      provider === 'instagram' ||
+      provider === 'tiktok' ||
+      provider === 'postiz'
+    ) {
       const [acct] = await db
         .select()
         .from(socialAccounts)
@@ -483,7 +676,7 @@ export async function runSync(
       const r = await importPublications(
         sys,
         acct.id,
-        provider === 'youtube' ? 'youtube' : provider,
+        provider === 'meta' || provider === 'instagram' ? 'instagram' : (provider as any),
         posts.map((p) => ({
           externalPostId: p.externalId,
           url: p.url!,
@@ -551,7 +744,7 @@ export async function listConnectionsForSync(db: Db) {
     })
     .from(providerConnections)
     .where(
-      sql`${providerConnections.state} in ('ACTIVE','PARTIAL_SYNC') and ${providerConnections.encryptedTokenRef} is not null and ${providerConnections.provider} in ('gmail','youtube','meta','tiktok','postiz')`,
+      sql`${providerConnections.state} in ('ACTIVE','PARTIAL_SYNC') and ${providerConnections.encryptedTokenRef} is not null and ${providerConnections.provider} in ('gmail','youtube','meta','instagram','tiktok','postiz')`,
     );
 }
 

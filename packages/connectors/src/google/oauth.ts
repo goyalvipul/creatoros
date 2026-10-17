@@ -52,8 +52,9 @@ export function buildGoogleAuthUrl(args: {
   u.searchParams.set('code_challenge', args.codeChallenge);
   u.searchParams.set('code_challenge_method', 'S256');
   u.searchParams.set('access_type', 'offline');
-  u.searchParams.set('include_granted_scopes', 'true');
-  u.searchParams.set('prompt', 'consent');
+  // Gmail and YouTube may be different Google accounts: always show the account chooser
+  // and do not merge scopes previously granted by another connection.
+  u.searchParams.set('prompt', 'select_account consent');
   if (args.loginHint) u.searchParams.set('login_hint', args.loginHint);
   return u.toString();
 }

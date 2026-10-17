@@ -118,6 +118,16 @@ export const conversationThreads = pgTable(
       onDelete: 'set null',
     }),
     isDemo: boolean('is_demo').notNull().default(false),
+    // Socials: who the other party is, what kind of thread it is, and local organisation. `principal` is the receiving account id.
+    participantId: text('participant_id'),
+    participantName: text('participant_name'),
+    kind: text('kind').notNull().default('DM'), // DM | COMMENT | EMAIL
+    labels: text('labels')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    priority: text('priority').notNull().default('NORMAL'),
+    optedOut: boolean('opted_out').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

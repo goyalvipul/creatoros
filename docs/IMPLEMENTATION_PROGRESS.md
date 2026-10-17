@@ -57,3 +57,10 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - 2026-10-18: final validation run passed (see item 12). Remaining work is only the external steps in docs/EXTERNAL_PREREQUISITES.md.
 - 2026-10-17: Meta phase 1 (see docs/META_SETUP.md): Instagram API with Instagram Login (OAuth, account discovery, multi-account, token renewal job, disconnect, import via existing sync), migration 0002 (providers instagram/facebook/threads + provider_webhook_events), signed webhook intake + restricted Caddy gateway :8081, Integrations UI card. Tests: 9 connector unit + 9 DB integration (fake Meta API); full integration suite 84 pass. NOT done: Instagram publishing, Facebook Pages, Messenger, Threads, webhook event processing, public media delivery. Not run against live Meta.
 - 2026-10-17: fixed Integrations page treating ACTIVE connections as not connected; Google redirect URI in .env needed the /api/v1/integrations/oauth/callback path; Google consent now forces the account chooser.
+
+## Socials + Workflows slice (V2 prompt)
+
+- Built and tested against fakes (integration: `socials-workflows.test.ts`, unit: `workflow.test.ts`): identity-locked multi-account Instagram inbox, DM/comment-reply sending with idempotent request ids and UNCERTAIN state, workflow engine (draft/approval/automatic), approvals, simulation, versioning/rollback, kill switch, templates, migration 0003, `social-events` worker job, Socials and Workflows pages.
+- Status: implemented, locally verified against fake HTTP only. **No live Meta call has been made**; endpoints/versions are unverified (see `docs/socials/PROVIDER_CAPABILITIES.md`).
+- Not built: Facebook Pages/Messenger, YouTube comment replies, Threads, TikTok, publishing + temporary public media, AI nodes, delay nodes, drag-and-drop canvas, Playwright specs for the new pages.
+- Public ingress (Tailscale Funnel) remains disabled; needs owner authorization.

@@ -9,3 +9,5 @@ export * from './agent';
 export * from './events';
 export * from './classify';
 export * from './templates';
+export * from './workflow';
+export * from './workflow-templates';

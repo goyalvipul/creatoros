@@ -9,6 +9,8 @@ import {
   Layers,
   LineChart,
   Lightbulb,
+  MessagesSquare,
+  Workflow,
   Plug,
   Settings,
   Share2,
@@ -23,6 +25,8 @@ export const NAV = [
   { href: '/publishing', label: 'Publishing', icon: Share2 },
   { href: '/calendar', label: 'Calendar', icon: CalendarDays },
   { href: '/collaborations', label: 'Collaborations', icon: Handshake },
+  { href: '/socials', label: 'Socials', icon: MessagesSquare },
+  { href: '/workflows', label: 'Workflows', icon: Workflow },
   { href: '/analytics', label: 'Analytics', icon: LineChart },
   { href: '/channels', label: 'Channels', icon: Layers },
   { href: '/storage', label: 'Storage & Devices', icon: HardDrive },
@@ -37,6 +41,8 @@ const VIEWER_HIDDEN: readonly string[] = [
   '/collaborations',
   '/storage',
   '/integrations',
+  '/socials',
+  '/workflows',
 ];
 
 export function navFor(role?: string) {

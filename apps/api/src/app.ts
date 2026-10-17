@@ -9,6 +9,7 @@ import { coreRoutes } from './routes/core';
 import { contentRoutes } from './routes/content';
 import { storageRoutes } from './routes/storage';
 import { workRoutes } from './routes/work';
+import { socialsRoutes } from './routes/socials';
 
 export type { AppDeps } from './http';
 
@@ -58,6 +59,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
       storageRoutes(v1, deps);
       contentRoutes(v1, deps);
       workRoutes(v1, deps);
+      socialsRoutes(v1, deps);
     },
     { prefix: '/api/v1' },
   );

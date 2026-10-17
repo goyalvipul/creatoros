@@ -396,3 +396,158 @@ export class InstagramLoginConnector implements Connector<NormalizedPost, IgMedi
     return this.syncFull(ctx, cursor);
   }
 }
+
+/* ------------------------------------------------------------------ messaging (endpoints UNVERIFIED against live docs) */
+
+export interface InstagramSendResult {
+  providerMessageId: string | null;
+}
+
+/**
+ * Sends one text DM from the connected account to `recipientId` (an Instagram-scoped id).
+ * The request is never retried automatically: a timeout after the request left means the message may have been
+ * delivered, and the caller must record that as UNCERTAIN instead of sending again.
+ */
+export async function sendInstagramDm(
+  ctx: ConnectorContext,
+  args: { accountId: string; recipientId: string; text: string },
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<InstagramSendResult> {
+  if (!ctx.credentials.accessToken) throw new ConnectorError('AUTH_EXPIRED', 'Instagram is not connected');
+  const { data } = await http<any>(
+    ctx,
+    `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(args.accountId)}/messages`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.credentials.accessToken}` },
+      json: { recipient: { id: args.recipientId }, message: { text: args.text } },
+      maxAttempts: 1,
+    },
+  );
+  return { providerMessageId: data?.message_id ?? data?.id ?? null };
+}
+
+export async function replyToInstagramComment(
+  ctx: ConnectorContext,
+  args: { commentId: string; text: string },
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<InstagramSendResult> {
+  if (!ctx.credentials.accessToken) throw new ConnectorError('AUTH_EXPIRED', 'Instagram is not connected');
+  const { data } = await http<any>(
+    ctx,
+    `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(args.commentId)}/replies`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.credentials.accessToken}` },
+      json: { message: args.text },
+      maxAttempts: 1,
+    },
+  );
+  return { providerMessageId: data?.id ?? null };
+}
+
+export interface NormalizedSocialMessage {
+  providerThreadId: string;
+  providerMsgId: string;
+  participantId: string;
+  participantName: string | null;
+  direction: 'INBOUND' | 'OUTBOUND';
+  text: string;
+  receivedAt: string;
+}
+
+/** Lists recent DM conversations with their latest messages (read-only backfill; these are never live events). */
+export async function listInstagramConversations(
+  ctx: ConnectorContext,
+  accountId: string,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<NormalizedSocialMessage[]> {
+  if (!ctx.credentials.accessToken) throw new ConnectorError('AUTH_EXPIRED', 'Instagram is not connected');
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/conversations`, {
+    query: {
+      platform: 'instagram',
+      limit: '25',
+      fields: 'id,participants,messages.limit(20){id,created_time,from,message}',
+      access_token: ctx.credentials.accessToken,
+    },
+  });
+  const out: NormalizedSocialMessage[] = [];
+  for (const c of data?.data ?? []) {
+    const other = (c.participants?.data ?? []).find((p: any) => String(p.id) !== accountId);
+    for (const m of c.messages?.data ?? []) {
+      if (!m?.id || typeof m.message !== 'string') continue;
+      const fromMe = String(m.from?.id) === accountId;
+      const who = fromMe ? other : m.from;
+      out.push({
+        providerThreadId: String(c.id),
+        providerMsgId: String(m.id),
+        participantId: String(who?.id ?? other?.id ?? 'unknown'),
+        participantName: who?.username ?? who?.name ?? null,
+        direction: fromMe ? 'OUTBOUND' : 'INBOUND',
+        text: m.message,
+        receivedAt: m.created_time,
+      });
+    }
+  }
+  return out;
+}
+
+/** Normalises a verified Instagram webhook entry into message/comment events. Unknown shapes are ignored, never guessed. */
+export function parseInstagramWebhookEntry(entry: any): {
+  accountId: string;
+  kind: 'DM' | 'COMMENT';
+  providerThreadId: string;
+  providerMsgId: string;
+  participantId: string;
+  participantName: string | null;
+  direction: 'INBOUND' | 'OUTBOUND';
+  text: string;
+  hasMedia: boolean;
+  receivedAt: Date;
+  link: string | null;
+}[] {
+  const accountId = entry?.id != null ? String(entry.id) : '';
+  if (!accountId) return [];
+  const out: ReturnType<typeof parseInstagramWebhookEntry> = [];
+  for (const m of entry.messaging ?? []) {
+    const mid = m?.message?.mid;
+    if (!mid || m.message.is_deleted) continue;
+    const echo = Boolean(m.message.is_echo);
+    const participant = String(echo ? m.recipient?.id : m.sender?.id);
+    if (!participant || participant === 'undefined') continue;
+    out.push({
+      accountId,
+      kind: 'DM',
+      providerThreadId: `dm:${participant}`,
+      providerMsgId: String(mid),
+      participantId: participant,
+      participantName: null,
+      direction: echo ? 'OUTBOUND' : 'INBOUND',
+      text: typeof m.message.text === 'string' ? m.message.text : '',
+      hasMedia: Array.isArray(m.message.attachments) && m.message.attachments.length > 0,
+      receivedAt: new Date(Number(m.timestamp) || Date.now()),
+      link: null,
+    });
+  }
+  for (const ch of entry.changes ?? []) {
+    const v = ch?.value;
+    if (ch?.field !== 'comments' || !v?.id) continue;
+    const from = v.from?.id != null ? String(v.from.id) : '';
+    if (!from) continue;
+    const root = String(v.parent_id ?? v.id);
+    out.push({
+      accountId,
+      kind: 'COMMENT',
+      providerThreadId: `comment:${root}`,
+      providerMsgId: String(v.id),
+      participantId: from,
+      participantName: v.from?.username ?? null,
+      direction: from === accountId ? 'OUTBOUND' : 'INBOUND',
+      text: typeof v.text === 'string' ? v.text : '',
+      hasMedia: false,
+      receivedAt: new Date(Number(entry.time) ? Number(entry.time) * 1000 : Date.now()),
+      link: null,
+    });
+  }
+  return out;
+}

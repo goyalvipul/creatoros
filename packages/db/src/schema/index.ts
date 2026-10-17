@@ -6,3 +6,4 @@ export * from './production';
 export * from './publishing';
 export * from './crm';
 export * from './system';
+export * from './social';

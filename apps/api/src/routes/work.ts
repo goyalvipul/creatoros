@@ -41,6 +41,7 @@ import {
   moveMailThread,
   replyToEmail,
   scanEmailInvoices,
+  deepScanEmail,
   updateInvoice,
   updateThreadLocal,
   disconnect,
@@ -229,7 +230,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Scan stored email text for invoices',
       body: z.object({ connectionId: uuid.optional(), days: z.number().int().min(1).max(3650).optional() }),
     },
-    ({ ctx, body }) => scanEmailInvoices(ctx, body),
+    ({ ctx, body }) => deepScanEmail(ctx, body, ov()),
   );
   route(
     {

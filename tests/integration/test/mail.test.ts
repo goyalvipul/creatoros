@@ -295,3 +295,89 @@ describe('invoices from email, and invoice edit/delete', () => {
     expect(gone).toHaveLength(0);
   });
 });
+
+describe('gmail stars and deep invoice search', () => {
+  afterEach(cleanup);
+  it('marks existing threads starred from Gmail, imports missing starred mail, and finds invoices with full text', async () => {
+    const { ctx } = await makeOrg(h);
+    const c = await gmail(ctx, 'deep@example.com', [READ], true);
+    const old = (await mail(ctx, c, 'old1', { subject: 'Old thread' })).threadId;
+    const body = (s: string) => Buffer.from(s).toString('base64url');
+    const msgs: Record<string, any> = {
+      'msg-old1': { id: 'msg-old1', threadId: 'th-old1' },
+      'msg-new-star': {
+        id: 'msg-new-star',
+        threadId: 'th-new-star',
+        labelIds: ['INBOX', 'STARRED'],
+        internalDate: String(Date.now()),
+        payload: {
+          headers: [
+            { name: 'Subject', value: 'Starred new' },
+            { name: 'From', value: 'A <a@x.com>' },
+          ],
+        },
+      },
+      'msg-inv': {
+        id: 'msg-inv',
+        threadId: 'th-inv',
+        labelIds: ['INBOX', 'CATEGORY_UPDATES'],
+        internalDate: String(Date.now()),
+        snippet: 'Your invoice',
+        payload: {
+          headers: [
+            { name: 'Subject', value: 'Your invoice from Studio' },
+            { name: 'From', value: 'Studio <billing@studio.com>' },
+          ],
+          mimeType: 'multipart/mixed',
+          parts: [
+            {
+              mimeType: 'text/plain',
+              body: { data: body('Invoice INV-9001\nAmount due: $450.00 USD\nDue date: 2026-12-01') },
+            },
+            {
+              mimeType: 'application/pdf',
+              filename: 'Invoice-9001.pdf',
+              body: { attachmentId: 'a1', size: 10 },
+            },
+          ],
+        },
+      },
+    };
+    const fetch = (async (url: any) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith('/messages')) {
+        const q = u.searchParams.get('q') ?? '';
+        const ids = q.includes('is:starred') ? ['msg-old1', 'msg-new-star'] : ['msg-inv'];
+        return new Response(
+          JSON.stringify({ messages: ids.map((i) => ({ id: i, threadId: msgs[i].threadId })) }),
+          {
+            status: 200,
+          },
+        );
+      }
+      const id = decodeURIComponent(u.pathname.split('/').pop()!);
+      return new Response(JSON.stringify(msgs[id]), { status: 200 });
+    }) as any;
+    const [conn] = await h.db.select().from(providerConnections).where(eq(providerConnections.id, c.id));
+    const {
+      syncGmailStars,
+      syncGmailInvoices,
+      listInvoiceSuggestions: list,
+    } = await import('@creatoros/services');
+    const st = await syncGmailStars(ctx, conn!, { fetch });
+    expect(st).toMatchObject({ starredInGmail: 2, newlyStarred: 2, imported: 1 });
+    const starred = await listThreads(ctx, { scope: 'mail', folder: 'starred' });
+    expect(starred).toHaveLength(2);
+    expect(starred.map((t) => t.id)).toContain(old);
+
+    const inv = await syncGmailInvoices(ctx, conn!, { deep: true }, { fetch });
+    expect(inv).toMatchObject({ candidates: 1, checked: 1, found: 1 });
+    const [s] = await list(ctx);
+    expect(s).toMatchObject({ invoiceNo: 'INV-9001', amountMinor: 45000, currency: 'USD' });
+    // the invoice-only thread did not flood the Inbox
+    const inbox = await listThreads(ctx, { scope: 'mail', folder: 'inbox' });
+    expect(inbox.map((t) => t.id)).not.toContain(s.threadId);
+    // idempotent
+    expect((await syncGmailInvoices(ctx, conn!, { deep: true }, { fetch })).found).toBe(0);
+  });
+});

@@ -326,6 +326,39 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     }
   }
 
+  /** Message ids matching a Gmail search (id and threadId only: one cheap call per 100 results). */
+  async searchIds(
+    ctx: ConnectorContext,
+    opts: { query: string; max?: number },
+  ): Promise<{ id: string; threadId: string }[]> {
+    const out: { id: string; threadId: string }[] = [];
+    const max = opts.max ?? 500;
+    let pageToken: string | undefined;
+    do {
+      const list = await this.get<{ messages?: { id: string; threadId: string }[]; nextPageToken?: string }>(
+        ctx,
+        '/messages',
+        { maxResults: 100, pageToken, q: opts.query },
+      );
+      for (const m of list.messages ?? []) if (out.length < max) out.push(m);
+      pageToken = out.length >= max ? undefined : list.nextPageToken;
+    } while (pageToken);
+    return out;
+  }
+
+  /** One message with its full body and attachment names (needed to read invoice text; the normal sync stores metadata + snippet). */
+  async getFullMessage(ctx: ConnectorContext, id: string): Promise<NormalizedEmail | null> {
+    try {
+      const raw = await this.get<GmailRawMessage>(ctx, `/messages/${encodeURIComponent(id)}`, {
+        format: 'full',
+      });
+      return this.normalize(raw);
+    } catch (e) {
+      if (e instanceof ConnectorError && e.kind === 'NOT_FOUND') return null;
+      throw e;
+    }
+  }
+
   /** Full sync: capture historyId FIRST so nothing arriving during the listing is missed. */
   async syncFull(
     ctx: ConnectorContext,

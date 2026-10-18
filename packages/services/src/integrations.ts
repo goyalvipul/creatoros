@@ -37,6 +37,7 @@ import {
 } from './identity';
 import { completeFacebookOAuth, startFacebookOAuth } from './facebook';
 import { scanEmailInvoices } from './invoice-suggestions';
+import { syncGmailInvoices, syncGmailStars } from './gmail-extras';
 import { audit, emit } from './audit';
 import { decrypt, decryptJson, encrypt, encryptJson, sha256Hex } from './crypto';
 import { importPublications } from './publishing';
@@ -669,6 +670,9 @@ export async function runSync(
             .where(
               and(eq(conversationThreads.id, threadId), sql`${conversationThreads.starred} <> ${starred}`),
             );
+      // Stars and older/other-category invoice mail are not covered by the 90-day sync above. Never fail the sync over them.
+      await syncGmailStars(sys, conn, overrides).catch(() => undefined);
+      await syncGmailInvoices(sys, conn, {}, overrides).catch(() => undefined);
       // Spot invoices in what was just imported. Failure here must never fail the mail sync itself.
       await scanEmailInvoices(sys, {
         connectionId: conn.id,

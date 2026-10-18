@@ -803,7 +803,10 @@ describe('timezones, optional integrations and failure injection (T29, T32, T34)
     const gm = fakeGmail([msg]);
     const overrides = { fetch: gm.fetch, ...noSleep } as const;
     await runSync(h.db, org.env, conn.id, {}, overrides);
-    const [cur] = await h.db.select().from(syncCursors).where(eq(syncCursors.connectionId, conn.id));
+    const [cur] = await h.db
+      .select()
+      .from(syncCursors)
+      .where(and(eq(syncCursors.connectionId, conn.id), eq(syncCursors.scope, 'gmail.history')));
     expect(cur!.cursor).toBe('500');
 
     gm.state.historyExpired = true;
@@ -812,7 +815,10 @@ describe('timezones, optional integrations and failure injection (T29, T32, T34)
     expect(r.resynced).toBe(true);
     expect(r.imported).toBe(0);
     expect(r.duplicates).toBe(1);
-    const [after] = await h.db.select().from(syncCursors).where(eq(syncCursors.connectionId, conn.id));
+    const [after] = await h.db
+      .select()
+      .from(syncCursors)
+      .where(and(eq(syncCursors.connectionId, conn.id), eq(syncCursors.scope, 'gmail.history')));
     expect(after!.cursor).toBe('900');
     expect(after!.restartRequired).toBe(false);
     expect((await listThreads(ctx)).length).toBe(1);

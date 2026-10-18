@@ -462,6 +462,7 @@ function Pipeline() {
 
 function FoundInEmail() {
   const sug = useApi<any[]>('/mail/invoice-suggestions');
+  const [msg, setMsg] = useState('');
   return (
     <section aria-label="Invoices found in email" className="rounded-xl border border-border bg-panel">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
@@ -471,15 +472,25 @@ function FoundInEmail() {
         <ActionButton
           size="sm"
           onAction={async () => {
-            const r = await post('/mail/invoice-suggestions/scan', {});
-            await refresh('/mail');
-            return r;
+            setMsg('Searching Gmail (this can take a minute)…');
+            try {
+              const r = await post('/mail/invoice-suggestions/scan', {});
+              const g = r.gmail;
+              setMsg(
+                `Checked ${g.checked} mails from ${g.candidates} Gmail matches; ${r.found + g.found} new invoice suggestion(s); ${g.newlyStarred} newly starred.` +
+                  (g.errors.length ? ` Problems: ${g.errors.join('; ')}` : ''),
+              );
+            } catch (e) {
+              setMsg('');
+              throw e;
+            }
+            await refresh('/mail', '/threads');
           }}
-          success="Scan finished"
         >
           Scan email now
         </ActionButton>
       </div>
+      {msg && <p className="border-b border-border px-3 py-2 text-xs text-muted">{msg}</p>}
       <Async
         res={sug}
         empty={

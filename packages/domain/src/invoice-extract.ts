@@ -84,7 +84,8 @@ export function extractInvoiceHints(input: {
   if (money && money.amountMinor > 0) signals.push('amount');
   else money = null;
 
-  if (!invoiceNo && !money) return null;
+  // An invoice-named attachment alone is enough to suggest: the owner fills in what the email text does not say.
+  if (!invoiceNo && !money && !attach) return null;
   const dueDate = findDueDate(text);
   if (dueDate) signals.push('due date');
 

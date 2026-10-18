@@ -119,11 +119,13 @@ async function loadMailContext(ctx: Ctx, threadId: string) {
   const [conn] = await ctx.db
     .select()
     .from(providerConnections)
-    .where(
-      and(eq(providerConnections.id, t.providerConnectionId), eq(providerConnections.orgId, ctx.orgId)),
-    );
+    .where(and(eq(providerConnections.id, t.providerConnectionId), eq(providerConnections.orgId, ctx.orgId)));
   if (!conn || conn.state === 'PAUSED' || conn.state === 'DISABLED')
-    throw conflict('The Gmail account for this conversation is not active.', undefined, 'CONNECTION_INACTIVE');
+    throw conflict(
+      'The Gmail account for this conversation is not active.',
+      undefined,
+      'CONNECTION_INACTIVE',
+    );
   const msgs = await ctx.db
     .select()
     .from(messages)

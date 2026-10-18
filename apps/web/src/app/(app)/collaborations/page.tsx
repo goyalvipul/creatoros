@@ -691,7 +691,18 @@ function Invoices() {
         }
       >
         {(rows) => (
-          <Table head={['Invoice', 'Deal', 'Amount', 'Paid', 'Due', 'Status', '']}>
+          <Table
+            head={[
+              'Invoice',
+              'Deal',
+              'Amount',
+              `In ${rows[0]?.baseCurrency ?? 'CAD'}`,
+              'Paid',
+              'Due',
+              'Status',
+              '',
+            ]}
+          >
             {rows.map((i) => (
               <tr key={i.id}>
                 <Td className="font-medium">{i.invoiceNo}</Td>
@@ -705,6 +716,24 @@ function Invoices() {
                   )}
                 </Td>
                 <Td>{money(i.amountMinor, i.currency)}</Td>
+                <Td>
+                  {i.baseAmountMinor != null ? (
+                    <span
+                      title={
+                        i.currency === i.baseCurrency
+                          ? undefined
+                          : `1 ${i.currency} = ${i.fxRate} ${i.baseCurrency} (${String(i.fxSource ?? '').replace('live:', 'live rate, ')}, ${ago(i.fxAt)})`
+                      }
+                    >
+                      {money(i.baseAmountMinor, i.baseCurrency)}
+                      {i.currency !== i.baseCurrency && (
+                        <span className="block text-xs text-muted">@ {Number(i.fxRate).toFixed(4)}</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted">no rate</span>
+                  )}
+                </Td>
                 <Td>{money(i.paidMinor, i.currency)}</Td>
                 <Td>{i.dueAt ? when(i.dueAt, undefined, false) : '—'}</Td>
                 <Td>

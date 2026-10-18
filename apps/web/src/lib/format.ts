@@ -101,3 +101,15 @@ export function toMinor(input: string): number | null {
   const n = Number(String(input).replace(/[,\s]/g, ''));
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) : null;
 }
+
+/** Older stored mail may still contain HTML entities such as &#39; (new mail is decoded when it is stored). */
+export function decodeEntities(s: string): string {
+  const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] === '#') {
+      const code = e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    }
+    return named[e.toLowerCase()] ?? m;
+  });
+}

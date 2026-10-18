@@ -381,3 +381,130 @@ describe('gmail stars and deep invoice search', () => {
     expect((await syncGmailInvoices(ctx, conn!, { deep: true }, { fetch })).found).toBe(0);
   });
 });
+
+describe('reply to a specific message, full text, sorting and live CAD values', () => {
+  afterEach(cleanup);
+
+  it('prefills Reply and Reply all for the chosen message, and loads the full text', async () => {
+    const { ctx } = await makeOrg(h);
+    const c = await gmail(ctx, 'me@example.com', [READ, SEND], true);
+    const first = await mail(ctx, c, 'sp1', {
+      receivedAt: new Date(Date.now() - 86_400_000),
+      body: 'short snippet',
+    });
+    await mail(ctx, c, 'sp2', {
+      providerThreadId: 'th-sp1',
+      receivedAt: new Date(),
+      fromEmail: 'other@acme.com',
+    });
+    const th: any = await (await import('@creatoros/services')).getThread(ctx, first.threadId);
+    const target = th.messages.find((m: any) => m.providerMsgId === 'msg-sp1');
+    const sent: any[] = [];
+    const fetch = (async (url: any, init?: any) => {
+      const u = String(url);
+      if (u.includes('/messages/send')) {
+        sent.push(JSON.parse(init.body));
+        return new Response(JSON.stringify({ id: 'sent-x', threadId: 'th-sp1' }), { status: 200 });
+      }
+      if (u.includes('format=full'))
+        return new Response(
+          JSON.stringify({
+            id: 'msg-sp1',
+            threadId: 'th-sp1',
+            payload: {
+              mimeType: 'text/html',
+              headers: [],
+              body: {
+                data: Buffer.from('<p>Hello it&#39;s long</p><p>second paragraph</p>').toString('base64url'),
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      return new Response(
+        JSON.stringify({
+          id: 'msg-sp1',
+          payload: {
+            headers: [
+              { name: 'Message-ID', value: '<m1@x>' },
+              { name: 'From', value: '"Acme, Inc" <brand-sp1@acme.com>' },
+              { name: 'To', value: 'me@example.com, Carol <carol@acme.com>' },
+              { name: 'Cc', value: 'dave@acme.com' },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    }) as any;
+    const { replyInfo, replyToEmail: reply, loadFullMessage } = await import('@creatoros/services');
+    const one = await replyInfo(ctx, first.threadId, target.id, false, { fetch });
+    expect(one).toMatchObject({
+      to: ['brand-sp1@acme.com'],
+      cc: [],
+      subject: 'Re: Hello sp1',
+      canSend: true,
+    });
+    const all = await replyInfo(ctx, first.threadId, target.id, true, { fetch });
+    expect(all.to).toEqual(['brand-sp1@acme.com', 'carol@acme.com']);
+    expect(all.cc).toEqual(['dave@acme.com']);
+    await reply(
+      ctx,
+      first.threadId,
+      { text: 'ok', requestId: 'req-all-0001', messageId: target.id, all: true },
+      { fetch },
+    );
+    const raw = Buffer.from(sent[0].raw, 'base64url').toString('utf8');
+    expect(raw).toContain('To: brand-sp1@acme.com, carol@acme.com');
+    expect(raw).toContain('Cc: dave@acme.com');
+    expect(raw).toContain('In-Reply-To: <m1@x>');
+
+    const full = await loadFullMessage(ctx, first.threadId, target.id, { fetch });
+    expect(full.body).toBe("Hello it's long\n\nsecond paragraph");
+    const again: any = await (await import('@creatoros/services')).getThread(ctx, first.threadId);
+    expect(again.messages.find((m: any) => m.id === target.id).body).toContain('second paragraph');
+  });
+
+  it('lists the thread with the newest activity first', async () => {
+    const { ctx } = await makeOrg(h);
+    const c = await gmail(ctx, 'sort@example.com', [READ]);
+    const a = (await mail(ctx, c, 'so1', { receivedAt: new Date(Date.now() - 5 * 86_400_000) })).threadId;
+    const b = (await mail(ctx, c, 'so2', { receivedAt: new Date(Date.now() - 3 * 86_400_000) })).threadId;
+    // an older thread that just got a reply from me is the most recent activity
+    await mail(ctx, c, 'so1b', {
+      providerThreadId: 'th-so1',
+      direction: 'OUTBOUND',
+      receivedAt: new Date(),
+      fromEmail: 'sort@example.com',
+    });
+    const rows = await listThreads(ctx, { scope: 'mail' });
+    expect(rows.map((r) => r.id)).toEqual([a, b]);
+  });
+
+  it('adds a live CAD value to every invoice and combines totals in CAD', async () => {
+    const { ctx } = await makeOrg(h);
+    const { ensureLiveRates, financeSummary, listInvoices: listInv } = await import('@creatoros/services');
+    await createInvoice(ctx, { amountMinor: 100000, currency: 'USD', invoiceNo: 'U-1' });
+    await createInvoice(ctx, { amountMinor: 50000, currency: 'CAD', invoiceNo: 'C-1' });
+    const calls: string[] = [];
+    const fetch = (async (url: any) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ rates: { CAD: 1.4 } }), { status: 200 });
+    }) as any;
+    const r = await ensureLiveRates(ctx, { fetch });
+    expect(r.updated).toEqual(['USD']);
+    await ensureLiveRates(ctx, { fetch }); // fresh enough: no second call
+    expect(calls).toHaveLength(1);
+    const rows = await listInv(ctx);
+    const usd = rows.find((x: any) => x.invoiceNo === 'U-1');
+    expect(usd).toMatchObject({ baseAmountMinor: 140000, fxRate: 1.4, baseCurrency: 'CAD' });
+    expect(rows.find((x: any) => x.invoiceNo === 'C-1')).toMatchObject({ baseAmountMinor: 50000 });
+    const s: any = await financeSummary(ctx);
+    expect(s.missingFxRates).toEqual([]);
+    expect(s.converted.outstandingMinor).toBe(190000);
+    // a failing provider keeps the last rate and invents nothing
+    const bad = (async () => new Response('x', { status: 500 })) as any;
+    const f = await ensureLiveRates(ctx, { fetch: bad }, { force: true });
+    expect(f.failed).toEqual(['USD']);
+    expect((await listInv(ctx)).find((x: any) => x.invoiceNo === 'U-1').fxRate).toBe(1.4);
+  });
+});

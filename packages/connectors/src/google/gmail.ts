@@ -85,7 +85,8 @@ function extractText(part: GmailPart | undefined): string | null {
     return decodeEntities(
       decodeB64Url(part.body.data)
         .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<(?:br|\/p|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, '\n')
+        .replace(/<\/p>/gi, '\n\n')
+        .replace(/<(?:br|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
         .replace(/[ \t\f\v]+/g, ' ')
         .replace(/ ?\n ?/g, '\n')

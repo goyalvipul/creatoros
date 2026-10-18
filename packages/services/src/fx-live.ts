@@ -12,11 +12,7 @@ export async function fetchLiveRate(
   fetchImpl: FetchLike = (u, i) => fetch(u, i),
 ): Promise<{ rate: number; source: string } | null> {
   const attempts: [string, string, (j: any) => unknown][] = [
-    [
-      `https://api.frankfurter.app/latest?from=${from}&to=${to}`,
-      'live:frankfurter',
-      (j) => j?.rates?.[to],
-    ],
+    [`https://api.frankfurter.app/latest?from=${from}&to=${to}`, 'live:frankfurter', (j) => j?.rates?.[to]],
     [`https://open.er-api.com/v6/latest/${from}`, 'live:open.er-api', (j) => j?.rates?.[to]],
   ];
   for (const [url, source, pick] of attempts) {
@@ -69,11 +65,7 @@ export async function ensureLiveRates(
       .where(and(eq(fxRates.orgId, ctx.orgId), eq(fxRates.baseCurrency, c), eq(fxRates.quoteCurrency, base)))
       .orderBy(sql`${fxRates.rateDate} desc, ${fxRates.createdAt} desc`)
       .limit(1);
-    if (
-      !opts.force &&
-      last?.source.startsWith('live') &&
-      Date.now() - last.createdAt.getTime() < maxAge
-    )
+    if (!opts.force && last?.source.startsWith('live') && Date.now() - last.createdAt.getTime() < maxAge)
       continue;
     const live = await fetchLiveRate(c, base, overrides.fetch);
     if (!live) {

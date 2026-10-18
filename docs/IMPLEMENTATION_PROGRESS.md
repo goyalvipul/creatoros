@@ -106,3 +106,11 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - Cause: the normal Gmail sync only fetches the last 90 days, skips promotions, stores metadata plus a ~200 character snippet (no body, no attachment names) and never read existing stars. So the Starred tab stayed empty and invoice amounts could not be read.
 - Fix: `syncGmailStars` asks Gmail for `is:starred` (ids only) every sync and marks/imports those threads; `syncGmailInvoices` searches Gmail (2 years, all categories, `invoice`/`amount due`/`filename:invoice`), fetches matches in full, replaces the snippet with the full text, records suggestions, and stores invoice-only threads already archived. "Scan email now" runs both deeply. Invoice-named attachment alone now yields a suggestion (amount left for you to fill in). PDF contents are still not read.
 - Evidence: `tests/integration/test/mail.test.ts` (fake Gmail); suite passed (129).
+
+### Email reading, per-message reply, sorting, live CAD values
+
+- Show full email: the sync keeps only a snippet, so "Show full email" loads the complete text from Gmail once (`POST /threads/:id/messages/:mid/full`, read-only) and stores it encrypted. HTML entities (`&#39;`) are decoded; HTML paragraphs keep line breaks.
+- Reply / Reply all on each message; the panel opens in the right column with To, Cc and subject prefilled from Gmail's live headers (`GET .../reply-info`). The reply carries `In-Reply-To` of that exact message. Your own address is always removed.
+- Sorting: thread list by latest activity of either direction; messages newest first.
+- Live CAD: `ensureLiveRates` (Frankfurter, fallback open.er-api; refreshed at most hourly when the Invoices tab or finance summary is read) writes `fx_rates`; each invoice shows its value in the base currency and the rate used; Received/Outstanding/Overdue/Expenses are combined in base currency. If both providers fail the last rate is kept (or totals fall back to per-currency); nothing is invented.
+- Evidence: `tests/integration/test/mail.test.ts` (fake providers; the live rate endpoints themselves were not called in tests). Suite passed (132).

@@ -97,11 +97,16 @@ export default function IntegrationsPage() {
         subtitle="Everything is optional. A connection only shows as connected after the provider confirms it; missing pieces are listed so you know exactly what to do."
       />
       {result && (
-        <Notice tone={result.ok ? 'ok' : 'bad'} title={result.ok ? 'Connected' : 'Connection failed'}>
+        <Notice
+          dismissible
+          onDismiss={() => window.history.replaceState(null, '', window.location.pathname)}
+          tone={result.ok ? 'ok' : 'bad'}
+          title={result.ok ? 'Connected' : 'Connection failed'}
+        >
           {result.text}
         </Notice>
       )}
-      <Notice tone="info" title="Safe by design">
+      <Notice tone="info" title="Safe by design" dismissible dismissKey="integrations-safe">
         Gmail access is read-only. Creator OS never sends e-mail, posts to social platforms or pays anything
         on its own. Credentials are stored encrypted on your machine.
       </Notice>

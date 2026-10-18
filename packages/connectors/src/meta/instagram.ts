@@ -714,3 +714,23 @@ export async function listInstagramConversationPage(
   });
   return { conversations, after: data?.paging?.next ? (data?.paging?.cursors?.after ?? null) : null };
 }
+
+/** Display name and username of a person who messaged the account (Instagram User Profile API, IGSID). null when Meta hides it. */
+export async function fetchInstagramContact(
+  ctx: ConnectorContext,
+  igsid: string,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<{ name: string | null; username: string | null } | null> {
+  if (!ctx.credentials.accessToken) throw new ConnectorError('AUTH_EXPIRED', 'Instagram is not connected');
+  try {
+    const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(igsid)}`, {
+      query: { fields: 'name,username', access_token: ctx.credentials.accessToken },
+      maxAttempts: 1,
+    });
+    if (!data?.username && !data?.name) return null;
+    return { name: data.name ?? null, username: data.username ?? null };
+  } catch (e) {
+    if (e instanceof ConnectorError && (e.kind === 'AUTH_EXPIRED' || e.kind === 'AUTH_REVOKED')) throw e;
+    return null;
+  }
+}

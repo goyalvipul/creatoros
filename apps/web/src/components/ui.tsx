@@ -250,11 +250,23 @@ export function Notice({
   tone = 'info',
   children,
   title,
+  dismissible = tone === 'info' || tone === 'ok',
+  dismissKey,
+  onDismiss,
 }: {
   tone?: 'info' | 'warn' | 'bad' | 'ok';
   children: ReactNode;
   title?: string;
+  /** Shows a close button. With `dismissKey` the choice is remembered in this browser. */
+  dismissible?: boolean;
+  dismissKey?: string;
+  onDismiss?: () => void;
 }) {
+  const [closed, setClosed] = useState(false);
+  useEffect(() => {
+    if (dismissKey && localStorage.getItem(`notice:${dismissKey}`) === '1') setClosed(true);
+  }, [dismissKey]);
+  if (closed) return null;
   const Icon = tone === 'ok' ? CheckCircle2 : tone === 'info' ? Info : AlertTriangle;
   const cls = {
     info: 'border-info/40 bg-info/10 text-text',
@@ -270,6 +282,20 @@ export function Notice({
         {title && <div className="font-medium">{title}</div>}
         <div className="text-muted">{children}</div>
       </div>
+      {dismissible && (
+        <button
+          type="button"
+          aria-label="Close message"
+          className="-m-1 ml-auto shrink-0 rounded p-1 text-muted hover:bg-panel2 hover:text-text focus-visible:outline focus-visible:outline-2"
+          onClick={() => {
+            if (dismissKey) localStorage.setItem(`notice:${dismissKey}`, '1');
+            setClosed(true);
+            onDismiss?.();
+          }}
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

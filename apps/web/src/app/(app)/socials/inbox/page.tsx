@@ -276,7 +276,14 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
                   m.direction === 'OUTBOUND' ? 'ml-auto bg-accent/15' : 'bg-panel2',
                 )}
               >
-                <div className="whitespace-pre-wrap break-words">{m.text}</div>
+                <div className="whitespace-pre-wrap break-words">
+                  {m.text || (
+                    <span className="italic text-muted">
+                      No text (photo, video, reel, story reply, reaction or removed message). Open it on the
+                      platform to see it.
+                    </span>
+                  )}
+                </div>
                 <div className="text-[11px] text-muted">{when(m.receivedAt)}</div>
               </li>
             ))}

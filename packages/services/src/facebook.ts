@@ -31,6 +31,7 @@ import { autoReconcileConnection } from './identity';
 import { ingestSocialEvent, syncInstagramAccount } from './social';
 import { processSocialEvent } from './workflows';
 import { syncYoutubeComments } from './youtube-social';
+import { enrichContactNames } from './contact-names';
 import { AppError, badRequest, notFound, systemCtx, type Ctx, type ServiceEnv } from './types';
 import { randomBytes } from 'node:crypto';
 
@@ -399,9 +400,13 @@ export async function syncSocialAccount(
     .where(and(eq(providerConnections.id, connectionId), eq(providerConnections.orgId, ctx.orgId)));
   if (!c) throw notFound('Social account');
   if (c.provider === 'youtube') return syncYoutubeComments(ctx, connectionId, overrides);
-  return c.provider === 'facebook'
-    ? syncFacebookPage(ctx, connectionId, overrides)
-    : syncInstagramAccount(ctx, connectionId, overrides);
+  const result =
+    c.provider === 'facebook'
+      ? await syncFacebookPage(ctx, connectionId, overrides)
+      : await syncInstagramAccount(ctx, connectionId, overrides);
+  // names are cosmetic: never let a lookup failure fail the sync
+  await enrichContactNames(ctx, connectionId, overrides).catch(() => null);
+  return result;
 }
 
 /** Read-only check that the stored Page token still works. Nothing is changed except the recorded check time. */

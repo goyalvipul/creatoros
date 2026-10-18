@@ -56,6 +56,7 @@ function fakeGraph(pageId: string, pageName: string, opts: { emptyAccounts?: boo
       return json({ access_token: u.searchParams.get('grant_type') ? 'user-long' : 'user-short' });
     if (u.pathname.endsWith('/me/permissions'))
       return json({ data: SCOPES.map((permission) => ({ permission, status: 'granted' })) });
+    if (u.pathname.endsWith('/psid9')) return json({ name: 'Live Fan' });
     if (u.pathname.endsWith('/debug_token'))
       return json({ data: { granular_scopes: [{ scope: 'pages_messaging', target_ids: [pageId] }] } });
     if (u.pathname === `/${'v23.0'}/${pageId}` || u.pathname.endsWith(`/${pageId}`))
@@ -302,6 +303,14 @@ describe('Facebook sync, webhooks and replies', () => {
     await processFacebookWebhookEvents(h.db, w.env, w.g.overrides, 500);
     const threads: any[] = await listSocialThreads(w.org.ctx, {});
     expect(threads.map((t) => t.kind).sort()).toEqual(['COMMENT', 'DM']);
+    // numeric sender ids are replaced by the real name on the next sync
+    const dmBefore: any = threads.find((t) => t.kind === 'DM');
+    expect(dmBefore.participantName ?? dmBefore.participantId).toBe('psid9');
+    await syncSocialAccount(w.org.ctx, w.conn, w.g.overrides);
+    const dmAfter: any = (await listSocialThreads(w.org.ctx, { kind: 'DM' })).find(
+      (t: any) => t.participantId === 'psid9',
+    );
+    expect(dmAfter.participantName).toBe('Live Fan');
     const events = await h.db
       .select()
       .from(providerWebhookEvents)

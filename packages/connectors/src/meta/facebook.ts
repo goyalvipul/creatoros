@@ -443,3 +443,23 @@ export function parseFacebookWebhookEntry(entry: any): FacebookWebhookEvent[] {
 }
 
 export type { Credentials };
+
+/** Name of a person who messaged the Page (PSID), using the Page token. null when Meta hides it. */
+export async function fetchFacebookContact(
+  ctx: ConnectorContext,
+  client: FacebookClientConfig,
+  psid: string,
+): Promise<{ name: string | null } | null> {
+  try {
+    const { data } = await http<any>(ctx, `${v(client)}/${encodeURIComponent(psid)}`, {
+      headers: bearer(ctx.credentials.accessToken),
+      query: { fields: 'name,first_name,last_name' },
+      maxAttempts: 1,
+    });
+    const name = data?.name ?? ([data?.first_name, data?.last_name].filter(Boolean).join(' ') || null);
+    return name ? { name } : null;
+  } catch (e) {
+    if (e instanceof ConnectorError && (e.kind === 'AUTH_EXPIRED' || e.kind === 'AUTH_REVOKED')) throw e;
+    return null;
+  }
+}

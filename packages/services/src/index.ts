@@ -29,3 +29,4 @@ export * from './instagram-diagnostics';
 export * from './identity';
 export * from './facebook';
 export * from './youtube-social';
+export * from './contact-names';

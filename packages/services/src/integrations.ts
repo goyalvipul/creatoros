@@ -1,5 +1,6 @@
 import {
   and,
+  conversationThreads,
   eq,
   oauthStates,
   providerConnections,
@@ -35,6 +36,7 @@ import {
   unlinkAccount,
 } from './identity';
 import { completeFacebookOAuth, startFacebookOAuth } from './facebook';
+import { scanEmailInvoices } from './invoice-suggestions';
 import { audit, emit } from './audit';
 import { decrypt, decryptJson, encrypt, encryptJson, sha256Hex } from './crypto';
 import { importPublications } from './publishing';
@@ -197,6 +199,7 @@ export async function startOAuth(
   provider: 'gmail' | 'youtube' | 'instagram' | 'facebook',
   input: {
     drafts?: boolean;
+    send?: boolean;
     analytics?: boolean;
     loginHint?: string;
     publish?: boolean;
@@ -633,6 +636,7 @@ export async function runSync(
       const res = cur ? await connector.syncIncremental(cctx, cur) : await connector.syncFull(cctx);
       let imported = 0;
       let duplicates = 0;
+      const seen = new Map<string, boolean>();
       for (const m of res.items as NormalizedEmail[]) {
         const r = await ingestMessage(sys, {
           source: 'GMAIL',
@@ -652,7 +656,25 @@ export async function runSync(
         });
         if (r.duplicate) duplicates += 1;
         else imported += 1;
+        // Gmail's star lives on a message; a thread counts as starred if any message in it is. Sync only ever ADDS stars, so a
+        // star you set inside Creator OS (which cannot be written back to Gmail) is never wiped by a later sync.
+        const isStarred = m.labelIds.includes('STARRED');
+        seen.set(r.threadId, (seen.get(r.threadId) ?? false) || isStarred);
       }
+      for (const [threadId, starred] of seen)
+        if (starred)
+          await db
+            .update(conversationThreads)
+            .set({ starred })
+            .where(
+              and(eq(conversationThreads.id, threadId), sql`${conversationThreads.starred} <> ${starred}`),
+            );
+      // Spot invoices in what was just imported. Failure here must never fail the mail sync itself.
+      await scanEmailInvoices(sys, {
+        connectionId: conn.id,
+        days: cur ? 14 : 365,
+        limit: cur ? 500 : 3000,
+      }).catch(() => undefined);
       await saveCursor(db, conn.orgId, conn.id, scope, res.nextCursor);
       await markOk(db, conn);
       return { provider, mode: cur ? 'incremental' : 'full', imported, duplicates, resynced: res.resynced };

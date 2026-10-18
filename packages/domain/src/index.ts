@@ -12,3 +12,4 @@ export * from './templates';
 export * from './workflow';
 export * from './workflow-templates';
 export * from './triage';
+export * from './invoice-extract';

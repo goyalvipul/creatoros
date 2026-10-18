@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Plus } from 'lucide-react';
+import { Plus, Star } from 'lucide-react';
 import { Suspense, useState } from 'react';
 import { useMe } from '@/components/shell';
 import {
+  ActionButton,
   Async,
   Badge,
   Button,
@@ -27,8 +28,9 @@ import {
   Td,
   Textarea,
 } from '@/components/ui';
-import { post, refresh, useApi } from '@/lib/api';
-import { ago, money, title as titleCase, toMinor, when } from '@/lib/format';
+import { api, del, patch, post, refresh, useApi } from '@/lib/api';
+import { SuggestionCard } from './invoice-suggestions';
+import { ago, dateInput, money, title as titleCase, toMinor, when } from '@/lib/format';
 import { PRIORITIES } from '@/lib/options';
 
 type Tab = 'inbox' | 'pipeline' | 'invoices' | 'partners';
@@ -225,59 +227,172 @@ function NewDealDialog({ open, onClose }: { open: boolean; onClose: () => void }
   );
 }
 
+type Folder = 'inbox' | 'starred' | 'followup' | 'pipeline' | 'archived';
+const FOLDERS: { id: Folder; label: string }[] = [
+  { id: 'inbox', label: 'Inbox' },
+  { id: 'starred', label: 'Starred' },
+  { id: 'followup', label: 'Follow-up' },
+  { id: 'pipeline', label: 'In pipeline' },
+  { id: 'archived', label: 'Archived' },
+];
+
 function Inbox() {
+  const [folder, setFolder] = useState<Folder>('inbox');
+  const [account, setAccount] = useState('');
   const [state, setState] = useState('');
-  const [triage, setTriage] = useState('');
+  const [q, setQ] = useState('');
+  const accounts = useApi<any>('/mail/accounts');
   const threads = useApi<any[]>('/threads', {
-    query: { state: state || undefined, triage: triage || undefined, limit: 100 },
+    query: {
+      scope: 'mail',
+      folder,
+      connectionId: account || undefined,
+      state: state || undefined,
+      q: q.trim() || undefined,
+      limit: 100,
+    },
   });
   const me = useMe();
   const tz = me.data?.organization?.timezone;
+  const counts = account
+    ? accounts.data?.accounts?.find((a: any) => a.id === account)?.counts
+    : accounts.data?.totals;
+  const reload = () => refresh('/threads', '/mail', '/actions', '/briefing');
   return (
     <>
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap gap-2">
+        <Select aria-label="Mailbox" value={account} onChange={(e) => setAccount(e.target.value)}>
+          <option value="">All mailboxes</option>
+          {(accounts.data?.accounts ?? []).map((a: any) => (
+            <option key={a.id} value={a.id}>
+              {a.label}
+              {a.counts?.needReply ? ` (${a.counts.needReply} to reply)` : ''}
+            </option>
+          ))}
+        </Select>
         <Select aria-label="Reply state" value={state} onChange={(e) => setState(e.target.value)}>
           <Options
             values={['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE']}
             none="Any reply state"
           />
         </Select>
-        <Select aria-label="Triage" value={triage} onChange={(e) => setTriage(e.target.value)}>
-          <Options values={['POSSIBLE', 'CONFIRMED', 'DISMISSED', 'MERGED']} none="Any triage state" />
-        </Select>
+        <Input
+          aria-label="Search mail"
+          placeholder="Search subject, sender or text"
+          className="min-w-48 flex-1"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
+      <div role="tablist" aria-label="Mail folders" className="mb-4 flex flex-wrap gap-1.5">
+        {FOLDERS.map((f) => (
+          <Button
+            key={f.id}
+            size="sm"
+            role="tab"
+            aria-selected={folder === f.id}
+            variant={folder === f.id ? 'primary' : 'secondary'}
+            onClick={() => setFolder(f.id)}
+          >
+            {f.label}
+            {counts ? ` ${counts[f.id === 'followup' ? 'followup' : f.id] ?? 0}` : ''}
+          </Button>
+        ))}
+      </div>
+      {accounts.data && accounts.data.accounts.length === 0 && (
+        <div className="mb-4">
+          <Notice tone="info" title="No Gmail account connected">
+            Connect one or more Gmail accounts in Integrations. Pasted or logged inquiries still show here.
+          </Notice>
+        </div>
+      )}
       <Async
         res={threads}
         empty={
-          <EmptyState title="No conversations">
-            Log an inquiry, or connect Gmail in Integrations to bring brand e-mail in (read-only).
+          <EmptyState title={folder === 'inbox' ? 'Nothing to review' : `Nothing in ${folder}`}>
+            {folder === 'starred'
+              ? 'Emails you star in Gmail (after the next sync) or here show up in this tab.'
+              : 'Log an inquiry, or connect Gmail in Integrations to bring brand e-mail in.'}
           </EmptyState>
         }
       >
         {(rows) => (
           <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-panel">
             {rows.map((t) => (
-              <li key={t.id}>
-                <Link href={`/collaborations/threads/${t.id}`} className="block px-3 py-3 hover:bg-panel2">
+              <li key={t.id} className="flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-panel2">
+                <button
+                  aria-label={t.starred ? 'Unstar' : 'Star'}
+                  aria-pressed={t.starred}
+                  className={t.starred ? 'text-warn' : 'text-muted hover:text-text'}
+                  onClick={async () => {
+                    await patch(`/threads/${t.id}/local`, { starred: !t.starred });
+                    await reload();
+                  }}
+                >
+                  <Star className={t.starred ? 'size-4 fill-current' : 'size-4'} />
+                </button>
+                <Link href={`/collaborations/threads/${t.id}`} className="block min-w-0 flex-1 py-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate font-medium">{t.subject}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{t.subject || '(no subject)'}</span>
                     <StateBadge state={t.state} />
                     {t.triageState === 'POSSIBLE' && <Badge tone="warn">review</Badge>}
                     {t.dealId && <Badge tone="info">deal</Badge>}
+                    {t.invoiceHints > 0 && <Badge tone="info">invoice?</Badge>}
+                    {t.followUpAt && <Badge>follow up {ago(t.followUpAt)}</Badge>}
                   </div>
                   <div className="mt-0.5 truncate text-xs text-muted">
+                    {t.fromName ? `${t.fromName} · ` : ''}
                     {t.fromEmail} · {t.preview}
                   </div>
                   <div className="mt-0.5 text-xs text-muted">
+                    {!account && t.principal ? `${t.principal} · ` : ''}
                     {t.lastInboundAt ? `Last message ${ago(t.lastInboundAt)}` : ''}
                     {t.snoozeUntil ? ` · snoozed until ${when(t.snoozeUntil, tz)}` : ''}
                   </div>
                 </Link>
+                <div className="flex gap-1.5">
+                  {folder !== 'pipeline' && (
+                    <ActionButton
+                      size="sm"
+                      onAction={async () => {
+                        await post(`/threads/${t.id}/move`, { to: 'PIPELINE' });
+                        await reload();
+                      }}
+                      success="Moved to pipeline. An opportunity was created."
+                    >
+                      To pipeline
+                    </ActionButton>
+                  )}
+                  {folder === 'archived' ? (
+                    <ActionButton
+                      size="sm"
+                      onAction={async () => {
+                        await post(`/threads/${t.id}/move`, { to: 'INBOX' });
+                        await reload();
+                      }}
+                    >
+                      Back to inbox
+                    </ActionButton>
+                  ) : (
+                    <ActionButton
+                      size="sm"
+                      onAction={async () => {
+                        await post(`/threads/${t.id}/move`, { to: 'ARCHIVE' });
+                        await reload();
+                      }}
+                    >
+                      Archive
+                    </ActionButton>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
         )}
       </Async>
+      <p className="mt-3 text-xs text-muted">
+        Star, archive and moves only change Creator OS; they never change Gmail.
+      </p>
     </>
   );
 }
@@ -345,6 +460,157 @@ function Pipeline() {
   );
 }
 
+function FoundInEmail() {
+  const sug = useApi<any[]>('/mail/invoice-suggestions');
+  return (
+    <section aria-label="Invoices found in email" className="rounded-xl border border-border bg-panel">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <h3 className="flex-1 text-sm font-semibold">
+          Found in your email {sug.data?.length ? `(${sug.data.length})` : ''}
+        </h3>
+        <ActionButton
+          size="sm"
+          onAction={async () => {
+            const r = await post('/mail/invoice-suggestions/scan', {});
+            await refresh('/mail');
+            return r;
+          }}
+          success="Scan finished"
+        >
+          Scan email now
+        </ActionButton>
+      </div>
+      <Async
+        res={sug}
+        empty={
+          <p className="px-3 py-4 text-sm text-muted">
+            No invoices waiting for review. New Gmail messages are checked automatically; press “Scan email
+            now” to check everything already synced. Only the email text is read, not PDF attachments.
+          </p>
+        }
+      >
+        {(rows) => (
+          <ul className="divide-y divide-border">
+            {rows.map((s) => (
+              <SuggestionCard key={s.id} s={s} />
+            ))}
+          </ul>
+        )}
+      </Async>
+    </section>
+  );
+}
+
+function InvoiceActions({ inv }: { inv: any }) {
+  const [edit, setEdit] = useState(false);
+  const locked = inv.status === 'VOID';
+  return (
+    <div className="flex justify-end gap-1.5">
+      {!locked && (
+        <Button size="sm" onClick={() => setEdit(true)}>
+          Edit
+        </Button>
+      )}
+      {inv.paidMinor > 0 ? null : (
+        <ActionButton
+          size="sm"
+          variant="danger"
+          confirm={`Delete invoice ${inv.invoiceNo}? This cannot be undone.`}
+          onAction={async () => {
+            await del(`/invoices/${inv.id}`);
+            await refresh('/invoices', '/finance', '/deals', '/mail');
+          }}
+          success="Invoice deleted"
+        >
+          Delete
+        </ActionButton>
+      )}
+      <EditInvoice inv={inv} open={edit} onClose={() => setEdit(false)} />
+    </div>
+  );
+}
+
+function EditInvoice({ inv, open, onClose }: { inv: any; open: boolean; onClose: () => void }) {
+  const deals = useApi<any[]>('/deals', { query: { limit: 200 } });
+  const paid = inv.paidMinor > 0;
+  const [f, setF] = useState({
+    invoiceNo: inv.invoiceNo as string,
+    amount: (inv.amountMinor / 100).toFixed(2),
+    currency: inv.currency as string,
+    dueAt: inv.dueAt ? dateInput(inv.dueAt) : '',
+    dealId: (inv.dealId ?? '') as string,
+    notes: (inv.notes ?? '') as string,
+  });
+  return (
+    <FormDialog
+      open={open}
+      onClose={onClose}
+      title={`Edit ${inv.invoiceNo}`}
+      onSubmit={async () => {
+        const amountMinor = toMinor(f.amount);
+        if (!amountMinor) throw new Error('Enter a valid amount');
+        await api(`/invoices/${inv.id}`, {
+          method: 'PATCH',
+          body: {
+            invoiceNo: f.invoiceNo.trim(),
+            amountMinor,
+            currency: f.currency.toUpperCase(),
+            dueAt: f.dueAt || null,
+            dealId: f.dealId || null,
+            notes: f.notes.trim() || null,
+          },
+        });
+        await refresh('/invoices', '/finance', '/deals');
+      }}
+    >
+      {paid && (
+        <p className="text-xs text-muted">
+          Payments are recorded, so the currency is fixed and the amount cannot go below what was received.
+        </p>
+      )}
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Invoice no.">
+          <Input required value={f.invoiceNo} onChange={(e) => setF({ ...f, invoiceNo: e.target.value })} />
+        </Field>
+        <Field label="Amount">
+          <Input
+            required
+            inputMode="decimal"
+            value={f.amount}
+            onChange={(e) => setF({ ...f, amount: e.target.value })}
+          />
+        </Field>
+        <Field label="Currency">
+          <Input
+            maxLength={3}
+            disabled={paid}
+            value={f.currency}
+            onChange={(e) => setF({ ...f, currency: e.target.value })}
+          />
+        </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Due date">
+          <Input type="date" value={f.dueAt} onChange={(e) => setF({ ...f, dueAt: e.target.value })} />
+        </Field>
+        <Field label="Deal">
+          <Select value={f.dealId} onChange={(e) => setF({ ...f, dealId: e.target.value })}>
+            <option value="">No deal</option>
+            {(deals.data ?? []).map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.title}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <Field label="Notes">
+        <Textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+      </Field>
+    </FormDialog>
+  );
+}
+
 function Invoices() {
   const fin = useApi<any>('/finance/summary');
   const [status, setStatus] = useState('');
@@ -380,6 +646,7 @@ function Invoices() {
           );
         }}
       </Async>
+      <FoundInEmail />
       <div className="flex flex-wrap gap-2">
         <Select aria-label="Invoice status" value={status} onChange={(e) => setStatus(e.target.value)}>
           <Options
@@ -400,7 +667,7 @@ function Invoices() {
         }
       >
         {(rows) => (
-          <Table head={['Invoice', 'Deal', 'Amount', 'Paid', 'Due', 'Status']}>
+          <Table head={['Invoice', 'Deal', 'Amount', 'Paid', 'Due', 'Status', '']}>
             {rows.map((i) => (
               <tr key={i.id}>
                 <Td className="font-medium">{i.invoiceNo}</Td>
@@ -418,6 +685,9 @@ function Invoices() {
                 <Td>{i.dueAt ? when(i.dueAt, undefined, false) : '—'}</Td>
                 <Td>
                   <StateBadge state={i.status} />
+                </Td>
+                <Td>
+                  <InvoiceActions inv={i} />
                 </Td>
               </tr>
             ))}

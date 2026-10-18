@@ -113,7 +113,7 @@ const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  * pipeline (ideas, projects, publishing, calendar) but not these; reads here need at least EDITOR.
  */
 const PRIVATE_GET =
-  /^\/(threads|messages|opportunities|deals|organizations|contacts|invoices|fx-rates|finance|todo|integrations|connections|devices|pairing-codes|roots|scan-runs|physical-shares|library|files|suggestions|duplicates|actions|briefing|notifications|socials|workflows)(\/|$)/;
+  /^\/(threads|messages|opportunities|deals|organizations|contacts|invoices|fx-rates|finance|todo|integrations|connections|devices|pairing-codes|roots|scan-runs|physical-shares|library|files|suggestions|duplicates|actions|briefing|notifications|socials|workflows|mail)(\/|$)/;
 
 export function makeRouter(app: FastifyInstance, deps: AppDeps) {
   return function route<P = unknown, Q = unknown, B = unknown>(

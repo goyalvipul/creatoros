@@ -30,3 +30,5 @@ export * from './identity';
 export * from './facebook';
 export * from './youtube-social';
 export * from './contact-names';
+export * from './mail';
+export * from './invoice-suggestions';

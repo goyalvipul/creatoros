@@ -204,11 +204,59 @@ export async function ingestMessage(ctx: Ctx, input: MessageInput) {
   });
 }
 
+/** One definition of each mailbox tab, shared by the list and the counts so they can never disagree. */
+function folderSql(folder: 'inbox' | 'starred' | 'followup' | 'pipeline' | 'archived') {
+  switch (folder) {
+    case 'inbox':
+      return sql`(not t.archived_local and t.triage_state not in ('DISMISSED','CONFIRMED'))`;
+    case 'starred':
+      return sql`(t.starred and not t.archived_local and t.triage_state <> 'DISMISSED')`;
+    case 'followup':
+      return sql`(t.follow_up_at is not null and not t.archived_local and t.triage_state <> 'DISMISSED')`;
+    case 'pipeline':
+      return sql`(t.triage_state = 'CONFIRMED' and not t.archived_local)`;
+    case 'archived':
+      return sql`(t.archived_local or t.triage_state = 'DISMISSED')`;
+  }
+}
+
+/** Tab counts for the email inbox, optionally for one mailbox. */
+export async function mailCounts(ctx: Ctx, q: { connectionId?: string } = {}) {
+  const conn = q.connectionId ? sql`and t.provider_connection_id = ${q.connectionId}::uuid` : sql``;
+  const [r] = rowsOf<Record<string, number>>(
+    await ctx.db.execute(sql`
+      select count(*) filter (where ${folderSql('inbox')})::int as inbox,
+             count(*) filter (where ${folderSql('inbox')} and t.state = 'NEED_REPLY')::int as "needReply",
+             count(*) filter (where ${folderSql('starred')})::int as starred,
+             count(*) filter (where ${folderSql('followup')})::int as followup,
+             count(*) filter (where ${folderSql('pipeline')})::int as pipeline,
+             count(*) filter (where ${folderSql('archived')})::int as archived
+      from conversation_threads t
+      where t.org_id = ${ctx.orgId} and t.merged_into_id is null and t.source not in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') ${conn}`),
+  );
+  return r ?? { inbox: 0, needReply: 0, starred: 0, followup: 0, pipeline: 0, archived: 0 };
+}
+
 export async function listThreads(
   ctx: Ctx,
-  q: { state?: string; triage?: string; category?: string; q?: string; dealId?: string; limit?: number } = {},
+  q: {
+    state?: string;
+    triage?: string;
+    category?: string;
+    q?: string;
+    dealId?: string;
+    limit?: number;
+    /** 'mail' hides Instagram/Facebook/TikTok/YouTube conversations (they live in Socials). */
+    scope?: 'mail' | 'all';
+    connectionId?: string;
+    /** 'manual' = pasted/manual threads without a mailbox */
+    folder?: 'inbox' | 'starred' | 'followup' | 'pipeline' | 'archived';
+  } = {},
 ) {
   const where = [sql`t.org_id = ${ctx.orgId}`, sql`t.merged_into_id is null`];
+  if (q.scope === 'mail') where.push(sql`t.source not in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE')`);
+  if (q.connectionId) where.push(sql`t.provider_connection_id = ${q.connectionId}::uuid`);
+  if (q.folder) where.push(folderSql(q.folder));
   if (q.state) where.push(sql`t.state = ${q.state}::actionable_state`);
   if (q.triage) where.push(sql`t.triage_state = ${q.triage}::triage_state`);
   if (q.dealId) where.push(sql`t.deal_id = ${q.dealId}`);
@@ -224,6 +272,9 @@ export async function listThreads(
     await ctx.db.execute(sql`
       select t.id, t.subject, t.source, t.state, t.triage_state as "triageState", t.last_inbound_at as "lastInboundAt", t.last_outbound_at as "lastOutboundAt",
              t.snooze_until as "snoozeUntil", t.opportunity_id as "opportunityId", t.deal_id as "dealId", t.external_link as "externalLink",
+             t.starred, t.archived_local as "archivedLocal", t.follow_up_at as "followUpAt", t.provider_connection_id as "connectionId", t.principal,
+             (select count(*)::int from invoice_suggestions s where s.thread_id = t.id and s.status = 'SUGGESTED') as "invoiceHints",
+             (select m.from_name from messages m where m.thread_id = t.id and m.direction = 'INBOUND' order by m.received_at desc limit 1) as "fromName",
              (select m.from_email from messages m where m.thread_id = t.id and m.direction = 'INBOUND' order by m.received_at desc limit 1) as "fromEmail",
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview,
              (select c.category from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id order by c.confidence desc limit 1) as category,
@@ -1002,6 +1053,118 @@ export async function voidInvoice(ctx: Ctx, id: string) {
 }
 
 /**
+ * Edit an invoice. With payments recorded the currency is frozen and the amount can never drop below what was received; the
+ * status is re-derived so an edit cannot leave an invoice looking paid (or unpaid) when the numbers say otherwise.
+ */
+export async function updateInvoice(
+  ctx: Ctx,
+  id: string,
+  input: {
+    invoiceNo?: string;
+    amountMinor?: number;
+    currency?: string;
+    issuedAt?: Date | string | null;
+    dueAt?: Date | string | null;
+    notes?: string | null;
+    dealId?: string | null;
+  },
+) {
+  return ctx.db.transaction(async (tx) => {
+    const [i] = await tx
+      .select()
+      .from(invoices)
+      .where(and(eq(invoices.id, id), eq(invoices.orgId, ctx.orgId)))
+      .for('update');
+    if (!i) throw notFound('Invoice');
+    if (i.status === 'VOID') throw conflict('A void invoice cannot be edited.', undefined, 'INVOICE_VOID');
+    const set: Partial<typeof invoices.$inferInsert> = { updatedAt: new Date() };
+    if (input.invoiceNo !== undefined && input.invoiceNo.trim() !== i.invoiceNo) {
+      const no = input.invoiceNo.trim();
+      if (!no) throw badRequest('Invoice number cannot be empty');
+      const [dup] = await tx
+        .select({ id: invoices.id })
+        .from(invoices)
+        .where(and(eq(invoices.orgId, ctx.orgId), eq(invoices.invoiceNo, no)));
+      if (dup) throw conflict(`Invoice number ${no} already exists.`, undefined, 'DUPLICATE_INVOICE_NO');
+      set.invoiceNo = no;
+    }
+    const amount = input.amountMinor ?? i.amountMinor;
+    if (input.amountMinor !== undefined) {
+      if (!Number.isInteger(amount) || amount <= 0)
+        throw badRequest('Amount must be a positive whole number of minor units');
+      if (amount < i.paidTotalMinor)
+        throw conflict(
+          `The amount cannot be lower than the ${i.paidTotalMinor} already received.`,
+          undefined,
+          'BELOW_PAID',
+        );
+      set.amountMinor = amount;
+    }
+    if (input.currency !== undefined && input.currency.toUpperCase() !== i.currency) {
+      if (i.paidTotalMinor > 0)
+        throw conflict('The currency cannot change once payments exist.', undefined, 'HAS_PAYMENTS');
+      set.currency = input.currency.toUpperCase();
+    }
+    if (input.issuedAt !== undefined) set.issuedAt = input.issuedAt ? new Date(input.issuedAt) : null;
+    if (input.dueAt !== undefined) set.dueAt = input.dueAt ? new Date(input.dueAt) : null;
+    if (input.notes !== undefined) set.notes = input.notes?.slice(0, 2000) ?? null;
+    if (input.dealId !== undefined) {
+      if (input.dealId) {
+        const [d] = await tx
+          .select({ id: deals.id })
+          .from(deals)
+          .where(and(eq(deals.id, input.dealId), eq(deals.orgId, ctx.orgId)));
+        if (!d) throw notFound('Deal');
+      }
+      set.dealId = input.dealId;
+    }
+    set.status = deriveInvoiceStatus({
+      status: i.status,
+      amountMinor: amount,
+      paidMinor: i.paidTotalMinor,
+      dueAt: set.dueAt === undefined ? i.dueAt : (set.dueAt as Date | null),
+    });
+    const [after] = await tx.update(invoices).set(set).where(eq(invoices.id, id)).returning();
+    await audit({ ...ctx, db: tx }, 'invoice.update', { type: 'invoice', id }, undefined, {
+      fields: Object.keys(set).filter((k) => k !== 'updatedAt'),
+    });
+    return after!;
+  });
+}
+
+/** Deleting is only for invoices with no money recorded against them; otherwise void it so the history stays honest. */
+export async function deleteInvoice(ctx: Ctx, id: string) {
+  return ctx.db.transaction(async (tx) => {
+    const [i] = await tx
+      .select()
+      .from(invoices)
+      .where(and(eq(invoices.id, id), eq(invoices.orgId, ctx.orgId)))
+      .for('update');
+    if (!i) throw notFound('Invoice');
+    const [p] = await tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(eq(payments.invoiceId, id))
+      .limit(1);
+    if (p || i.paidTotalMinor > 0)
+      throw conflict(
+        'This invoice has payments recorded, so it cannot be deleted. Void it instead.',
+        undefined,
+        'HAS_PAYMENTS',
+      );
+    await tx.delete(invoices).where(eq(invoices.id, id));
+    await audit(
+      { ...ctx, db: tx },
+      'invoice.delete',
+      { type: 'invoice', id },
+      { invoiceNo: i.invoiceNo, amountMinor: i.amountMinor },
+      undefined,
+    );
+    return { id, deleted: true };
+  });
+}
+
+/**
  * Payment recording is transactional and currency-safe: the row lock stops two concurrent payments both
  * "completing" the invoice, amounts are integer minor units, a payment must be in the invoice currency, and overpayment is refused.
  */
@@ -1181,7 +1344,7 @@ export async function financeSummary(ctx: Ctx, range: { from?: Date; to?: Date }
 export async function listInvoices(ctx: Ctx, q: { status?: string; dealId?: string; limit?: number } = {}) {
   return rowsOf<any>(
     await ctx.db.execute(sql`
-      select i.id, i.invoice_no as "invoiceNo", i.status, i.currency, i.amount_minor::float8 as "amountMinor", i.issued_at as "issuedAt", i.due_at as "dueAt", i.deal_id as "dealId", d.title as "dealTitle",
+      select i.id, i.invoice_no as "invoiceNo", i.status, i.currency, i.amount_minor::float8 as "amountMinor", i.issued_at as "issuedAt", i.due_at as "dueAt", i.deal_id as "dealId", d.title as "dealTitle", i.notes,
              coalesce((select sum(p.amount_minor) from payments p where p.invoice_id = i.id), 0)::float8 as "paidMinor"
       from invoices i left join deals d on d.id = i.deal_id
       where i.org_id = ${ctx.orgId} ${q.status ? sql`and i.status = ${q.status}::invoice_status` : sql``} ${q.dealId ? sql`and i.deal_id = ${q.dealId}` : sql``}

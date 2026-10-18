@@ -19,7 +19,7 @@ import { post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
 
 const NAMES: Record<string, string> = {
-  gmail: 'Gmail (read-only)',
+  gmail: 'Gmail',
   youtube: 'YouTube',
   postiz: 'Postiz (scheduling)',
   todo: 'Todo app',
@@ -107,8 +107,9 @@ export default function IntegrationsPage() {
         </Notice>
       )}
       <Notice tone="info" title="Safe by design" dismissible dismissKey="integrations-safe">
-        Gmail access is read-only. Creator OS never sends e-mail, posts to social platforms or pays anything
-        on its own. Credentials are stored encrypted on your machine.
+        Gmail is read-only unless you choose “Enable sending” for an account, and even then an e-mail is only
+        sent when you press Send on a reply. Creator OS never posts to social platforms or pays anything on
+        its own. Credentials are stored encrypted on your machine.
       </Notice>
       <div className="mt-4">
         <Async res={res}>
@@ -175,6 +176,43 @@ export default function IntegrationsPage() {
                               .join(' · ')}
                           </p>
                         )}
+                        {p.provider === 'gmail' && (p.connections ?? []).length > 0 && (
+                          <ul className="mt-3 space-y-2">
+                            {p.connections.map((c: any) => {
+                              const canSend = (c.scopes ?? []).includes(
+                                'https://www.googleapis.com/auth/gmail.send',
+                              );
+                              return (
+                                <li
+                                  key={c.id}
+                                  className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm"
+                                >
+                                  <span className="min-w-0 flex-1 truncate font-medium">
+                                    {c.principalHint ?? 'Gmail account'}
+                                  </span>
+                                  <StateBadge state={c.state} />
+                                  <Badge tone={canSend ? 'ok' : 'neutral'}>
+                                    {canSend ? 'Can send replies' : 'Read-only'}
+                                  </Badge>
+                                  {!canSend && (
+                                    <ActionButton
+                                      size="sm"
+                                      onAction={async () => {
+                                        const r = await post('/integrations/gmail/oauth/start', {
+                                          send: true,
+                                          loginHint: c.principalHint ?? undefined,
+                                        });
+                                        if (r.authorizeUrl) window.location.href = r.authorizeUrl;
+                                      }}
+                                    >
+                                      Enable sending
+                                    </ActionButton>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
                         {p.provider === 'youtube' && conn && connected && (
                           <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
                             <Badge
@@ -202,6 +240,11 @@ export default function IntegrationsPage() {
                           {OAUTH.includes(p.provider) && !connected && p.state !== 'UNSUPPORTED' && (
                             <ActionButton variant="primary" onAction={() => connect(p.provider)}>
                               Connect
+                            </ActionButton>
+                          )}
+                          {p.provider === 'gmail' && connected && (
+                            <ActionButton onAction={() => connect('gmail')}>
+                              Add another Gmail account
                             </ActionButton>
                           )}
                           {KEYED[p.provider] && (

@@ -31,6 +31,18 @@ import {
   createDeal,
   createGoal,
   createInvoice,
+  acceptInvoiceSuggestion,
+  deleteInvoice,
+  dismissInvoiceSuggestion,
+  followUpThread,
+  createThreadTask,
+  listInvoiceSuggestions,
+  mailAccounts,
+  moveMailThread,
+  replyToEmail,
+  scanEmailInvoices,
+  updateInvoice,
+  updateThreadLocal,
   disconnect,
   dismissAction,
   financeSummary,
@@ -116,9 +128,137 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         q: z.string().max(200).optional(),
         dealId: uuid.optional(),
         limit: z.coerce.number().int().max(300).optional(),
+        scope: z.enum(['mail', 'all']).optional(),
+        connectionId: uuid.optional(),
+        folder: z.enum(['inbox', 'starred', 'followup', 'pipeline', 'archived']).optional(),
       }),
     },
     ({ ctx, query }) => listThreads(ctx, query),
+  );
+  // ---- email inbox organisation (Gmail + pasted mail). Social conversations use /socials/threads/*.
+  route(
+    {
+      method: 'GET',
+      url: '/mail/accounts',
+      tag: 'Collaborations',
+      summary: 'Connected mailboxes with per-tab counts',
+    },
+    ({ ctx }) => mailAccounts(ctx),
+  );
+  route(
+    {
+      method: 'PATCH',
+      url: '/threads/:id/local',
+      tag: 'Collaborations',
+      summary: 'Creator OS-only star / archive for an email (never changes Gmail)',
+      params: idParam,
+      body: z.object({ starred: z.boolean(), archivedLocal: z.boolean() }).partial(),
+    },
+    ({ ctx, params, body }) => updateThreadLocal(ctx, params.id, body, { mail: true }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/threads/:id/move',
+      tag: 'Collaborations',
+      summary: 'Move an email between Inbox, Archive and Pipeline',
+      params: idParam,
+      body: z.object({ to: z.enum(['INBOX', 'ARCHIVE', 'PIPELINE']) }),
+    },
+    ({ ctx, params, body }) => moveMailThread(ctx, params.id, body.to),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/threads/:id/follow-up',
+      tag: 'Collaborations',
+      summary: 'Set or clear the follow-up for an email (one open task per conversation)',
+      params: idParam,
+      body: z.object({
+        preset: z.enum(['tomorrow', 'next_week', 'custom', 'clear']),
+        at: z.coerce.date().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => followUpThread(ctx, params.id, body, { mail: true }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/threads/:id/create-task',
+      tag: 'Collaborations',
+      summary: 'Create a task linked to this email (idempotent)',
+      params: idParam,
+      body: z.object({ title: z.string().max(200).optional(), dueAt: z.coerce.date().nullable().optional() }),
+    },
+    ({ ctx, params, body }) => createThreadTask(ctx, params.id, body, { mail: true }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/threads/:id/reply',
+      tag: 'Collaborations',
+      summary: 'Send a reply from the connected Gmail account (explicit action, never retried)',
+      params: idParam,
+      body: z.object({
+        text: z.string().min(1).max(20000),
+        requestId: z.string().min(8).max(100),
+        to: z.string().max(254).optional(),
+        subject: z.string().max(300).optional(),
+      }),
+    },
+    ({ ctx, params, body }) => replyToEmail(ctx, params.id, body, ov()),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/mail/invoice-suggestions',
+      tag: 'Collaborations',
+      summary: 'Invoices spotted in email text (suggestions only)',
+      query: z.object({
+        status: z.enum(['SUGGESTED', 'ACCEPTED', 'DISMISSED']).optional(),
+        threadId: uuid.optional(),
+      }),
+    },
+    ({ ctx, query }) => listInvoiceSuggestions(ctx, query),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/mail/invoice-suggestions/scan',
+      tag: 'Collaborations',
+      summary: 'Scan stored email text for invoices',
+      body: z.object({ connectionId: uuid.optional(), days: z.number().int().min(1).max(3650).optional() }),
+    },
+    ({ ctx, body }) => scanEmailInvoices(ctx, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/mail/invoice-suggestions/:id/accept',
+      tag: 'Collaborations',
+      summary: 'Add a suggestion as an invoice (money owed to you) or an expense',
+      params: idParam,
+      body: z.object({
+        as: z.enum(['INVOICE', 'EXPENSE']),
+        invoiceNo: z.string().max(40).nullable().optional(),
+        amountMinor: z.number().int().positive().optional(),
+        currency: currency.optional(),
+        dueAt: date.nullable().optional(),
+        dealId: uuid.nullable().optional(),
+        notes: z.string().max(2000).nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => acceptInvoiceSuggestion(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/mail/invoice-suggestions/:id/dismiss',
+      tag: 'Collaborations',
+      summary: 'Dismiss an invoice suggestion',
+      params: idParam,
+    },
+    ({ ctx, params }) => dismissInvoiceSuggestion(ctx, params.id),
   );
   route(
     {
@@ -423,6 +563,37 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       }),
     },
     ({ ctx, body }) => createInvoice(ctx, body),
+  );
+  route(
+    {
+      method: 'PATCH',
+      url: '/invoices/:id',
+      tag: 'Collaborations',
+      summary: 'Edit an invoice (amount cannot drop below what was received)',
+      params: idParam,
+      body: z
+        .object({
+          invoiceNo: z.string().min(1).max(40),
+          amountMinor: z.number().int().positive(),
+          currency,
+          issuedAt: date.nullable(),
+          dueAt: date.nullable(),
+          notes: z.string().max(2000).nullable(),
+          dealId: uuid.nullable(),
+        })
+        .partial(),
+    },
+    ({ ctx, params, body }) => updateInvoice(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/invoices/:id',
+      tag: 'Collaborations',
+      summary: 'Delete an invoice with no payments (otherwise void it)',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteInvoice(ctx, params.id),
   );
   route(
     {
@@ -738,6 +909,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         messages: z.boolean().optional(),
         reconnect: z.boolean().optional(),
         drafts: z.boolean().optional(),
+        send: z.boolean().optional(),
         analytics: z.boolean().optional(),
         loginHint: z.string().max(254).optional(),
       }),

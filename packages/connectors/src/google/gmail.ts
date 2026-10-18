@@ -104,6 +104,7 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     const hasTokens = Boolean(creds.refreshToken || creds.accessToken);
     const read = hasTokens && hasScope(creds, GOOGLE_SCOPES.gmailRead[0]);
     const drafts = hasTokens && hasScope(creds, GOOGLE_SCOPES.gmailDrafts[0]);
+    const send = hasTokens && hasScope(creds, GOOGLE_SCOPES.gmailSend[0]);
     const blockers: string[] = [];
     if (!client)
       blockers.push(
@@ -115,12 +116,12 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
       provider: 'gmail',
       state: !client ? 'NOT_CONFIGURED' : !hasTokens ? 'NOT_CONFIGURED' : 'ACTIVE',
       read,
-      write: false,
+      write: send,
       incrementalSync: read,
       flags: {
         readMessages: read,
         createDrafts: drafts,
-        sendEmail: false,
+        sendEmail: send,
         pushNotifications: Boolean(ctx.config.pubsubTopic),
       },
       blockers,
@@ -141,6 +142,7 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
       ...GOOGLE_SCOPES.identity,
       ...GOOGLE_SCOPES.gmailRead,
       ...(input.drafts ? GOOGLE_SCOPES.gmailDrafts : []),
+      ...(input.send ? GOOGLE_SCOPES.gmailSend : []),
     ];
     return {
       status: 'REDIRECT',
@@ -176,6 +178,70 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     const { data } = await http<T>(ctx, `${API}${path}`, {
       headers: { authorization: `Bearer ${token}` },
       query,
+    });
+    return data;
+  }
+
+  /** RFC 2822 headers of one message (for correct reply threading). */
+  async getReplyHeaders(
+    ctx: ConnectorContext,
+    messageId: string,
+  ): Promise<{ messageId: string | null; references: string | null; replyTo: string | null }> {
+    const raw = await this.get<GmailRawMessage>(
+      ctx,
+      `/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References&metadataHeaders=Reply-To`,
+    );
+    return {
+      messageId: header(raw, 'Message-ID') ?? null,
+      references: header(raw, 'References') ?? null,
+      replyTo: header(raw, 'Reply-To') ?? null,
+    };
+  }
+
+  /**
+   * Sends one plain-text email in an existing Gmail thread. Requires gmail.send. POST is never auto-retried by the HTTP layer,
+   * so a network failure surfaces as an error the caller must treat as UNCERTAIN (the mail may or may not have gone out).
+   */
+  async sendEmail(
+    ctx: ConnectorContext,
+    input: {
+      to: string[];
+      cc?: string[];
+      subject: string;
+      body: string;
+      threadId?: string;
+      inReplyTo?: string | null;
+      references?: string | null;
+    },
+  ): Promise<{ id: string; threadId: string }> {
+    if (!hasScope(ctx.credentials, GOOGLE_SCOPES.gmailSend[0]))
+      throw new ConnectorError(
+        'PERMISSION_DENIED',
+        'Gmail send permission is not granted. Reconnect Gmail and allow sending.',
+      );
+    const clean = (v: string) => v.replace(/[\r\n]+/g, ' ').trim();
+    const lines = [
+      `To: ${input.to.map(clean).join(', ')}`,
+      ...(input.cc?.length ? [`Cc: ${input.cc.map(clean).join(', ')}`] : []),
+      `Subject: =?UTF-8?B?${Buffer.from(clean(input.subject), 'utf8').toString('base64')}?=`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: base64',
+      ...(input.inReplyTo ? [`In-Reply-To: ${clean(input.inReplyTo)}`] : []),
+      ...(input.references || input.inReplyTo
+        ? [`References: ${clean([input.references, input.inReplyTo].filter(Boolean).join(' '))}`]
+        : []),
+    ];
+    const b64 = Buffer.from(input.body, 'utf8')
+      .toString('base64')
+      .replace(/(.{76})/g, '$1\r\n');
+    const raw = Buffer.from(`${lines.join('\r\n')}\r\n\r\n${b64}`, 'utf8').toString('base64url');
+    const token = await this.token(ctx);
+    const { data } = await http<{ id: string; threadId: string }>(ctx, `${API}/messages/send`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+      json: input.threadId ? { raw, threadId: input.threadId } : { raw },
+      maxAttempts: 1,
     });
     return data;
   }
@@ -310,6 +376,22 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
         if (res.historyId) latest = res.historyId;
         pageToken = res.nextPageToken;
       } while (pageToken);
+      // Starring an older message adds a label, not a message: pick those up too so the Starred tab stays current.
+      let labelPage: string | undefined;
+      do {
+        const res = await this.get<{
+          history?: { labelsAdded?: { message: { id: string }; labelIds?: string[] }[] }[];
+          nextPageToken?: string;
+        }>(ctx, '/history', {
+          startHistoryId: cursor,
+          historyTypes: 'labelAdded',
+          maxResults: 100,
+          pageToken: labelPage,
+        });
+        for (const h of res.history ?? [])
+          for (const a of h.labelsAdded ?? []) if (a.labelIds?.includes('STARRED')) ids.add(a.message.id);
+        labelPage = res.nextPageToken;
+      } while (labelPage);
     } catch (e) {
       if (e instanceof ConnectorError && e.kind === 'NOT_FOUND') {
         const full = await this.syncFull(ctx);

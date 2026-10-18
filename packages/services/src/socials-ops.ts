@@ -6,12 +6,18 @@ import { SOCIAL_SOURCES } from './social';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 
-async function loadThread(ctx: Ctx, id: string) {
+/** Social routes only see social threads; the email routes pass `mail: true` to work on any non-social thread. */
+export interface ThreadScope {
+  mail?: boolean;
+}
+
+async function loadThread(ctx: Ctx, id: string, scope: ThreadScope = {}) {
   const [t] = await ctx.db
     .select()
     .from(conversationThreads)
     .where(and(eq(conversationThreads.id, id), eq(conversationThreads.orgId, ctx.orgId)));
-  if (!t || !SOCIAL_SOURCES.includes(t.source as never)) throw notFound('Conversation');
+  const isSocial = !!t && SOCIAL_SOURCES.includes(t.source as never);
+  if (!t || (scope.mail ? isSocial : !isSocial)) throw notFound('Conversation');
   return t;
 }
 
@@ -29,8 +35,9 @@ export async function updateThreadLocal(
     priority?: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
     internalNotes?: string | null;
   },
+  scope: ThreadScope = {},
 ) {
-  const t = await loadThread(ctx, id);
+  const t = await loadThread(ctx, id, scope);
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (input.starred !== undefined) set.starred = input.starred;
   if (input.archivedLocal !== undefined) set.archivedLocal = input.archivedLocal;
@@ -49,15 +56,17 @@ export async function updateThreadLocal(
   return { id: t.id, ...set, localOnly: true };
 }
 
-const deepLink = (id: string) => `/socials/inbox?thread=${id}`;
+const deepLink = (id: string, scope: ThreadScope = {}) =>
+  scope.mail ? `/collaborations/threads/${id}` : `/socials/inbox?thread=${id}`;
 
 /** One open follow-up action per conversation: asking again moves its date instead of creating a second task. */
 export async function followUpThread(
   ctx: Ctx,
   id: string,
   input: { preset: 'tomorrow' | 'next_week' | 'custom' | 'clear'; at?: Date },
+  scope: ThreadScope = {},
 ) {
-  const t = await loadThread(ctx, id);
+  const t = await loadThread(ctx, id, scope);
   const dedupeKey = `social-followup:${id}`;
   if (input.preset === 'clear') {
     await ctx.db.update(conversationThreads).set({ followUpAt: null }).where(eq(conversationThreads.id, id));
@@ -78,7 +87,9 @@ export async function followUpThread(
   }
   await ctx.db.update(conversationThreads).set({ followUpAt: due }).where(eq(conversationThreads.id, id));
   const who = t.participantName ?? t.participantId ?? 'contact';
-  const title = `Follow up with ${who} on ${t.source === 'INSTAGRAM' ? 'Instagram' : t.source}`;
+  const title = scope.mail
+    ? `Follow up: ${t.subject?.slice(0, 80) || who}`
+    : `Follow up with ${who} on ${t.source === 'INSTAGRAM' ? 'Instagram' : t.source}`;
   const existing = rowsOf<{ id: string }>(
     await ctx.db.execute(
       sql`update internal_actions set due_at = ${due.toISOString()}::timestamptz, updated_at = now() where org_id = ${ctx.orgId} and dedupe_key = ${dedupeKey} and state in ('OPEN','SNOOZED') returning id`,
@@ -89,12 +100,12 @@ export async function followUpThread(
       .insert(internalActions)
       .values({
         orgId: ctx.orgId,
-        sourceType: 'social_thread',
+        sourceType: scope.mail ? 'mail_thread' : 'social_thread',
         sourceId: id,
         dedupeKey,
         title,
-        reason: 'Follow-up you set in Socials',
-        deepLink: deepLink(id),
+        reason: scope.mail ? 'Follow-up you set on an email' : 'Follow-up you set in Socials',
+        deepLink: deepLink(id, scope),
         dueAt: due,
         ownerUserId: ctx.userId,
       })
@@ -103,8 +114,13 @@ export async function followUpThread(
   return { followUpAt: due };
 }
 
-export async function createThreadTask(ctx: Ctx, id: string, input: { title?: string; dueAt?: Date | null }) {
-  const t = await loadThread(ctx, id);
+export async function createThreadTask(
+  ctx: Ctx,
+  id: string,
+  input: { title?: string; dueAt?: Date | null },
+  scope: ThreadScope = {},
+) {
+  const t = await loadThread(ctx, id, scope);
   const dedupeKey = `social-task:${id}`;
   const [open] = await ctx.db
     .select()
@@ -121,14 +137,16 @@ export async function createThreadTask(ctx: Ctx, id: string, input: { title?: st
     .insert(internalActions)
     .values({
       orgId: ctx.orgId,
-      sourceType: 'social_thread',
+      sourceType: scope.mail ? 'mail_thread' : 'social_thread',
       sourceId: id,
       dedupeKey,
       title:
         input.title?.trim() ||
-        `Handle ${t.participantName ?? t.participantId ?? 'conversation'} (${t.source})`,
-      reason: 'Task created from Socials',
-      deepLink: deepLink(id),
+        (scope.mail
+          ? `Handle email: ${t.subject?.slice(0, 80) || 'conversation'}`
+          : `Handle ${t.participantName ?? t.participantId ?? 'conversation'} (${t.source})`),
+      reason: scope.mail ? 'Task created from an email' : 'Task created from Socials',
+      deepLink: deepLink(id, scope),
       dueAt: input.dueAt ?? null,
       ownerUserId: ctx.userId,
     })
@@ -138,8 +156,13 @@ export async function createThreadTask(ctx: Ctx, id: string, input: { title?: st
 }
 
 /** Confirms the conversation as a collaboration lead. Idempotent: the same conversation never creates a second record. */
-export async function createThreadCollaboration(ctx: Ctx, id: string, input: { title?: string }) {
-  await loadThread(ctx, id);
+export async function createThreadCollaboration(
+  ctx: Ctx,
+  id: string,
+  input: { title?: string },
+  scope: ThreadScope = {},
+) {
+  await loadThread(ctx, id, scope);
   const r = await triageThread(ctx, id, 'CONFIRMED', { title: input.title });
   const [opp] = await ctx.db
     .select()

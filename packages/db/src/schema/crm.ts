@@ -440,3 +440,38 @@ export const followUpRules = pgTable(
   },
   (t) => [uniqueIndex('follow_up_rules_key_uq').on(t.orgId, t.key)],
 );
+
+/** Invoices spotted in email text. Suggestions only: the owner accepts (invoice or expense) or dismisses each one. */
+export const invoiceSuggestions = pgTable(
+  'invoice_suggestions',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    threadId: uuid('thread_id')
+      .notNull()
+      .references(() => conversationThreads.id, { onDelete: 'cascade' }),
+    connectionId: uuid('connection_id').references(() => providerConnections.id, { onDelete: 'set null' }),
+    invoiceNo: text('invoice_no'),
+    amountMinor: int8('amount_minor'),
+    currency: text('currency'),
+    dueAt: ts('due_at'),
+    direction: text('direction').notNull().default('UNKNOWN'),
+    counterparty: text('counterparty'),
+    subject: text('subject'),
+    confidence: doublePrecision('confidence').notNull().default(0),
+    signals: jsonb('signals').$type<string[]>().notNull().default([]),
+    status: text('status').notNull().default('SUGGESTED'),
+    acceptedInvoiceId: uuid('accepted_invoice_id').references(() => invoices.id, { onDelete: 'set null' }),
+    acceptedExpenseId: uuid('accepted_expense_id').references(() => expenses.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('invoice_suggestions_message_uq').on(t.messageId),
+    index('invoice_suggestions_org_status_idx').on(t.orgId, t.status),
+    index('invoice_suggestions_thread_idx').on(t.threadId),
+  ],
+);

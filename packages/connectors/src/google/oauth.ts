@@ -17,6 +17,8 @@ export const GOOGLE_SCOPES = {
   identity: ['openid', 'email'],
   gmailRead: ['https://www.googleapis.com/auth/gmail.readonly'],
   gmailDrafts: ['https://www.googleapis.com/auth/gmail.compose'],
+  /** Send replies from inside Creator OS. Opt-in; needs a reconnect. */
+  gmailSend: ['https://www.googleapis.com/auth/gmail.send'],
   youtubeRead: ['https://www.googleapis.com/auth/youtube.readonly'],
   youtubeAnalytics: ['https://www.googleapis.com/auth/yt-analytics.readonly'],
   /** Read AND reply to/moderate comments. Needed for Socials comment replies. */

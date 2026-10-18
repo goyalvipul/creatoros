@@ -89,7 +89,7 @@ export function classifyMessage(input: ClassificationInput): ClassificationResul
   };
 }
 
-function extractMoney(text: string): { amountMinor: number; currency: string } | null {
+export function extractMoney(text: string): { amountMinor: number; currency: string } | null {
   const m =
     /(?:(USD|CAD|EUR|GBP|INR|AUD)\s?|([$€£₹]))\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?\s?(USD|CAD|EUR|GBP|INR|AUD)?/i.exec(
       text,

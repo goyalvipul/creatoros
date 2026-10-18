@@ -10,7 +10,7 @@ import {
 } from '@creatoros/db';
 import { gmailConnector, type ConnectorContext } from '@creatoros/connectors';
 import { extractInvoiceHints } from '@creatoros/domain';
-import { scanEmailInvoices } from './invoice-suggestions';
+import { insertInvoiceSuggestion, scanEmailInvoices } from './invoice-suggestions';
 import { encrypt } from './crypto';
 import { ingestMessage } from './crm';
 import { connectorContext } from './integrations';
@@ -185,9 +185,8 @@ export async function syncGmailInvoices(
       attachmentNames: m.attachments.map((a) => a.name),
     });
     if (!hint) continue;
-    const ins = await ctx.db
-      .insert(invoiceSuggestions)
-      .values({
+    if (
+      await insertInvoiceSuggestion(ctx, {
         orgId: ctx.orgId,
         messageId,
         threadId,
@@ -202,9 +201,8 @@ export async function syncGmailInvoices(
         confidence: hint.confidence,
         signals: hint.signals,
       })
-      .onConflictDoNothing()
-      .returning({ id: invoiceSuggestions.id });
-    if (ins.length) found += 1;
+    )
+      found += 1;
   }
   await ctx.db
     .insert(syncCursors)

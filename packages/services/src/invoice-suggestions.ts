@@ -59,9 +59,8 @@ export async function scanEmailInvoices(
       attachmentNames: (m.attachment_refs ?? []).map((a) => a.name ?? ''),
     });
     if (!hint) continue;
-    const ins = await ctx.db
-      .insert(invoiceSuggestions)
-      .values({
+    if (
+      await insertInvoiceSuggestion(ctx, {
         orgId: ctx.orgId,
         messageId: m.id,
         threadId: m.thread_id,
@@ -76,9 +75,8 @@ export async function scanEmailInvoices(
         confidence: hint.confidence,
         signals: hint.signals,
       })
-      .onConflictDoNothing()
-      .returning({ id: invoiceSuggestions.id });
-    if (ins.length) found += 1;
+    )
+      found += 1;
   }
   return { scanned: rows.length, found };
 }
@@ -186,4 +184,28 @@ export async function dismissInvoiceSuggestion(ctx: Ctx, id: string) {
   if (!r.length) throw notFound('Open invoice suggestion');
   await audit(ctx, 'invoice.suggestion.dismiss', { type: 'invoice_suggestion', id });
   return { id, status: 'DISMISSED' as const };
+}
+
+/**
+ * Records one suggestion unless this thread already has one for the same invoice (same number, or same amount and currency).
+ * Replies quote earlier mail, so without this one invoice would be suggested once per reply.
+ */
+export async function insertInvoiceSuggestion(
+  ctx: Ctx,
+  row: typeof invoiceSuggestions.$inferInsert,
+): Promise<boolean> {
+  const dup = rowsOf<{ id: string }>(
+    await ctx.db.execute(sql`
+      select id from invoice_suggestions where thread_id = ${row.threadId}::uuid and (
+        ${row.invoiceNo ? sql`invoice_no = ${row.invoiceNo}` : sql`false`}
+        or (${row.amountMinor ?? null}::bigint is not null and amount_minor = ${row.amountMinor ?? null}::bigint and currency is not distinct from ${row.currency ?? null})
+      ) limit 1`),
+  );
+  if (dup.length) return false;
+  const ins = await ctx.db
+    .insert(invoiceSuggestions)
+    .values(row)
+    .onConflictDoNothing()
+    .returning({ id: invoiceSuggestions.id });
+  return ins.length > 0;
 }

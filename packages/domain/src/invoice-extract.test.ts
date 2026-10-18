@@ -41,4 +41,28 @@ describe('extractInvoiceHints', () => {
       extractInvoiceHints({ subject: 'Hello', body: 'Lets collab for $500', direction: 'INBOUND' }),
     ).toBeNull();
   });
+  it('judges a reply on its new text, not on the quoted earlier mail', () => {
+    const body =
+      'Thanks, will do!\n\nOn Mon, Sep 21, 2026 at 9:00 AM Studio <a@b.com> wrote:\n> Invoice INV-55 total due: $900.00 USD';
+    expect(extractInvoiceHints({ subject: 'Re: hello', body, direction: 'OUTBOUND' })).toBeNull();
+  });
+  it('does not suggest from a bare amount next to the word invoice', () => {
+    expect(
+      extractInvoiceHints({
+        subject: 'Plan',
+        body: 'I will send an invoice for $500 soon',
+        direction: 'OUTBOUND',
+      }),
+    ).toBeNull();
+  });
+  it('suggests from an invoice-named attachment alone', () => {
+    const h = extractInvoiceHints({
+      subject: 'Your invoice',
+      body: 'Attached.',
+      direction: 'INBOUND',
+      attachmentNames: ['2026-001_invoice.pdf'],
+    });
+    expect(h).not.toBeNull();
+    expect(h!.amountMinor).toBeNull();
+  });
 });

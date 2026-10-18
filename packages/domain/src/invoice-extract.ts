@@ -39,6 +39,19 @@ function findDueDate(text: string): string | null {
   return null;
 }
 
+/** Drops quoted earlier messages ("On … wrote:", "> …", forwarded headers) so a reply is judged on what it newly says. */
+export function stripQuoted(body: string): string {
+  const cut =
+    /\bOn\s.{5,160}?\bwrote:|-{2,}\s*(?:Original Message|Forwarded message)\s*-{2,}|\bFrom:\s.{3,100}?\bSent:\s/is.exec(
+      body,
+    );
+  const head = cut ? body.slice(0, cut.index) : body;
+  return head
+    .split('\n')
+    .filter((l) => !l.trimStart().startsWith('>'))
+    .join('\n');
+}
+
 /**
  * Deterministic invoice spotting in one email. Returns null unless the text talks about an invoice AND carries an invoice
  * number or an amount. The result is only a suggestion: nothing is created without the owner confirming it.
@@ -49,7 +62,7 @@ export function extractInvoiceHints(input: {
   direction: 'INBOUND' | 'OUTBOUND';
   attachmentNames?: string[];
 }): InvoiceHint | null {
-  const text = `${input.subject ?? ''}\n${input.body ?? ''}`.slice(0, 20000);
+  const text = `${input.subject ?? ''}\n${stripQuoted(input.body ?? '')}`.slice(0, 20000);
   const names = (input.attachmentNames ?? []).join(' ');
   const signals: string[] = [];
   const word = /\binvoices?\b|\binv[-_ ]?\d{2,}|\btax invoice\b|\bamount due\b|\bbalance due\b/i.test(text);
@@ -79,13 +92,19 @@ export function extractInvoiceHints(input: {
     `(?:total(?:\\s+due)?|amount\\s+(?:due|payable)|balance\\s+due|grand\\s+total|invoice\\s+(?:amount|total)|amount)\\s*(?:\\(.*?\\))?\\s*[:\\-]?\\s*((?:${CUR})?\\d[\\d,]*(?:\\.\\d{1,2})?(?:\\s?(?:USD|CAD|EUR|GBP|INR|AUD))?)`,
     'i',
   ).exec(text);
-  if (near && /(?:USD|CAD|EUR|GBP|INR|AUD|[$€£₹])/i.test(near[1]!)) money = extractMoney(near[1]!);
+  let strongAmount = false;
+  if (near && /(?:USD|CAD|EUR|GBP|INR|AUD|[$€£₹])/i.test(near[1]!)) {
+    money = extractMoney(near[1]!);
+    strongAmount = money !== null;
+  }
   money ??= extractMoney(text);
   if (money && money.amountMinor > 0) signals.push('amount');
   else money = null;
 
   // An invoice-named attachment alone is enough to suggest: the owner fills in what the email text does not say.
-  if (!invoiceNo && !money && !attach) return null;
+  // A bare dollar figure next to the word "invoice" is too weak ("I will send an invoice for $500"): need a number, an
+  // invoice-named attachment, or an explicit "amount/total/balance due" figure.
+  if (!invoiceNo && !attach && !strongAmount) return null;
   const dueDate = findDueDate(text);
   if (dueDate) signals.push('due date');
 
@@ -112,6 +131,8 @@ export function extractInvoiceHints(input: {
       (money ? 0.2 : 0) +
       (dueDate ? 0.05 : 0),
   );
+  // A payment notice without an invoice number is a receipt of money, not an invoice.
+  if (direction === 'PAYMENT_NOTICE' && !invoiceNo) return null;
   return {
     invoiceNo,
     amountMinor: money?.amountMinor ?? null,

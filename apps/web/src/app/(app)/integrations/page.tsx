@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActionButton,
   Async,
@@ -76,6 +76,13 @@ export default function IntegrationsPage() {
   const [setup, setSetup] = useState<string | null>(null);
   const [vals, setVals] = useState<Record<string, string>>({});
   const reload = () => refresh('/integrations');
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('error'))
+      setResult({ ok: false, text: `${q.get('error')}${q.get('detail') ? `: ${q.get('detail')}` : ''}` });
+    else if (q.get('connected')) setResult({ ok: true, text: `${q.get('connected')} connected.` });
+  }, []);
 
   const connect = async (provider: string) => {
     const r = await post(`/integrations/${provider}/oauth/start`, {});
@@ -89,6 +96,11 @@ export default function IntegrationsPage() {
         title="Integrations"
         subtitle="Everything is optional. A connection only shows as connected after the provider confirms it; missing pieces are listed so you know exactly what to do."
       />
+      {result && (
+        <Notice tone={result.ok ? 'ok' : 'bad'} title={result.ok ? 'Connected' : 'Connection failed'}>
+          {result.text}
+        </Notice>
+      )}
       <Notice tone="info" title="Safe by design">
         Gmail access is read-only. Creator OS never sends e-mail, posts to social platforms or pays anything
         on its own. Credentials are stored encrypted on your machine.

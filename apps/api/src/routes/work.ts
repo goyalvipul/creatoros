@@ -1,3 +1,4 @@
+import { scrubText } from '../log-redact';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
@@ -760,7 +761,11 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       );
     } catch (e) {
       const msg = e instanceof AppError ? e.code : 'ERROR';
-      return reply.redirect(`${env.appBaseUrl}/integrations?error=${encodeURIComponent(msg)}`);
+      const detail = scrubText(String((e as Error)?.message ?? e)).slice(0, 300);
+      req.log.warn({ code: msg, detail }, 'oauth callback failed');
+      return reply.redirect(
+        `${env.appBaseUrl}/integrations?error=${encodeURIComponent(msg)}&detail=${encodeURIComponent(detail)}`,
+      );
     }
   };
   const oauthCallbackSchema = { schema: { tags: ['Integrations'], summary: 'OAuth redirect target' } };

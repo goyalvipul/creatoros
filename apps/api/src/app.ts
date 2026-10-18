@@ -10,6 +10,7 @@ import { contentRoutes } from './routes/content';
 import { storageRoutes } from './routes/storage';
 import { workRoutes } from './routes/work';
 import { socialsRoutes } from './routes/socials';
+import { logSerializers } from './log-redact';
 
 export type { AppDeps } from './http';
 
@@ -17,13 +18,21 @@ export type { AppDeps } from './http';
  * Builds the Fastify app. Used by `main.ts` and by `inject()` tests, so what is tested is what runs.
  * Every route lives under /api/v1 and answers with { data, meta, error }.
  */
-export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
+export async function buildApp(
+  deps: AppDeps,
+  opts: { logStream?: { write(msg: string): void } } = {},
+): Promise<FastifyInstance> {
   const { config } = deps;
   const app = Fastify({
     logger:
       config.logLevel === 'silent'
         ? false
-        : { level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] },
+        : ({
+            level: config.logLevel,
+            redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-hub-signature-256"]'],
+            serializers: logSerializers,
+            ...(opts.logStream ? { stream: opts.logStream } : {}),
+          } as any),
     // Caddy / Tailscale Serve sit in front; trust their X-Forwarded-* headers for protocol and client IP.
     trustProxy: true,
     bodyLimit: 10 * 1024 * 1024,

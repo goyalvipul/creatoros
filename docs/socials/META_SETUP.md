@@ -18,6 +18,7 @@ only returns comments/messages, and only delivers webhooks, for Instagram accoun
 ordinary followers are filtered out. No webhook POST has ever arrived (only Meta's one verification GET).
 
 Meta dashboard settings to change (Meta for Developers > your app):
+
 1. Instagram > API setup with Instagram login > "Configure webhooks": Callback URL `https://os.goyalfamily.ca/api/v1/integrations/meta/instagram/webhook`,
    Verify token = `META_WEBHOOK_VERIFY_TOKEN` from `.env`, "Verify and save". Switch ON the `comments` and `messages` fields.
 2. App roles > Roles > add the second Instagram account as **Instagram Tester**; accept inside Instagram (Settings > Website permissions / Apps and websites > Tester invitations).
@@ -25,6 +26,7 @@ Meta dashboard settings to change (Meta for Developers > your app):
    Business Verification, and switch the app to **Live**.
 
 Controlled live test (nothing is sent by CreatorOS):
+
 1. From the tester account, write one comment on a Mehak post. Wait 1 minute.
 2. Direct API check: `docker compose exec api node apps/api/dist/cli/instagram-probe.js @mehakviking` (look at `comments-follow` records).
 3. Webhook: Integrations > Instagram diagnostics shows "Webhook delivery verified" once a signed POST for the account is stored.

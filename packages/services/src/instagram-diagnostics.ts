@@ -33,7 +33,11 @@ const redact = (s: string, token: string) =>
   s
     .split(token)
     .join('[token]')
-    .replace(/access_token=[^&\s"']+/gi, 'access_token=[token]')
+    .replace(
+      /(access_token|refresh_token|client_secret|app_secret|(?:hub[._])?verify_token)=[^&\s"']+/gi,
+      '$1=[redacted]',
+    )
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer [token]')
     .replace(/IG[A-Za-z0-9_-]{40,}/g, '[token]')
     .slice(0, 400);
 

@@ -130,6 +130,8 @@ export const conversationThreads = pgTable(
     optedOut: boolean('opted_out').notNull().default(false),
     starred: boolean('starred').notNull().default(false),
     archivedLocal: boolean('archived_local').notNull().default(false),
+    // "What do I reply to" suggestion from the other person's latest message (domain triageReply). Null until computed.
+    replyCategory: text('reply_category'),
     internalNotes: text('internal_notes'),
     followUpAt: ts('follow_up_at'),
     providerMediaId: text('provider_media_id'),

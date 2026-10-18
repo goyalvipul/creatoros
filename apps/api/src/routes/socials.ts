@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { WORKFLOW_MODE, WORKFLOW_TEMPLATES } from '@creatoros/domain';
+import { REPLY_CATEGORIES, WORKFLOW_MODE, WORKFLOW_TEMPLATES } from '@creatoros/domain';
 import {
   activateWorkflow,
   approveApproval,
@@ -13,6 +13,8 @@ import {
   subscribeFacebookPageWebhooks,
   syncSocialAccount,
   testFacebookPage,
+  socialThreadCounts,
+  backfillReplyCategories,
   testYoutubeAccount,
   subscribeInstagramWebhooks,
   syncInstagramAccount,
@@ -256,6 +258,7 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
         followUp: z.enum(['true', 'false']).optional(),
         unread: z.enum(['true', 'false']).optional(),
         needsReply: z.enum(['true', 'false']).optional(),
+        category: z.enum(REPLY_CATEGORIES).optional(),
       }),
     },
     ({ ctx, query }) => {
@@ -267,7 +270,28 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
         kind: query.kind,
         q: query.q,
         leads: query.leads === 'true',
+        starred: query.starred === 'true',
+        archived: query.archived === 'true',
+        followUp: query.followUp === 'true',
+        unread: query.unread === 'true',
+        needsReply: query.needsReply === 'true',
+        category: query.category,
       });
+    },
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/socials/threads/counts',
+      tag: 'Socials',
+      summary: 'Counts for the inbox views and the "what to reply" categories',
+      role: 'EDITOR',
+      query: z.object({ accounts: csv, kind: z.enum(['DM', 'COMMENT']).optional() }),
+    },
+    async ({ ctx, query }) => {
+      await backfillReplyCategories(ctx).catch(() => null);
+      const ids = (query.accounts ?? []).filter((i) => uuid.safeParse(i).success);
+      return socialThreadCounts(ctx, { connectionIds: ids, kind: query.kind });
     },
   );
   route(

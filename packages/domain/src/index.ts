@@ -11,3 +11,4 @@ export * from './classify';
 export * from './templates';
 export * from './workflow';
 export * from './workflow-templates';
+export * from './triage';

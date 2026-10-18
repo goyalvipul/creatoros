@@ -26,7 +26,7 @@ import {
   sendInstagramDm,
   type ConnectorContext,
 } from '@creatoros/connectors';
-import { dmWindowOpen, isOptOut } from '@creatoros/domain';
+import { dmWindowOpen, isOptOut, triageReply } from '@creatoros/domain';
 import { audit } from './audit';
 import { connectorContext } from './integrations';
 import { ingestMessage } from './crm';
@@ -305,6 +305,7 @@ export async function ingestSocialEvent(ctx: Ctx, ev: SocialEvent) {
         optedOut: optOut ? true : sql`opted_out`,
         providerConnectionId: conn.id,
         providerMediaId: ev.mediaId ?? sql`provider_media_id`,
+        ...(ev.direction === 'INBOUND' ? { replyCategory: triageReply(ev.text) } : {}),
       } as any)
       .where(eq(conversationThreads.id, r.threadId));
   }
@@ -564,6 +565,65 @@ export const syncSocialConversations = syncInstagramAccount;
 
 // ------------------------------------------------------------------ reading
 
+const LEADS_SQL = sql`(t.opportunity_id is not null or exists (select 1 from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id and c.category = 'COLLABORATION'))`;
+
+/**
+ * Counts for the inbox chips, from the same tables and rules as the list. They follow the account and type filters.
+ * `reply.*` counts only conversations that still need a reply (not archived).
+ */
+export async function socialThreadCounts(ctx: Ctx, q: { connectionIds?: string[]; kind?: string } = {}) {
+  const where = [
+    sql`t.org_id = ${ctx.orgId}`,
+    sql`t.merged_into_id is null`,
+    sql`t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE')`,
+  ];
+  if (q.connectionIds?.length)
+    where.push(
+      sql`t.provider_connection_id in (${sql.join(
+        q.connectionIds.map((i) => sql`${i}::uuid`),
+        sql`, `,
+      )})`,
+    );
+  if (q.kind) where.push(sql`t.kind = ${q.kind}`);
+  const [row] = rowsOf<any>(
+    await ctx.db.execute(sql`
+      select
+        count(*) filter (where not t.archived_local)::int as "all",
+        count(*) filter (where not t.archived_local and exists (select 1 from messages m where m.thread_id = t.id and m.direction = 'INBOUND' and not m.is_read))::int as unread,
+        count(*) filter (where not t.archived_local and t.starred)::int as starred,
+        count(*) filter (where not t.archived_local and t.follow_up_at is not null)::int as followup,
+        count(*) filter (where not t.archived_local and ${LEADS_SQL})::int as leads,
+        count(*) filter (where t.archived_local)::int as archived,
+        count(*) filter (where not t.archived_local and t.state = 'NEED_REPLY')::int as "needReply"
+      from conversation_threads t where ${sql.join(where, sql` and `)}`),
+  );
+  const cats = rowsOf<{ c: string | null; n: number }>(
+    await ctx.db.execute(sql`
+      select t.reply_category as c, count(*)::int as n from conversation_threads t
+      where ${sql.join(where, sql` and `)} and not t.archived_local and t.state = 'NEED_REPLY'
+      group by t.reply_category`),
+  );
+  const reply: Record<string, number> = {};
+  for (const r of cats) reply[r.c ?? 'UNSORTED'] = r.n;
+  return { ...row, reply };
+}
+
+/** Fills `reply_category` for conversations that have none (older imports). Uses the latest inbound message. */
+export async function backfillReplyCategories(ctx: Ctx, limit = 3000) {
+  const rows = rowsOf<{ id: string; body: string | null }>(
+    await ctx.db.execute(sql`
+      select t.id, (select m.body_preview from messages m where m.thread_id = t.id and m.direction = 'INBOUND' order by m.received_at desc limit 1) as body
+      from conversation_threads t
+      where t.org_id = ${ctx.orgId} and t.reply_category is null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE')
+      limit ${limit}`),
+  );
+  for (const r of rows)
+    await ctx.db.execute(
+      sql`update conversation_threads set reply_category = ${r.body === null ? 'OTHER' : triageReply(r.body)} where id = ${r.id}`,
+    );
+  return { updated: rows.length };
+}
+
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 export async function listSocialThreads(
@@ -580,6 +640,7 @@ export async function listSocialThreads(
     followUp?: boolean;
     unread?: boolean;
     needsReply?: boolean;
+    category?: string;
     limit?: number;
   } = {},
 ) {
@@ -602,6 +663,7 @@ export async function listSocialThreads(
   if (q.starred) where.push(sql`t.starred`);
   if (q.followUp) where.push(sql`t.follow_up_at is not null`);
   if (q.needsReply) where.push(sql`t.state = 'NEED_REPLY'`);
+  if (q.category) where.push(sql`t.reply_category = ${q.category}`);
   if (q.unread)
     where.push(
       sql`exists (select 1 from messages m where m.thread_id = t.id and m.direction = 'INBOUND' and not m.is_read)`,
@@ -622,7 +684,7 @@ export async function listSocialThreads(
              t.provider_connection_id as "connectionId", t.principal as "accountId", c.label as "accountLabel",
              c.config->>'username' as "accountUsername",
              coalesce(case c.provider when 'youtube' then c.config->'youtube'->>'title' when 'facebook' then c.config->>'pageName' else '@' || (c.config->>'username') end, c.label) as "accountName",
-             t.participant_id as "participantId", t.participant_name as "participantName",
+             t.participant_id as "participantId", t.participant_name as "participantName", t.reply_category as "replyCategory",
              t.last_inbound_at as "lastInboundAt", t.last_outbound_at as "lastOutboundAt", t.opportunity_id as "opportunityId",
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview,
              (select i.caption from social_media_items i where i.connection_id = t.provider_connection_id and i.provider_media_id = t.provider_media_id) as "mediaCaption",

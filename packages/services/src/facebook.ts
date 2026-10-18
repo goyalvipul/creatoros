@@ -28,7 +28,7 @@ import { audit } from './audit';
 import { encrypt, encryptJson, sha256Hex } from './crypto';
 import { connectorContext } from './integrations';
 import { autoReconcileConnection } from './identity';
-import { ingestSocialEvent, syncInstagramAccount } from './social';
+import { backfillReplyCategories, ingestSocialEvent, syncInstagramAccount } from './social';
 import { processSocialEvent } from './workflows';
 import { syncYoutubeComments } from './youtube-social';
 import { enrichContactNames } from './contact-names';
@@ -406,6 +406,7 @@ export async function syncSocialAccount(
       : await syncInstagramAccount(ctx, connectionId, overrides);
   // names are cosmetic: never let a lookup failure fail the sync
   await enrichContactNames(ctx, connectionId, overrides).catch(() => null);
+  await backfillReplyCategories(ctx).catch(() => null);
   return result;
 }
 

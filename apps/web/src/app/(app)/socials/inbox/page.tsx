@@ -19,6 +19,7 @@ import {
 import { patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase, when } from '@/lib/format';
 import { accountLabel } from '@/lib/social-label';
+import { REPLY_CATEGORY_INFO, type ReplyCategory } from '@creatoros/domain';
 
 function Inbox() {
   const params = useSearchParams();
@@ -28,6 +29,7 @@ function Inbox() {
   const [state, setState] = useState('');
   const [kind, setKind] = useState('');
   const [q, setQ] = useState('');
+  const [category, setCategory] = useState('');
   const [sel, setSel] = useState<string | null>(params.get('thread'));
   const accounts = useApi<any[]>('/socials/accounts');
   const threads = useApi<any[]>('/socials/threads', {
@@ -36,8 +38,26 @@ function Inbox() {
       state: state || undefined,
       kind: kind || undefined,
       q: q || undefined,
+      category: category || undefined,
+      unread: view === 'unread' ? 'true' : undefined,
+      starred: view === 'starred' ? 'true' : undefined,
+      followUp: view === 'followup' ? 'true' : undefined,
+      leads: view === 'leads' ? 'true' : undefined,
+      archived: view === 'archived' ? 'true' : undefined,
     },
   });
+  const counts = useApi<any>('/socials/threads/counts', {
+    query: { accounts: account || undefined, kind: kind || undefined },
+  });
+  const c = counts.data;
+  const viewCount: Record<string, number | undefined> = {
+    '': c?.all,
+    unread: c?.unread,
+    starred: c?.starred,
+    followup: c?.followup,
+    leads: c?.leads,
+    archived: c?.archived,
+  };
   return (
     <div>
       <PageHeader
@@ -85,8 +105,63 @@ function Inbox() {
             )}
           >
             {l}
+            {viewCount[k!] !== undefined && (
+              <span className="ml-1.5 tabular-nums opacity-80">{viewCount[k!]!.toLocaleString()}</span>
+            )}
           </button>
         ))}
+      </div>
+      <div className="mb-3" role="group" aria-label="What to reply to">
+        <div className="mb-1 flex flex-wrap items-baseline gap-2 text-xs text-muted">
+          <span className="font-medium text-text">What to reply to</span>
+          <span>
+            Conversations still waiting for your reply, sorted by what is worth your time. Suggestions from
+            keywords, not a decision.
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => {
+              setCategory('');
+              setState('');
+            }}
+            className={clsx(
+              'rounded-full border border-border px-3 py-1 text-xs',
+              !category ? 'bg-accent text-accentfg' : 'bg-panel hover:bg-panel2',
+            )}
+          >
+            Any
+            {c && <span className="ml-1.5 tabular-nums opacity-80">{c.needReply.toLocaleString()}</span>}
+          </button>
+          {(Object.keys(REPLY_CATEGORY_INFO) as ReplyCategory[]).map((k) => {
+            const info = REPLY_CATEGORY_INFO[k];
+            const n = c?.reply?.[k] ?? 0;
+            return (
+              <button
+                key={k}
+                title={info.hint}
+                onClick={() => {
+                  setCategory(category === k ? '' : k);
+                  setState(category === k ? '' : 'NEED_REPLY');
+                  setView('');
+                }}
+                className={clsx(
+                  'rounded-full border px-3 py-1 text-xs',
+                  category === k
+                    ? 'border-transparent bg-accent text-accentfg'
+                    : clsx(
+                        'bg-panel hover:bg-panel2',
+                        info.group === 'first' ? 'border-warn/50' : 'border-border',
+                        n === 0 && 'opacity-50',
+                      ),
+                )}
+              >
+                {info.label}
+                <span className="ml-1.5 tabular-nums opacity-80">{n.toLocaleString()}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,22rem)_1fr]">
         <div className={clsx(sel && 'hidden lg:block')}>
@@ -119,6 +194,17 @@ function Inbox() {
                         <Badge tone={t.state === 'NEED_REPLY' ? 'warn' : 'neutral'}>
                           {titleCase(t.state)}
                         </Badge>
+                        {t.replyCategory && REPLY_CATEGORY_INFO[t.replyCategory as ReplyCategory] && (
+                          <Badge
+                            tone={
+                              REPLY_CATEGORY_INFO[t.replyCategory as ReplyCategory].group === 'first'
+                                ? 'warn'
+                                : 'neutral'
+                            }
+                          >
+                            {REPLY_CATEGORY_INFO[t.replyCategory as ReplyCategory].label}
+                          </Badge>
+                        )}
                         <span>{ago(t.lastMessageAt)}</span>
                       </div>
                     </button>

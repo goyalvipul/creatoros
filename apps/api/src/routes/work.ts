@@ -40,6 +40,9 @@ import {
   mailAccounts,
   moveMailThread,
   replyToEmail,
+  replyInfo,
+  loadFullMessage,
+  ensureLiveRates,
   scanEmailInvoices,
   deepScanEmail,
   updateInvoice,
@@ -203,11 +206,35 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object({
         text: z.string().min(1).max(20000),
         requestId: z.string().min(8).max(100),
-        to: z.string().max(254).optional(),
+        messageId: uuid.optional(),
+        all: z.boolean().optional(),
+        to: z.array(z.string().max(254)).max(20).optional(),
+        cc: z.array(z.string().max(254)).max(20).optional(),
         subject: z.string().max(300).optional(),
       }),
     },
     ({ ctx, params, body }) => replyToEmail(ctx, params.id, body, ov()),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/threads/:id/messages/:mid/reply-info',
+      tag: 'Collaborations',
+      summary: 'Prefill (To, Cc, subject) for replying to one specific email',
+      params: z.object({ id: uuid, mid: uuid }),
+      query: z.object({ all: z.enum(['0', '1']).optional() }),
+    },
+    ({ ctx, params, query }) => replyInfo(ctx, params.id, params.mid, query.all === '1', ov()),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/threads/:id/messages/:mid/full',
+      tag: 'Collaborations',
+      summary: 'Load and store the complete text of one email from Gmail (read-only)',
+      params: z.object({ id: uuid, mid: uuid }),
+    },
+    ({ ctx, params }) => loadFullMessage(ctx, params.id, params.mid, ov()),
   );
   route(
     {
@@ -532,7 +559,10 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Invoices',
       query: z.object({ status: z.string().max(20).optional(), dealId: uuid.optional() }),
     },
-    ({ ctx, query }) => listInvoices(ctx, query),
+    async ({ ctx, query }) => {
+      await ensureLiveRates(ctx, ov()).catch(() => undefined);
+      return listInvoices(ctx, query);
+    },
   );
   route(
     {
@@ -661,7 +691,10 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Received / outstanding / overdue per currency',
       query: z.object({ from: date.optional(), to: date.optional() }),
     },
-    ({ ctx, query }) => financeSummary(ctx, query),
+    async ({ ctx, query }) => {
+      await ensureLiveRates(ctx, ov()).catch(() => undefined);
+      return financeSummary(ctx, query);
+    },
   );
 
   // ================================================================ today / actions

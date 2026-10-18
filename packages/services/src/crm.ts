@@ -280,7 +280,7 @@ export async function listThreads(
              (select c.category from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id order by c.confidence desc limit 1) as category,
              (select max(c.confidence) from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id) as confidence
       from conversation_threads t where ${sql.join(where, sql` and `)}
-      order by coalesce(t.last_inbound_at, t.last_outbound_at) desc nulls last limit ${Math.min(q.limit ?? 100, 500)}`),
+      order by greatest(coalesce(t.last_inbound_at, '-infinity'::timestamptz), coalesce(t.last_outbound_at, '-infinity'::timestamptz)) desc, t.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`),
   );
 }
 
@@ -1345,8 +1345,17 @@ export async function listInvoices(ctx: Ctx, q: { status?: string; dealId?: stri
   return rowsOf<any>(
     await ctx.db.execute(sql`
       select i.id, i.invoice_no as "invoiceNo", i.status, i.currency, i.amount_minor::float8 as "amountMinor", i.issued_at as "issuedAt", i.due_at as "dueAt", i.deal_id as "dealId", d.title as "dealTitle", i.notes,
-             coalesce((select sum(p.amount_minor) from payments p where p.invoice_id = i.id), 0)::float8 as "paidMinor"
+             coalesce((select sum(p.amount_minor) from payments p where p.invoice_id = i.id), 0)::float8 as "paidMinor",
+             o.base_currency as "baseCurrency",
+             case when i.currency = o.base_currency then 1 else fx.rate::float8 end as "fxRate",
+             fx.created_at as "fxAt", fx.source as "fxSource",
+             case when i.currency = o.base_currency then i.amount_minor::float8
+                  when fx.rate is not null then round(i.amount_minor * fx.rate)::float8 end as "baseAmountMinor"
       from invoices i left join deals d on d.id = i.deal_id
+      join organizations o on o.id = i.org_id
+      left join lateral (select f.rate, f.created_at, f.source from fx_rates f
+                         where f.org_id = i.org_id and f.base_currency = i.currency and f.quote_currency = o.base_currency
+                         order by f.rate_date desc, f.created_at desc limit 1) fx on true
       where i.org_id = ${ctx.orgId} ${q.status ? sql`and i.status = ${q.status}::invoice_status` : sql``} ${q.dealId ? sql`and i.deal_id = ${q.dealId}` : sql``}
       order by i.issued_at desc nulls last, i.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`),
   );

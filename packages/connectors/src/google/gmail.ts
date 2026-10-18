@@ -58,6 +58,18 @@ function header(msg: GmailRawMessage, name: string): string | undefined {
   return msg.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
 
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+/** Gmail snippets and HTML parts carry entities such as &#39; and &amp;; store readable text. */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] === '#') {
+      const code = e[1]!.toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    }
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+
 function decodeB64Url(data: string): string {
   return Buffer.from(data, 'base64url').toString('utf8');
 }
@@ -70,11 +82,15 @@ function extractText(part: GmailPart | undefined): string | null {
     if (t) return t;
   }
   if (part.mimeType === 'text/html' && part.body?.data) {
-    return decodeB64Url(part.body.data)
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return decodeEntities(
+      decodeB64Url(part.body.data)
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<(?:br|\/p|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[ \t\f\v]+/g, ' ')
+        .replace(/ ?\n ?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n'),
+    ).trim();
   }
   return null;
 }
@@ -182,19 +198,29 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
     return data;
   }
 
-  /** RFC 2822 headers of one message (for correct reply threading). */
+  /** Headers of one message: reply threading ids plus who it was addressed to (for Reply and Reply all). */
   async getReplyHeaders(
     ctx: ConnectorContext,
     messageId: string,
-  ): Promise<{ messageId: string | null; references: string | null; replyTo: string | null }> {
+  ): Promise<{
+    messageId: string | null;
+    references: string | null;
+    replyTo: string | null;
+    from: string | null;
+    to: string | null;
+    cc: string | null;
+  }> {
     const raw = await this.get<GmailRawMessage>(
       ctx,
-      `/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References&metadataHeaders=Reply-To`,
+      `/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References&metadataHeaders=Reply-To&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc`,
     );
     return {
       messageId: header(raw, 'Message-ID') ?? null,
       references: header(raw, 'References') ?? null,
       replyTo: header(raw, 'Reply-To') ?? null,
+      from: header(raw, 'From') ?? null,
+      to: header(raw, 'To') ?? null,
+      cc: header(raw, 'Cc') ?? null,
     };
   }
 
@@ -288,7 +314,7 @@ export class GmailConnector implements Connector<NormalizedEmail, GmailRawMessag
       fromName: from.name,
       toEmails: to,
       subject,
-      snippet: raw.snippet ?? '',
+      snippet: decodeEntities(raw.snippet ?? ''),
       bodyText: body,
       labelIds: labels,
       direction: outbound ? 'OUTBOUND' : 'INBOUND',

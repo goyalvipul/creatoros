@@ -634,23 +634,36 @@ function Invoices() {
       <Async res={fin}>
         {(s) => {
           const cur = s.baseCurrency;
+          // With a currency that has no exchange rate there is no combined total: show each currency on its own.
           const c = s.converted;
+          const per = s.perCurrency ?? {};
+          const show = (key: 'received' | 'outstanding' | 'overdue' | 'expenses', convertedKey: string) => {
+            if (c) return money(c[convertedKey], cur);
+            const parts = Object.entries((per[key] ?? {}) as Record<string, number>).map(([k, v]) =>
+              money(v, k),
+            );
+            return parts.length ? parts.join(' + ') : money(0, cur);
+          };
+          const overdueHas = c
+            ? c.overdueMinor > 0
+            : Object.values((per.overdue ?? {}) as Record<string, number>).some((v) => v > 0);
           return (
             <>
               <section aria-label="Money" className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <Stat label="Received" value={money(c.receivedMinor, cur)} tone="ok" />
-                <Stat label="Outstanding" value={money(c.outstandingMinor, cur)} />
+                <Stat label="Received" value={show('received', 'receivedMinor')} tone="ok" />
+                <Stat label="Outstanding" value={show('outstanding', 'outstandingMinor')} />
                 <Stat
                   label="Overdue"
-                  value={money(c.overdueMinor, cur)}
-                  tone={c.overdueMinor > 0 ? 'bad' : undefined}
+                  value={show('overdue', 'overdueMinor')}
+                  tone={overdueHas ? 'bad' : undefined}
                 />
-                <Stat label="Expenses" value={money(c.expensesMinor, cur)} />
+                <Stat label="Expenses" value={show('expenses', 'expensesMinor')} />
               </section>
               {s.missingFxRates?.length > 0 && (
                 <Notice tone="warn" title="Exchange rates missing">
-                  Totals exclude {s.missingFxRates.join(', ')} until you add a rate (Settings → Finance).
-                  Amounts are never converted with an invented rate.
+                  No exchange rate for {s.missingFxRates.join(', ')}, so totals are shown per currency instead
+                  of combined. Add a rate in Settings → Finance to get one total. Amounts are never converted
+                  with an invented rate.
                 </Notice>
               )}
             </>

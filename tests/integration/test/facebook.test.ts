@@ -45,7 +45,7 @@ const SCOPES = [
 const now = () => new Date().toISOString();
 
 /** Fake Graph API. Records every write so tests can prove what was (not) sent and with which token. */
-function fakeGraph(pageId: string, pageName: string) {
+function fakeGraph(pageId: string, pageName: string, opts: { emptyAccounts?: boolean } = {}) {
   const writes: { url: string; token: string; body: any }[] = [];
   const fetchImpl = async (url: string, init: RequestInit = {}) => {
     const u = new URL(url);
@@ -56,6 +56,12 @@ function fakeGraph(pageId: string, pageName: string) {
       return json({ access_token: u.searchParams.get('grant_type') ? 'user-long' : 'user-short' });
     if (u.pathname.endsWith('/me/permissions'))
       return json({ data: SCOPES.map((permission) => ({ permission, status: 'granted' })) });
+    if (u.pathname.endsWith('/debug_token'))
+      return json({ data: { granular_scopes: [{ scope: 'pages_messaging', target_ids: [pageId] }] } });
+    if (u.pathname === `/${'v23.0'}/${pageId}` || u.pathname.endsWith(`/${pageId}`))
+      if (!u.pathname.includes('/', u.pathname.indexOf(pageId)))
+        return json({ id: pageId, name: pageName, access_token: `ptoken-${pageId}`, tasks: ['MESSAGING'] });
+    if (u.pathname.endsWith('/me/accounts') && opts.emptyAccounts) return json({ data: [] });
     if (u.pathname.endsWith('/me/accounts'))
       return json({
         data: [
@@ -141,7 +147,7 @@ function fakeGraph(pageId: string, pageName: string) {
   return { writes, overrides: { fetch: fetchImpl as any, sleep: async () => {} } };
 }
 
-async function world(opts: { account?: 'verified' | 'username' | 'none' } = {}) {
+async function world(opts: { account?: 'verified' | 'username' | 'none'; emptyAccounts?: boolean } = {}) {
   const pageId = `9${Math.floor(Math.random() * 1e8)}`;
   const env = testEnv({ processEnv });
   const org = await makeOrg(h, env);
@@ -161,7 +167,7 @@ async function world(opts: { account?: 'verified' | 'username' | 'none' } = {}) 
       platform: 'facebook',
       handle: '@Mehak Page',
     });
-  const g = fakeGraph(pageId, 'Mehak Page');
+  const g = fakeGraph(pageId, 'Mehak Page', { emptyAccounts: opts.emptyAccounts });
   const s = await startOAuth(org.ctx, 'facebook', {}, g.overrides);
   const state = new URL(s.authorizeUrl!).searchParams.get('state')!;
   const done: any = await completeOAuth(h.db, env, { state, code: 'c1' }, g.overrides);
@@ -214,6 +220,14 @@ describe('Facebook Pages connection', () => {
       )
     ).rows as any[];
     expect([b, c]).toEqual([1, 1]);
+  });
+});
+
+describe('Facebook Page discovery fallback', () => {
+  it('finds a Page granted per-asset when /me/accounts is empty', async () => {
+    const w = await world({ emptyAccounts: true });
+    const [c] = await h.db.select().from(providerConnections).where(eq(providerConnections.id, w.conn));
+    expect(c).toMatchObject({ principalHint: w.pageId, state: 'ACTIVE' });
   });
 });
 

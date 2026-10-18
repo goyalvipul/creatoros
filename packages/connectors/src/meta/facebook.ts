@@ -111,7 +111,22 @@ export interface FacebookPage {
   link: string | null;
 }
 
-/** Pages the user granted, each with its own Page access token. */
+const PAGE_FIELDS = 'id,name,category,access_token,tasks,link,picture{url}';
+const toPage = (p: any): FacebookPage => ({
+  id: String(p.id),
+  name: String(p.name ?? p.id),
+  category: p.category ?? null,
+  pageToken: String(p.access_token),
+  tasks: Array.isArray(p.tasks) ? p.tasks : [],
+  pictureUrl: p.picture?.data?.url ?? null,
+  link: p.link ?? null,
+});
+
+/**
+ * Pages the user granted, each with its own Page access token. `/me/accounts` is empty for Pages that belong to a
+ * Business portfolio or were granted per-asset in the new login dialog, so fall back to the Pages named in the
+ * token's granular scopes (read with the app token) and fetch each one directly.
+ */
 export async function listFacebookPages(
   ctx: ConnectorContext,
   client: FacebookClientConfig,
@@ -119,19 +134,30 @@ export async function listFacebookPages(
 ): Promise<FacebookPage[]> {
   const { data } = await http<any>(ctx, `${v(client)}/me/accounts`, {
     headers: bearer(userToken),
-    query: { fields: 'id,name,category,access_token,tasks,link,picture{url}', limit: '100' },
+    query: { fields: PAGE_FIELDS, limit: '100' },
   });
-  return (data?.data ?? [])
-    .filter((p: any) => p?.id && p?.access_token)
-    .map((p: any) => ({
-      id: String(p.id),
-      name: String(p.name ?? p.id),
-      category: p.category ?? null,
-      pageToken: String(p.access_token),
-      tasks: Array.isArray(p.tasks) ? p.tasks : [],
-      pictureUrl: p.picture?.data?.url ?? null,
-      link: p.link ?? null,
-    }));
+  const direct: FacebookPage[] = (data?.data ?? []).filter((p: any) => p?.id && p?.access_token).map(toPage);
+  if (direct.length) return direct;
+  const dbg = await http<any>(ctx, `${v(client)}/debug_token`, {
+    query: { input_token: userToken, access_token: `${client.appId}|${client.appSecret}` },
+  });
+  const ids = new Set<string>();
+  for (const g of dbg.data?.data?.granular_scopes ?? [])
+    if (String(g.scope).startsWith('pages_') || g.scope === 'business_management')
+      for (const id of g.target_ids ?? []) ids.add(String(id));
+  const out: FacebookPage[] = [];
+  for (const id of ids) {
+    try {
+      const r = await http<any>(ctx, `${v(client)}/${encodeURIComponent(id)}`, {
+        headers: bearer(userToken),
+        query: { fields: PAGE_FIELDS },
+      });
+      if (r.data?.id && r.data?.access_token) out.push(toPage(r.data));
+    } catch {
+      // not a Page, or no access: skip
+    }
+  }
+  return out;
 }
 
 export async function fetchFacebookPage(ctx: ConnectorContext, client: FacebookClientConfig, pageId: string) {

@@ -100,7 +100,7 @@ export async function completeFacebookOAuth(
   const pages = await listFacebookPages(cctx, client, userToken);
   if (!pages.length)
     throw badRequest(
-      'Facebook returned no Pages. Run Connect again and tick the Page(s) you want CreatorOS to read.',
+      `Facebook returned no Pages. Granted permissions: ${granted.join(', ') || 'none'}${declined.length ? `; not granted: ${declined.join(', ')}` : ''}. Run Connect again and tick the Page you want, and make sure the Facebook user is an admin of it.`,
       undefined,
       'NO_PAGES',
     );

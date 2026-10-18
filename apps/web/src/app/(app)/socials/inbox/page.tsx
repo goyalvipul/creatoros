@@ -334,7 +334,6 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
             <ActionButton
               variant="primary"
               disabled={!text.trim() || !t.eligibility.canSend || !t.replyAs}
-              confirm={`Send this message as @${t.replyAs?.username ?? ''} to ${t.replyTo.name ?? t.replyTo.participantId}?`}
               onAction={async () => {
                 try {
                   setError('');

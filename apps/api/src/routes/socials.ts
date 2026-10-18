@@ -10,6 +10,7 @@ import {
   runSync,
   instagramDiagnosticsSummary,
   runInstagramDiagnostics,
+  subscribeInstagramWebhooks,
   syncInstagramAccount,
   createThreadCollaboration,
   createThreadTask,
@@ -131,6 +132,18 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       await runInstagramDiagnostics(ctx, params.id, ov());
       return instagramDiagnosticsSummary(ctx, params.id);
     },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/accounts/:id/webhook-subscription',
+      tag: 'Socials',
+      summary:
+        'Subscribe the account to the webhook fields CreatorOS handles (Meta-side list only; nothing is sent)',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => subscribeInstagramWebhooks(ctx, params.id, ov()),
   );
 
   // ================================================================ identity: connection <-> Channels account

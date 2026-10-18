@@ -5,6 +5,14 @@ import { post, refresh, useApi } from '@/lib/api';
 import { when } from '@/lib/format';
 
 const TONE: Record<string, 'ok' | 'bad' | 'warn' | 'neutral'> = {
+  BLOCKED_BY_META: 'bad',
+  DATA_RECEIVED: 'ok',
+  REACHABLE: 'neutral',
+  REACHABLE_NO_DATA: 'warn',
+  IMPORTED: 'ok',
+  END_TO_END: 'ok',
+  INCOMPLETE: 'warn',
+  RECEIVED_OTHER: 'warn',
   VERIFIED_LIVE: 'ok',
   FAILED: 'bad',
   NOT_RUN: 'neutral',
@@ -13,7 +21,15 @@ const TONE: Record<string, 'ok' | 'bad' | 'warn' | 'neutral'> = {
   NO: 'neutral',
 };
 const WORDS: Record<string, string> = {
-  VERIFIED_LIVE: 'Verified live',
+  BLOCKED_BY_META: 'Blocked by Meta',
+  DATA_RECEIVED: 'Data received',
+  REACHABLE: 'API reachable',
+  REACHABLE_NO_DATA: 'Reachable, no data',
+  IMPORTED: 'Imported successfully',
+  END_TO_END: 'Imported + webhook verified',
+  INCOMPLETE: 'Incomplete',
+  RECEIVED_OTHER: 'Received, other account',
+  VERIFIED_LIVE: 'Webhook delivery verified',
   FAILED: 'Failed',
   NOT_RUN: 'Not run',
   NOT_RECEIVED: 'Not received',
@@ -45,6 +61,11 @@ export function InstagramDiagnostics({ id, username }: { id: string; username?: 
         Live checks are read-only requests to Instagram. They never send, post or change anything. Anything
         marked "mock-tested" has only been exercised against fake responses.
       </p>
+      <p className="mb-2 text-xs text-muted">
+        Three levels are kept apart: <b>API reachable</b> (HTTP 200 only), <b>data imported</b> (real records
+        stored in CreatorOS) and <b>verified end to end</b> (imported and a real webhook event processed).
+        HTTP 200 with zero records is never counted as imported.
+      </p>
       <Async res={res}>
         {(d) => (
           <>
@@ -60,10 +81,43 @@ export function InstagramDiagnostics({ id, username }: { id: string; username?: 
                     <span>{i.label}</span>
                     <Badge tone={TONE[i.verdict] ?? 'neutral'}>{WORDS[i.verdict] ?? i.verdict}</Badge>
                   </div>
+                  {i.reachable != null && (
+                    <div className="mt-0.5 flex flex-wrap gap-1 text-xs">
+                      <Badge tone={i.reachable ? 'ok' : 'bad'}>
+                        API reachable: {i.reachable ? 'yes' : 'no'}
+                      </Badge>
+                      <Badge tone={i.permissionVerified ? 'ok' : 'warn'}>
+                        Permission: {i.permissionVerified ? 'verified' : 'not verified'}
+                      </Badge>
+                      <Badge tone={i.apiRecords > 0 ? 'ok' : 'warn'}>
+                        Data received: {i.apiRecords ?? 0}
+                      </Badge>
+                      <Badge tone={i.imported > 0 ? 'ok' : 'warn'}>Imported: {i.imported}</Badge>
+                      <Badge tone={i.endToEnd ? 'ok' : 'neutral'}>
+                        Webhook: {i.endToEnd ? 'verified' : 'not verified'}
+                      </Badge>
+                    </div>
+                  )}
                   <div className="text-xs text-muted">{i.detail}</div>
                 </li>
               ))}
             </ul>
+            {d.items.some((i: any) => i.key === 'webhookSubscription' && i.verdict === 'INCOMPLETE') && (
+              <div className="mt-3">
+                <ActionButton
+                  size="sm"
+                  confirm="Subscribe this account to comments, messages, reactions, seen and postbacks? This only changes the webhook subscription list at Meta; nothing is sent or posted."
+                  success="Subscription updated"
+                  onAction={async () => {
+                    const r = await post(`/socials/accounts/${id}/webhook-subscription`);
+                    await refresh('/socials');
+                    if (r?.missing?.length) throw new Error(`Still missing: ${r.missing.join(', ')}`);
+                  }}
+                >
+                  Subscribe to comments and messages
+                </ActionButton>
+              </div>
+            )}
             <p className="mt-3 text-sm font-medium">Approvals and permissions still needed</p>
             <ul className="list-disc pl-5 text-xs text-muted">
               {d.approvals.map((a: string) => (

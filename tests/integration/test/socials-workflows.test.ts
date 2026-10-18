@@ -557,10 +557,80 @@ describe('live-shaped synchronisation and diagnostics', () => {
     const d: any = await instagramDiagnosticsSummary(s.org.ctx, s.A);
     expect(JSON.stringify(d)).not.toContain('long-1001');
     const by = Object.fromEntries(d.items.map((i: any) => [i.key, i.verdict]));
-    expect(by.profile).toBe('VERIFIED_LIVE');
+    expect(by.profile).toBe('REACHABLE');
     expect(by.webhookDelivery).toBe('NOT_RECEIVED');
     expect(by.replyImplemented).toBe('YES_CODE_MOCK_TESTED');
     expect(by.replyLive).toBe('NO');
     expect(by.publishing).toBe('NO');
+  });
+
+  it('HTTP 200 with zero records is never "imported"; comments hidden by Meta are BLOCKED_BY_META', async () => {
+    const s = await setup();
+    const inner = s.ig.overrides.fetch as any;
+    // Instagram says posts have comments but returns an empty page with a next cursor, then an empty last page
+    const hidden = async (url: string, init: any = {}) => {
+      if (url.includes('/comments')) {
+        const u = new URL(url);
+        return json(
+          u.searchParams.get('after')
+            ? { data: [] }
+            : { data: [], paging: { cursors: { after: 'c2' }, next: `${u.origin}${u.pathname}?after=c2` } },
+        );
+      }
+      if (url.includes('/me/conversations')) return json({ data: [] });
+      return inner(url, init);
+    };
+    const o = { ...s.ig.overrides, fetch: hidden as any };
+    await syncInstagramAccount(s.org.ctx, s.A, o);
+    await runInstagramDiagnostics(s.org.ctx, s.A, o);
+    const d: any = await instagramDiagnosticsSummary(s.org.ctx, s.A);
+    const by = Object.fromEntries(d.items.map((i: any) => [i.key, i]));
+    expect(by.media.verdict).toBe('IMPORTED');
+    expect(by.comments.verdict).toBe('BLOCKED_BY_META');
+    expect(by.comments.imported).toBe(0);
+    expect(by.conversations.verdict).toBe('REACHABLE_NO_DATA');
+    expect(by.conversations.imported).toBe(0);
+    // a reported-but-empty post is not marked synced, so it is read again later
+    const [{ n }] = (
+      await h.db.execute(
+        sql`select count(*)::int n from social_media_items where connection_id = ${s.A} and comments_count > 0 and comments_synced_count is not null`,
+      )
+    ).rows as any[];
+    expect(n).toBe(0);
+  });
+
+  it('follows empty pages that still carry paging.next and imports the comment found later', async () => {
+    const s = await setup();
+    const inner = s.ig.overrides.fetch as any;
+    const late = async (url: string, init: any = {}) => {
+      if (url.includes('/comments')) {
+        const u = new URL(url);
+        const after = u.searchParams.get('after');
+        const next = (a: string) => `${u.origin}${u.pathname}?after=${a}`;
+        if (!after) return json({ data: [], paging: { cursors: { after: 'p2' }, next: next('p2') } });
+        if (after === 'p2') return json({ data: [], paging: { cursors: { after: 'p3' }, next: next('p3') } });
+        return json({
+          data: [
+            {
+              id: 'cm-late',
+              text: 'late hello',
+              username: 'fan',
+              timestamp: '2026-10-02T10:00:00+0000',
+              from: { id: 'f1', username: 'fan' },
+            },
+          ],
+        });
+      }
+      return inner(url, init);
+    };
+    const o = { ...s.ig.overrides, fetch: late as any };
+    await syncInstagramAccount(s.org.ctx, s.A, o);
+    await syncInstagramAccount(s.org.ctx, s.A, o);
+    const [{ n }] = (
+      await h.db.execute(
+        sql`select count(*)::int n from messages m join conversation_threads t on t.id = m.thread_id where t.provider_connection_id = ${s.A} and t.kind = 'COMMENT'`,
+      )
+    ).rows as any[];
+    expect(n).toBe(1); // stable id: the second sync adds no duplicate
   });
 });

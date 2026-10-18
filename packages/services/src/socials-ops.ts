@@ -252,9 +252,29 @@ interface PlatformInfo {
 }
 
 /** Honest platform matrix. Nothing is reported as working unless code exists; none of it has been live-verified. */
+const igNote = (live: Record<string, string>) => {
+  const base =
+    'Instagram API with Instagram Login. Needs a Meta app, test users or app review, and a public webhook URL.';
+  if (!Object.keys(live).length) return `${base} Live checks have not been run yet.`;
+  const word = (k: string) =>
+    ({
+      END_TO_END: 'verified end to end',
+      IMPORTED: 'real data imported',
+      REACHABLE_NO_DATA: 'API reachable, no data returned',
+      FAILED: 'API call failed',
+    })[live[k] ?? ''] ?? 'not tested';
+  return `${base} Live status: posts ${word('media')}; comments ${word('comments')}; DMs ${word('conversations')}; webhook delivery ${live.webhookDelivery === 'VERIFIED_LIVE' ? 'received' : 'not received'}. HTTP 200 with zero records is not counted as imported.`;
+};
+
 export function platformCatalog(live: Record<string, string> = {}): PlatformInfo[] {
   const mark = (key: string, fallback: string) =>
-    live[key] === 'VERIFIED_LIVE' ? 'LIVE_VERIFIED_READ' : fallback;
+    live[key] === 'END_TO_END'
+      ? 'LIVE_VERIFIED_END_TO_END'
+      : live[key] === 'IMPORTED'
+        ? 'LIVE_IMPORTED'
+        : live[key] === 'REACHABLE_NO_DATA'
+          ? 'REACHABLE_NO_DATA'
+          : fallback;
   return [
     {
       platform: 'instagram',
@@ -271,7 +291,7 @@ export function platformCatalog(live: Record<string, string> = {}): PlatformInfo
         Insights: 'NOT_BUILT',
       },
       nativeInbox: 'https://www.instagram.com/direct/inbox/',
-      note: 'Instagram API with Instagram Login. Needs a Meta app, test users or app review, and a public webhook URL. Not live-tested.',
+      note: igNote(live),
     },
     {
       platform: 'facebook',

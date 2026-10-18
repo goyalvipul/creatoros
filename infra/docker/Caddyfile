@@ -36,7 +36,14 @@
 
 	log {
 		output stdout
-		format console
+		format filter {
+			# the Meta handshake carries the verify token in the query string: never log it
+			request>uri query {
+				replace hub.verify_token REDACTED
+				replace hub_verify_token REDACTED
+			}
+			wrap console
+		}
 	}
 }
 
@@ -52,5 +59,16 @@
 	}
 	handle {
 		respond "Not found" 404
+	}
+	log {
+		output stdout
+		format filter {
+			# the Meta handshake carries the verify token in the query string: never log it
+			request>uri query {
+				replace hub.verify_token REDACTED
+				replace hub_verify_token REDACTED
+			}
+			wrap console
+		}
 	}
 }

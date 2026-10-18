@@ -792,13 +792,31 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
     { bodyLimit: 256 * 1024, schema: { tags: ['Integrations'], summary: 'Meta webhook delivery (signed)' } },
     async (req, reply) => {
       const raw = typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody) ? req.rawBody : '';
-      const r = await receiveInstagramWebhook(
-        db,
-        env,
-        raw,
-        req.headers['x-hub-signature-256'] as string | undefined,
-      );
-      return reply.send({ data: r, meta: {}, error: null });
+      try {
+        const r = await receiveInstagramWebhook(
+          db,
+          env,
+          raw,
+          req.headers['x-hub-signature-256'] as string | undefined,
+        );
+        req.log.info(
+          { received: r.received, stored: r.stored, duplicates: r.duplicates },
+          'meta webhook accepted',
+        );
+        return reply.send({ data: r, meta: {}, error: null });
+      } catch (e) {
+        // never log the body: it holds message text
+        req.log.warn(
+          {
+            code: (e as any)?.code,
+            status: (e as any)?.status,
+            bytes: Buffer.byteLength(raw),
+            hasSignature: Boolean(req.headers['x-hub-signature-256']),
+          },
+          'meta webhook rejected',
+        );
+        throw e;
+      }
     },
   );
   route(

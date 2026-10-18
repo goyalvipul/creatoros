@@ -272,6 +272,13 @@ async function saveSync(db: Db, conn: Conn, patch: Partial<SyncState>) {
 }
 
 const MAX_PAGES = 4;
+/**
+ * Instagram can return a page with zero records that still carries `paging.next`; real records may sit later
+ * (measured live: comments end after up to 8 empty pages, conversations after 48). Empty pages are followed up to a cap
+ * that does not count against MAX_PAGES.
+ */
+const MAX_EMPTY_COMMENT_PAGES = 12;
+const MAX_EMPTY_CONVERSATION_PAGES = 60;
 const MAX_COMMENT_MEDIA = 30;
 
 /**
@@ -369,8 +376,12 @@ export async function syncInstagramAccount(
       for (const m of due) {
         const before = fetched;
         let after: string | null = null;
-        for (let page = 0; page < MAX_PAGES; page++) {
+        let dataPages = 0;
+        let emptyPages = 0;
+        while (dataPages < MAX_PAGES && emptyPages < MAX_EMPTY_COMMENT_PAGES) {
           const p = await listInstagramCommentsPage(cctx, m.provider_media_id, { after }, version);
+          if (p.items.length) dataPages += 1;
+          else emptyPages += 1;
           for (const c of p.items) {
             fetched += 1;
             await ingestSocialEvent(ctx, {
@@ -393,7 +404,11 @@ export async function syncInstagramAccount(
           after = p.after;
           if (!after) break;
         }
-        if (fetched === before) emptyReported += 1;
+        if (fetched === before) {
+          // Reported but not returned: do NOT mark as synced, so it is read again once access changes.
+          emptyReported += 1;
+          continue;
+        }
         await ctx.db
           .update(socialMediaItems)
           .set({ commentsSyncedCount: m.comments_count })
@@ -420,8 +435,12 @@ export async function syncInstagramAccount(
     try {
       let after: string | null = null;
       let stop = false;
-      for (let page = 0; page < MAX_PAGES && !stop; page++) {
+      let dataPages = 0;
+      let emptyPages = 0;
+      while (dataPages < MAX_PAGES && emptyPages < MAX_EMPTY_CONVERSATION_PAGES && !stop) {
         const p = await listInstagramConversationPage(cctx, accountId, { after }, version);
+        if (p.conversations.length) dataPages += 1;
+        else emptyPages += 1;
         for (const c of p.conversations) {
           if (prev?.conversationsSince && c.updatedTime && c.updatedTime <= prev.conversationsSince) {
             stop = true; // conversations are newest-first: everything after this is already imported

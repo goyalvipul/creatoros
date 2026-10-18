@@ -8,7 +8,9 @@ import { useApi } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
 
 const TONE: Record<string, 'ok' | 'warn' | 'neutral' | 'bad'> = {
-  LIVE_VERIFIED_READ: 'ok',
+  LIVE_VERIFIED_END_TO_END: 'ok',
+  LIVE_IMPORTED: 'ok',
+  REACHABLE_NO_DATA: 'warn',
   BUILT_MOCK_TESTED_ONLY: 'warn',
   BUILT_NOT_VERIFIED: 'warn',
   NOT_BUILT: 'neutral',
@@ -33,7 +35,7 @@ export default function PlatformPage() {
               title={titleCase(p.status)}
             >
               {p.status === 'AVAILABLE_WHEN_CONNECTED'
-                ? 'Reading is verified against the live API where a row says so. Anything marked mock-tested has not been tried for real.'
+                ? 'Each row shows how far it is proven: reachable (HTTP 200 only), real data imported, or verified end to end with a real webhook event. HTTP 200 with zero records is never shown as imported. Mock-tested rows have not been tried for real.'
                 : 'Not working in CreatorOS. Use the native app for this platform.'}
             </Notice>
             <Card className="mt-4">

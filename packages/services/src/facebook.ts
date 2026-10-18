@@ -16,7 +16,7 @@ import {
   fetchFacebookPage,
   listFacebookConversationPage,
   listFacebookCommentsPage,
-  listFacebookPages,
+  discoverFacebookPages,
   listFacebookPostsPage,
   parseFacebookWebhookEntry,
   readFacebookClientConfig,
@@ -97,10 +97,11 @@ export async function completeFacebookOAuth(
   const client = clientFor(env);
   const cctx = connectorContext(db, env, null, overrides);
   const { userToken, granted, declined } = await exchangeFacebookCode(cctx, client, code);
-  const pages = await listFacebookPages(cctx, client, userToken);
+  const found = await discoverFacebookPages(cctx, client, userToken);
+  const pages = found.pages;
   if (!pages.length)
     throw badRequest(
-      `Facebook returned no Pages. Granted permissions: ${granted.join(', ') || 'none'}${declined.length ? `; not granted: ${declined.join(', ')}` : ''}. Run Connect again and tick the Page you want, and make sure the Facebook user is an admin of it.`,
+      `Facebook returned no Pages. Granted permissions: ${granted.join(', ') || 'none'}${declined.length ? `; not granted: ${declined.join(', ')}` : ''}. Details: ${found.notes.join(' | ')}.`,
       undefined,
       'NO_PAGES',
     );

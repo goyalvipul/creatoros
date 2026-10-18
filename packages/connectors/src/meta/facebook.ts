@@ -122,42 +122,72 @@ const toPage = (p: any): FacebookPage => ({
   link: p.link ?? null,
 });
 
+export interface PageDiscovery {
+  pages: FacebookPage[];
+  /** Safe diagnostics (no tokens): what Facebook told us, shown when nothing was found. */
+  notes: string[];
+}
+
 /**
  * Pages the user granted, each with its own Page access token. `/me/accounts` is empty for Pages that belong to a
  * Business portfolio or were granted per-asset in the new login dialog, so fall back to the Pages named in the
  * token's granular scopes (read with the app token) and fetch each one directly.
  */
+export async function discoverFacebookPages(
+  ctx: ConnectorContext,
+  client: FacebookClientConfig,
+  userToken: string,
+): Promise<PageDiscovery> {
+  const notes: string[] = [];
+  const { data } = await http<any>(ctx, `${v(client)}/me/accounts`, {
+    headers: bearer(userToken),
+    query: { fields: PAGE_FIELDS, limit: '100' },
+  });
+  const rows: any[] = data?.data ?? [];
+  const direct: FacebookPage[] = rows.filter((p) => p?.id && p?.access_token).map(toPage);
+  notes.push(`/me/accounts returned ${rows.length} (${direct.length} with a token)`);
+  if (direct.length) return { pages: direct, notes };
+  const ids = new Set<string>();
+  try {
+    const dbg = await http<any>(ctx, `${v(client)}/debug_token`, {
+      query: { input_token: userToken, access_token: `${client.appId}|${client.appSecret}` },
+    });
+    const gs: any[] = dbg.data?.data?.granular_scopes ?? [];
+    notes.push(
+      `granular scopes: ${gs.map((g) => `${g.scope}[${(g.target_ids ?? []).length}]`).join(', ') || 'none'}`,
+    );
+    for (const g of gs) for (const id of g.target_ids ?? []) ids.add(String(id));
+  } catch (e) {
+    notes.push(`debug_token failed: ${(e as Error).message.slice(0, 160)}`);
+  }
+  const out: FacebookPage[] = [];
+  for (const id of ids) {
+    for (const fields of ['id,name,category,access_token,tasks,link', 'id,name,access_token']) {
+      try {
+        const r = await http<any>(ctx, `${v(client)}/${encodeURIComponent(id)}`, {
+          headers: bearer(userToken),
+          query: { fields },
+        });
+        if (r.data?.id && r.data?.access_token) {
+          out.push(toPage(r.data));
+          break;
+        }
+        notes.push(`page ${id}: no access_token in response (user may lack a Page role with tasks)`);
+        break;
+      } catch (e) {
+        notes.push(`page ${id}: ${(e as Error).message.slice(0, 160)}`);
+      }
+    }
+  }
+  return { pages: out, notes };
+}
+
 export async function listFacebookPages(
   ctx: ConnectorContext,
   client: FacebookClientConfig,
   userToken: string,
 ): Promise<FacebookPage[]> {
-  const { data } = await http<any>(ctx, `${v(client)}/me/accounts`, {
-    headers: bearer(userToken),
-    query: { fields: PAGE_FIELDS, limit: '100' },
-  });
-  const direct: FacebookPage[] = (data?.data ?? []).filter((p: any) => p?.id && p?.access_token).map(toPage);
-  if (direct.length) return direct;
-  const dbg = await http<any>(ctx, `${v(client)}/debug_token`, {
-    query: { input_token: userToken, access_token: `${client.appId}|${client.appSecret}` },
-  });
-  const ids = new Set<string>();
-  for (const g of dbg.data?.data?.granular_scopes ?? [])
-    if (String(g.scope).startsWith('pages_') || g.scope === 'business_management')
-      for (const id of g.target_ids ?? []) ids.add(String(id));
-  const out: FacebookPage[] = [];
-  for (const id of ids) {
-    try {
-      const r = await http<any>(ctx, `${v(client)}/${encodeURIComponent(id)}`, {
-        headers: bearer(userToken),
-        query: { fields: PAGE_FIELDS },
-      });
-      if (r.data?.id && r.data?.access_token) out.push(toPage(r.data));
-    } catch {
-      // not a Page, or no access: skip
-    }
-  }
-  return out;
+  return (await discoverFacebookPages(ctx, client, userToken)).pages;
 }
 
 export async function fetchFacebookPage(ctx: ConnectorContext, client: FacebookClientConfig, pageId: string) {

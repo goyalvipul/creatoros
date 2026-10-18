@@ -48,8 +48,8 @@ export default function SocialsOverview() {
                 </Link>
               }
             >
-              Only Instagram can be connected today. Facebook, YouTube comments, Threads and TikTok are not
-              built.
+              Connect Instagram, a Facebook Page or YouTube (comments) in Integrations. Threads and TikTok are
+              not built.
             </EmptyState>
           ) : (
             <>

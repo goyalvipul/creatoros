@@ -25,7 +25,11 @@ export function connectionIdentity(conn: Conn) {
   if (!platform) return null;
   const cfg = (conn.config ?? {}) as Record<string, any>;
   const verifiedId =
-    conn.provider === 'instagram' || conn.provider === 'facebook' ? (conn.principalHint ?? null) : null;
+    conn.provider === 'instagram' || conn.provider === 'facebook'
+      ? (conn.principalHint ?? null)
+      : conn.provider === 'youtube'
+        ? (cfg.youtube?.channelId ?? null)
+        : null;
   const username = typeof cfg.username === 'string' && cfg.username ? cfg.username : null;
   return { platform, verifiedId, username };
 }

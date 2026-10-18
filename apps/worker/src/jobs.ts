@@ -200,7 +200,7 @@ export async function jobMaintenance(d: WorkerDeps) {
 export async function jobSocialSync(d: WorkerDeps) {
   const rows = rowsOf<{ id: string; org_id: string }>(
     await d.db.execute(
-      sql`select id, org_id from provider_connections where provider in ('instagram','facebook') and state in ('ACTIVE','PARTIAL_SYNC') and encrypted_token_ref is not null`,
+      sql`select id, org_id from provider_connections where provider in ('instagram','facebook','youtube') and state in ('ACTIVE','PARTIAL_SYNC') and encrypted_token_ref is not null and (provider <> 'youtube' or 'https://www.googleapis.com/auth/youtube.force-ssl' = any(scopes))`,
     ),
   );
   const out = { accounts: rows.length, ok: 0, failed: 0 };

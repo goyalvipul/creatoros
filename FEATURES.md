@@ -83,3 +83,5 @@ Each provider is built to its documented contract and always reports one of `ACT
 | Workflows: draft / approval / automatic reply rules, approval queue, simulation, kill switch               | Limited | Automatic needs a passing test, per-account opt-in and activation. No drag-and-drop canvas, delays or AI nodes.                            |
 
 | Facebook Page Messenger + comments (read, reply) | Implemented, mock-tested; requires credentials and Meta dashboard setup (`docs/socials/FACEBOOK_SETUP.md`) |
+
+| YouTube comments in Socials (read, reply; polled) | Implemented, mock-tested; needs Google credentials and the Enable comments consent (`docs/socials/YOUTUBE_SETUP.md`) |

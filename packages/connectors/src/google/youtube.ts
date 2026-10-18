@@ -65,6 +65,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
     const hasTokens = Boolean(creds.refreshToken || creds.accessToken);
     const read = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeRead[0]);
     const analytics = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeAnalytics[0]);
+    const comments = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeComments[0]);
     const blockers: string[] = [];
     if (!client)
       blockers.push('Google OAuth client is not configured (GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI).');
@@ -78,12 +79,19 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
       read,
       write: false,
       incrementalSync: read,
-      flags: { importUploads: read, ownStats: read, privateAnalytics: analytics, upload: false },
+      flags: {
+        importUploads: read,
+        ownStats: read,
+        privateAnalytics: analytics,
+        comments,
+        upload: false,
+      },
       blockers,
       setupSteps: [
         'In Google Cloud Console enable "YouTube Data API v3" for the same project as the Gmail client.',
         'Press Connect in Integrations and approve youtube.readonly (optionally yt-analytics.readonly).',
         'Link the connected channel to the matching social account in Channels.',
+        'For Socials comments: press Enable comments and approve youtube.force-ssl (read and reply to comments).',
       ],
     };
   }
@@ -97,6 +105,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
       ...GOOGLE_SCOPES.identity,
       ...GOOGLE_SCOPES.youtubeRead,
       ...(input.analytics ? GOOGLE_SCOPES.youtubeAnalytics : []),
+      ...(input.comments ? GOOGLE_SCOPES.youtubeComments : []),
     ];
     return {
       status: 'REDIRECT',
@@ -323,4 +332,128 @@ function nextPacificMidnight(now: number): string {
   const next = new Date(`${fmt}T00:00:00-08:00`);
   next.setUTCDate(next.getUTCDate() + 1);
   return next.toISOString();
+}
+
+// ---------------------------------------------------------------- comments (Socials)
+
+export interface YtComment {
+  id: string;
+  /** top-level comment id this comment belongs to (the thread) */
+  threadId: string;
+  videoId: string | null;
+  text: string;
+  authorName: string | null;
+  authorChannelId: string | null;
+  publishedAt: string;
+  isTopLevel: boolean;
+}
+
+export interface YtCommentPage {
+  comments: YtComment[];
+  nextPageToken: string | null;
+}
+
+const toComment = (c: any, threadId: string, videoId: string | null, top: boolean): YtComment => ({
+  id: String(c.id),
+  threadId,
+  videoId: c.snippet?.videoId ?? videoId,
+  text: String(c.snippet?.textOriginal ?? c.snippet?.textDisplay ?? ''),
+  authorName: c.snippet?.authorDisplayName ?? null,
+  authorChannelId: c.snippet?.authorChannelId?.value ?? null,
+  publishedAt: String(c.snippet?.publishedAt ?? new Date(0).toISOString()),
+  isTopLevel: top,
+});
+
+/**
+ * One page of comment threads for the whole channel, newest first (1 quota unit). Replies embedded in the thread are
+ * included; threads with more replies than embedded are completed with comments.list (1 unit per thread).
+ */
+export async function listYoutubeCommentPage(
+  ctx: ConnectorContext,
+  args: { channelId: string; pageToken?: string | null },
+): Promise<YtCommentPage> {
+  const token = await ensureFreshToken(ctx, refreshGoogleToken);
+  trackQuota(ctx.credentials.principal ?? 'unknown', 1, ctx.now());
+  const auth = { authorization: `Bearer ${token}` };
+  const { data } = await http<any>(ctx, `${API}/commentThreads`, {
+    headers: auth,
+    query: {
+      part: 'snippet,replies',
+      allThreadsRelatedToChannelId: args.channelId,
+      order: 'time',
+      maxResults: 100,
+      textFormat: 'plainText',
+      pageToken: args.pageToken ?? undefined,
+    },
+  });
+  const out: YtComment[] = [];
+  for (const t of data?.items ?? []) {
+    const top = t.snippet?.topLevelComment;
+    if (!top?.id) continue;
+    const videoId = t.snippet?.videoId ?? top.snippet?.videoId ?? null;
+    out.push(toComment(top, top.id, videoId, true));
+    let replies: any[] = t.replies?.comments ?? [];
+    const total = Number(t.snippet?.totalReplyCount ?? 0);
+    if (total > replies.length) {
+      replies = [];
+      let rt: string | undefined;
+      for (let i = 0; i < 10; i++) {
+        trackQuota(ctx.credentials.principal ?? 'unknown', 1, ctx.now());
+        const r = await http<any>(ctx, `${API}/comments`, {
+          headers: auth,
+          query: {
+            part: 'snippet',
+            parentId: top.id,
+            maxResults: 100,
+            textFormat: 'plainText',
+            pageToken: rt,
+          },
+        });
+        replies.push(...(r.data?.items ?? []));
+        rt = r.data?.nextPageToken;
+        if (!rt) break;
+      }
+    }
+    for (const r of replies) out.push(toComment(r, top.id, videoId, false));
+  }
+  return { comments: out, nextPageToken: data?.nextPageToken ?? null };
+}
+
+/** Reply to a top-level comment (YouTube only allows replies to top-level comments). 50 quota units. Never retried. */
+export async function replyToYoutubeComment(
+  ctx: ConnectorContext,
+  args: { parentId: string; text: string },
+): Promise<{ providerMessageId: string | null }> {
+  const token = await ensureFreshToken(ctx, refreshGoogleToken);
+  trackQuota(ctx.credentials.principal ?? 'unknown', 50, ctx.now());
+  const { data } = await http<any>(ctx, `${API}/comments`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` },
+    query: { part: 'snippet' },
+    json: { snippet: { parentId: args.parentId, textOriginal: args.text } },
+    maxAttempts: 1,
+  });
+  return { providerMessageId: data?.id ?? null };
+}
+
+/** Video titles for a set of ids (1 unit per 50). Used to label comment threads. */
+export async function youtubeVideoTitles(
+  ctx: ConnectorContext,
+  ids: string[],
+): Promise<Map<string, { title: string; commentCount: number | null }>> {
+  const out = new Map<string, { title: string; commentCount: number | null }>();
+  const token = await ensureFreshToken(ctx, refreshGoogleToken);
+  for (let i = 0; i < ids.length; i += 50) {
+    trackQuota(ctx.credentials.principal ?? 'unknown', 1, ctx.now());
+    const { data } = await http<any>(ctx, `${API}/videos`, {
+      headers: { authorization: `Bearer ${token}` },
+      query: { part: 'snippet,statistics', id: ids.slice(i, i + 50).join(',') },
+    });
+    for (const v of data?.items ?? [])
+      out.set(String(v.id), {
+        title: String(v.snippet?.title ?? ''),
+        commentCount: num(v.statistics?.commentCount) ?? null,
+      });
+  }
+  return out;
 }

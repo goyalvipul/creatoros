@@ -17,8 +17,8 @@ export default function CommentsPage() {
         res={res}
         empty={
           <EmptyState title="No comments synchronised">
-            Comments arrive through Instagram webhooks once the public webhook is set up. YouTube, Facebook
-            and Threads comments are not built.
+            Instagram and Facebook comments arrive through webhooks and Sync now. YouTube comments are polled
+            once you press Enable comments in Integrations. Threads comments are not built.
           </EmptyState>
         }
       >

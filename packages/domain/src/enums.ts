@@ -232,7 +232,15 @@ export const MESSAGE_DIRECTION = ['INBOUND', 'OUTBOUND'] as const;
 export const ACTIONABLE_STATE = ['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE'] as const;
 export type ActionableState = (typeof ACTIONABLE_STATE)[number];
 export const TRIAGE_STATE = ['POSSIBLE', 'CONFIRMED', 'DISMISSED', 'MERGED'] as const;
-export const MESSAGE_SOURCE = ['GMAIL', 'MANUAL', 'INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'OTHER'] as const;
+export const MESSAGE_SOURCE = [
+  'GMAIL',
+  'MANUAL',
+  'INSTAGRAM',
+  'TIKTOK',
+  'FACEBOOK',
+  'YOUTUBE',
+  'OTHER',
+] as const;
 export const INVOICE_STATUS = ['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID'] as const;
 export const PAYMENT_METHOD = ['BANK_TRANSFER', 'PAYPAL', 'STRIPE', 'WISE', 'CASH', 'OTHER'] as const;
 export const EXPENSE_CATEGORY = [

@@ -57,8 +57,8 @@ export default function SocialAccountsPage() {
               </Link>
             }
           >
-            Connect an Instagram account in Integrations. Facebook, YouTube comments, Threads and TikTok
-            messaging are not built yet.
+            Connect Instagram, a Facebook Page or YouTube in Integrations. Threads and TikTok messaging are
+            not built yet.
           </EmptyState>
         }
       >

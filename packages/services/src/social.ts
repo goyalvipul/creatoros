@@ -20,6 +20,7 @@ import {
   readFacebookClientConfig,
   readInstagramClientConfig,
   replyToFacebookComment,
+  replyToYoutubeComment,
   replyToInstagramComment,
   sendFacebookMessage,
   sendInstagramDm,
@@ -37,11 +38,12 @@ type Conn = typeof providerConnections.$inferSelect;
 type Thread = typeof conversationThreads.$inferSelect;
 type Outbound = typeof socialOutboundMessages.$inferSelect;
 
-export const SOCIAL_SOURCES = ['INSTAGRAM', 'FACEBOOK', 'TIKTOK'] as const;
+export const SOCIAL_SOURCES = ['INSTAGRAM', 'FACEBOOK', 'TIKTOK', 'YOUTUBE'] as const;
 export const PLATFORM_NAMES: Record<string, string> = {
   INSTAGRAM: 'Instagram',
   FACEBOOK: 'Facebook',
   TIKTOK: 'TikTok',
+  YOUTUBE: 'YouTube',
 };
 
 /** Per-account automation settings live on the connection. A newly connected account sends nothing automatically. */
@@ -85,11 +87,33 @@ const fbClient = (env: ServiceEnv) => {
   return c;
 };
 
+/** The provider's own account id: IG user id, Facebook Page id, YouTube channel id (YouTube's principal is the Google e-mail). */
+export function providerAccountId(conn: Pick<Conn, 'provider' | 'principalHint' | 'config'>): string | null {
+  if (conn.provider === 'youtube') return ((conn.config ?? {}) as any).youtube?.channelId ?? null;
+  return conn.principalHint ?? null;
+}
+
+const YT_COMMENTS_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
+
+export const sourceOf = (conn: Pick<Conn, 'provider'>) =>
+  conn.provider === 'facebook' ? 'FACEBOOK' : conn.provider === 'youtube' ? 'YOUTUBE' : 'INSTAGRAM';
+
 export function instagramCapabilities(conn: Conn, env: ServiceEnv) {
   const granted = conn.scopes ?? [];
   const live = conn.state === 'ACTIVE' || conn.state === 'PARTIAL_SYNC';
   const need = (scope: string): CapabilityStatus =>
     !live ? 'NEEDS_RECONNECT' : granted.includes(scope) ? 'AVAILABLE' : 'MISSING_PERMISSION';
+  if (conn.provider === 'youtube')
+    return {
+      readMessages: 'UNSUPPORTED' as CapabilityStatus, // the YouTube API has no direct messages
+      sendMessages: 'UNSUPPORTED' as CapabilityStatus,
+      readComments: need(YT_COMMENTS_SCOPE),
+      replyComments: need(YT_COMMENTS_SCOPE),
+      webhooks: 'UNSUPPORTED' as CapabilityStatus, // polling only
+      publishing: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      insights: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      mentions: 'NOT_IMPLEMENTED' as CapabilityStatus,
+    };
   if (conn.provider === 'facebook')
     return {
       readMessages: need(FACEBOOK_SCOPES.messaging),
@@ -127,7 +151,7 @@ async function loadConnection(db: Db, orgId: string, id: string): Promise<Conn> 
     .select()
     .from(providerConnections)
     .where(and(eq(providerConnections.id, id), eq(providerConnections.orgId, orgId)));
-  if (!c || (c.provider !== 'instagram' && c.provider !== 'facebook')) throw notFound('Social account');
+  if (!c || !['instagram', 'facebook', 'youtube'].includes(c.provider)) throw notFound('Social account');
   return c;
 }
 
@@ -139,7 +163,7 @@ export async function listSocialAccounts(ctx: Ctx) {
     .where(
       and(
         eq(providerConnections.orgId, ctx.orgId),
-        sql`${providerConnections.provider} in ('instagram','facebook')`,
+        sql`${providerConnections.provider} in ('instagram','facebook','youtube')`,
       ),
     );
   const counts = rowsOf<{ id: string; need: number; unread: number }>(
@@ -148,7 +172,7 @@ export async function listSocialAccounts(ctx: Ctx) {
              count(*) filter (where t.state = 'NEED_REPLY' and t.triage_state <> 'DISMISSED')::int as need,
              coalesce(sum((select count(*) from messages m where m.thread_id = t.id and m.direction = 'INBOUND' and not m.is_read)), 0)::int as unread
       from conversation_threads t
-      where t.org_id = ${ctx.orgId} and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK') and t.merged_into_id is null
+      where t.org_id = ${ctx.orgId} and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') and t.merged_into_id is null
       group by t.provider_connection_id`),
   );
   const linkedRows = rowsOf<{
@@ -161,7 +185,7 @@ export async function listSocialAccounts(ctx: Ctx) {
     await ctx.db.execute(sql`
       select a.provider_connection_id as conn, a.id, a.handle, c.name as channel, b.name as brand
       from social_accounts a join channels c on c.id = a.channel_id left join brands b on b.id = c.brand_id
-      where a.org_id = ${ctx.orgId} and a.deleted_at is null and a.provider_connection_id is not null and a.platform in ('instagram','facebook')`),
+      where a.org_id = ${ctx.orgId} and a.deleted_at is null and a.provider_connection_id is not null and a.platform in ('instagram','facebook','youtube')`),
   );
   const linkedByConn = new Map(linkedRows.map((r) => [r.conn, r]));
   return conns
@@ -171,8 +195,8 @@ export async function listSocialAccounts(ctx: Ctx) {
       const n = counts.find((x) => x.id === c.id);
       return {
         id: c.id,
-        platform: c.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
-        accountId: c.principalHint,
+        platform: c.provider === 'facebook' ? 'FACEBOOK' : c.provider === 'youtube' ? 'YOUTUBE' : 'INSTAGRAM',
+        accountId: providerAccountId(c),
         username: cfg.username ?? null,
         label: c.label,
         profilePictureUrl: cfg.profilePictureUrl ?? null,
@@ -235,10 +259,10 @@ export interface SocialEvent {
  */
 export async function ingestSocialEvent(ctx: Ctx, ev: SocialEvent) {
   const conn = await loadConnection(ctx.db, ctx.orgId, ev.connectionId);
-  const accountId = conn.principalHint;
-  if (!accountId) throw badRequest('This connection has no provider account id; reconnect it.');
+  const accountId = providerAccountId(conn);
+  if (!accountId) throw badRequest('This connection has no provider account id; sync or reconnect it.');
   const r = await ingestMessage(ctx, {
-    source: conn.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
+    source: sourceOf(conn),
     principal: accountId,
     providerThreadId: ev.providerThreadId,
     providerMsgId: ev.providerMsgId,
@@ -547,7 +571,7 @@ export async function listSocialThreads(
   const where = [
     sql`t.org_id = ${ctx.orgId}`,
     sql`t.merged_into_id is null`,
-    sql`t.source in ('INSTAGRAM','FACEBOOK','TIKTOK')`,
+    sql`t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE')`,
   ];
   if (q.connectionIds?.length)
     where.push(
@@ -787,10 +811,10 @@ export async function sendOutbound(
   if (!thread || !conn) return fail('FAILED', 'Conversation or account no longer exists.');
   // identity lock: every link in the chain must agree
   if (
-    (conn.provider !== 'instagram' && conn.provider !== 'facebook') ||
+    !['instagram', 'facebook', 'youtube'].includes(conn.provider) ||
     thread.providerConnectionId !== conn.id ||
     thread.principal !== row0.providerAccountId ||
-    conn.principalHint !== row0.providerAccountId ||
+    providerAccountId(conn) !== row0.providerAccountId ||
     thread.participantId !== row0.recipientId ||
     conn.orgId !== row0.orgId ||
     thread.orgId !== row0.orgId
@@ -818,7 +842,12 @@ export async function sendOutbound(
         .orderBy(desc(messages.receivedAt))
         .limit(1);
       if (!last?.providerMsgId) return fail('FAILED', 'No comment to reply to.');
-      if (conn.provider === 'facebook')
+      if (conn.provider === 'youtube')
+        ({ providerMessageId } = await replyToYoutubeComment(cctx, {
+          parentId: (thread.providerThreadId ?? '').replace(/^yt:/, ''),
+          text: row0.body,
+        }));
+      else if (conn.provider === 'facebook')
         ({ providerMessageId } = await replyToFacebookComment(cctx, fbClient(env), {
           commentId: last.providerMsgId,
           text: row0.body,
@@ -849,7 +878,7 @@ export async function sendOutbound(
       .returning();
     // record it in the conversation so state becomes WAITING and the reply shows in the history
     await ingestMessage(systemCtx({ db, env }, row0.orgId), {
-      source: conn.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
+      source: sourceOf(conn),
       principal: row0.providerAccountId,
       providerThreadId: thread.providerThreadId,
       providerMsgId: providerMessageId ?? `out:${row0.id}`,

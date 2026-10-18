@@ -180,7 +180,7 @@ export async function socialsOverview(ctx: Ctx, q: OverviewQuery = {}) {
             and m.received_at > now() - make_interval(days => ${days})
             ${q.connectionId ? sql`and t3.provider_connection_id = ${q.connectionId}::uuid` : sql``}) as "received"
       from conversation_threads t
-      where t.org_id = ${ctx.orgId} and t.merged_into_id is null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK') ${conn}`),
+      where t.org_id = ${ctx.orgId} and t.merged_into_id is null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') ${conn}`),
   );
   const accounts = rowsOf<{ state: string; n: number }>(
     await ctx.db.execute(
@@ -199,14 +199,14 @@ export async function socialsOverview(ctx: Ctx, q: OverviewQuery = {}) {
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview
       from conversation_threads t left join provider_connections c on c.id = t.provider_connection_id
       where t.org_id = ${ctx.orgId} and t.state = 'NEED_REPLY' and not t.archived_local and t.merged_into_id is null
-        and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK') ${conn}
+        and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') ${conn}
       order by t.last_inbound_at asc nulls last limit 8`),
   );
   const leads = rowsOf<any>(
     await ctx.db.execute(sql`
       select t.id, t.participant_name as "participantName", t.opportunity_id as "opportunityId", c.config->>'username' as "accountUsername", t.last_inbound_at as "lastInboundAt"
       from conversation_threads t left join provider_connections c on c.id = t.provider_connection_id
-      where t.org_id = ${ctx.orgId} and t.opportunity_id is not null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK') ${conn}
+      where t.org_id = ${ctx.orgId} and t.opportunity_id is not null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') ${conn}
       order by t.last_inbound_at desc nulls last limit 8`),
   );
   const scheduled = await scheduledContent(ctx, 5);
@@ -296,27 +296,30 @@ export function platformCatalog(live: Record<string, string> = {}): PlatformInfo
     {
       platform: 'facebook',
       name: 'Facebook Pages and Messenger',
-      status: 'NOT_BUILT',
+      status: 'AVAILABLE_WHEN_CONNECTED',
       capabilities: {
-        'Page comments': 'NOT_BUILT',
-        'Messenger conversations': 'NOT_BUILT',
+        'Read Messenger conversations': 'BUILT_MOCK_TESTED_ONLY',
+        'Reply to Messenger (24h window)': 'BUILT_MOCK_TESTED_ONLY',
+        'Read Page post comments': 'BUILT_MOCK_TESTED_ONLY',
+        'Reply to comments': 'BUILT_MOCK_TESTED_ONLY',
         Insights: 'NOT_BUILT',
       },
       nativeInbox: 'https://business.facebook.com/latest/inbox',
-      note: 'Needs Page access tokens and pages_messaging / pages_manage_engagement permissions (app review). Not implemented in CreatorOS yet.',
+      note: 'Needs FACEBOOK_APP_ID/FACEBOOK_APP_SECRET and Page permissions (Standard Access works for app role users). See docs/socials/FACEBOOK_SETUP.md.',
     },
     {
       platform: 'youtube',
       name: 'YouTube',
-      status: 'NOT_BUILT',
+      status: 'AVAILABLE_WHEN_CONNECTED',
       capabilities: {
         'Direct messages': 'UNSUPPORTED_BY_API',
-        'Read comments': 'NOT_BUILT',
-        'Reply to comments': 'NOT_BUILT',
+        'Read comments (polling)': 'BUILT_MOCK_TESTED_ONLY',
+        'Reply to comments': 'BUILT_MOCK_TESTED_ONLY',
         'Import uploads (Publishing module)': 'BUILT_UNVERIFIED',
+        'Moderate comments': 'NOT_BUILT',
       },
       nativeInbox: 'https://studio.youtube.com/channel/UC/comments',
-      note: 'The YouTube Data API has no direct-message inbox. Comment reading and replying is not built in Socials yet; the Publishing module imports uploads.',
+      note: 'The YouTube Data API has no direct-message inbox. Comments need the youtube.force-ssl permission (Integrations > Enable comments) and are polled, not pushed. Replies go to top-level comments only and cost 50 quota units each.',
     },
     {
       platform: 'tiktok',

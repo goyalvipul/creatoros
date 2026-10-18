@@ -11,6 +11,7 @@ export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
  * - gmail.compose: ONLY if the owner enables "create reply drafts" (still never sends)
  * - youtube.readonly: list own uploads + public stats (Data API v3)
  * - yt-analytics.readonly: optional private analytics (watch time etc.)
+ * - youtube.force-ssl: optional, read and reply to comments (Socials)
  */
 export const GOOGLE_SCOPES = {
   identity: ['openid', 'email'],
@@ -18,6 +19,8 @@ export const GOOGLE_SCOPES = {
   gmailDrafts: ['https://www.googleapis.com/auth/gmail.compose'],
   youtubeRead: ['https://www.googleapis.com/auth/youtube.readonly'],
   youtubeAnalytics: ['https://www.googleapis.com/auth/yt-analytics.readonly'],
+  /** Read AND reply to/moderate comments. Needed for Socials comment replies. */
+  youtubeComments: ['https://www.googleapis.com/auth/youtube.force-ssl'],
 } as const;
 
 export interface GoogleClientConfig {

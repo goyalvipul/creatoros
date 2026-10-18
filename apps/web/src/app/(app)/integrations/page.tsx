@@ -158,6 +158,29 @@ export default function IntegrationsPage() {
                               .join(' · ')}
                           </p>
                         )}
+                        {p.provider === 'youtube' && conn && connected && (
+                          <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                            <Badge
+                              tone={
+                                (conn.scopes ?? []).includes(
+                                  'https://www.googleapis.com/auth/youtube.force-ssl',
+                                )
+                                  ? 'ok'
+                                  : 'neutral'
+                              }
+                            >
+                              {(conn.scopes ?? []).includes(
+                                'https://www.googleapis.com/auth/youtube.force-ssl',
+                              )
+                                ? 'Comments: read and reply enabled'
+                                : 'Comments: not enabled'}
+                            </Badge>
+                            <span>
+                              Comments appear in Socials (polled; YouTube has no direct messages). Replies are
+                              sent only when you press send.
+                            </span>
+                          </p>
+                        )}
                         <div className="mt-3 flex flex-wrap gap-2">
                           {OAUTH.includes(p.provider) && !connected && p.state !== 'UNSUPPORTED' && (
                             <ActionButton variant="primary" onAction={() => connect(p.provider)}>
@@ -186,6 +209,41 @@ export default function IntegrationsPage() {
                               Test
                             </ActionButton>
                           )}
+                          {p.provider === 'youtube' &&
+                            conn &&
+                            connected &&
+                            !(conn.scopes ?? []).includes(
+                              'https://www.googleapis.com/auth/youtube.force-ssl',
+                            ) && (
+                              <ActionButton
+                                variant="primary"
+                                onAction={async () => {
+                                  const r = await post('/integrations/youtube/oauth/start', {
+                                    comments: true,
+                                  });
+                                  if (r.authorizeUrl) window.location.href = r.authorizeUrl;
+                                }}
+                              >
+                                Enable comments
+                              </ActionButton>
+                            )}
+                          {p.provider === 'youtube' &&
+                            conn &&
+                            connected &&
+                            (conn.scopes ?? []).includes(
+                              'https://www.googleapis.com/auth/youtube.force-ssl',
+                            ) && (
+                              <ActionButton
+                                variant="primary"
+                                onAction={async () => {
+                                  await post(`/socials/accounts/${conn.id}/sync`);
+                                  await reload();
+                                }}
+                                success="Comments synced"
+                              >
+                                Sync comments
+                              </ActionButton>
+                            )}
                           {conn && connected && (
                             <ActionButton
                               onAction={async () => {

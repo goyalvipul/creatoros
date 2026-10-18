@@ -43,6 +43,13 @@
       "when": 1792442800000,
       "tag": "0005_social_media_items",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792529200000,
+      "tag": "0006_youtube_comments",
+      "breakpoints": true
     }
   ]
 }

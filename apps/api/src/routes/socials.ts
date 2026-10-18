@@ -13,6 +13,7 @@ import {
   subscribeFacebookPageWebhooks,
   syncSocialAccount,
   testFacebookPage,
+  testYoutubeAccount,
   subscribeInstagramWebhooks,
   syncInstagramAccount,
   createThreadCollaboration,
@@ -151,6 +152,17 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
   route(
     {
       method: 'POST',
+      url: '/socials/accounts/:id/youtube/test',
+      tag: 'Socials',
+      summary: 'Read-only check that the YouTube token works and resolve the channel id',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    ({ ctx, params }) => testYoutubeAccount(ctx, params.id, ov()),
+  );
+  route(
+    {
+      method: 'POST',
       url: '/socials/accounts/:id/facebook/test',
       tag: 'Socials',
       summary: 'Read-only check that the stored Page token works',
@@ -234,7 +246,7 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       role: 'EDITOR',
       query: z.object({
         accounts: csv,
-        platform: z.enum(['INSTAGRAM', 'FACEBOOK', 'TIKTOK']).optional(),
+        platform: z.enum(['INSTAGRAM', 'FACEBOOK', 'TIKTOK', 'YOUTUBE']).optional(),
         state: z.enum(['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE']).optional(),
         kind: z.enum(['DM', 'COMMENT']).optional(),
         q: z.string().max(200).optional(),

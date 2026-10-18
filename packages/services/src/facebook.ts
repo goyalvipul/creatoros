@@ -30,6 +30,7 @@ import { connectorContext } from './integrations';
 import { autoReconcileConnection } from './identity';
 import { ingestSocialEvent, syncInstagramAccount } from './social';
 import { processSocialEvent } from './workflows';
+import { syncYoutubeComments } from './youtube-social';
 import { AppError, badRequest, notFound, systemCtx, type Ctx, type ServiceEnv } from './types';
 import { randomBytes } from 'node:crypto';
 
@@ -396,6 +397,7 @@ export async function syncSocialAccount(
     .from(providerConnections)
     .where(and(eq(providerConnections.id, connectionId), eq(providerConnections.orgId, ctx.orgId)));
   if (!c) throw notFound('Social account');
+  if (c.provider === 'youtube') return syncYoutubeComments(ctx, connectionId, overrides);
   return c.provider === 'facebook'
     ? syncFacebookPage(ctx, connectionId, overrides)
     : syncInstagramAccount(ctx, connectionId, overrides);

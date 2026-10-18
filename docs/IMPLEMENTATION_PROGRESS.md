@@ -87,3 +87,10 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - Evidence: `tests/integration/test/facebook.test.ts` with a fake Graph API (mock only). `pnpm test:integration` passed (116 passed).
 - STATUS: BLOCKED_EXTERNAL for live use until `FACEBOOK_APP_ID`/`FACEBOOK_APP_SECRET` are in `.env` and the redirect URI and Page webhook are configured in the Meta dashboard. See `docs/socials/FACEBOOK_SETUP.md`.
 - Not live-verified: OAuth, Page subscription, real webhook delivery, real sends.
+
+## YouTube comments (Socials)
+
+- Implemented: `youtube.force-ssl` opt-in ("Enable comments"), channel id resolution and verified auto-link, polled import of comment threads and your replies into the shared inbox (`source=YOUTUBE`, migration `0006_youtube_comments`), reply to top-level comments through the shared outbound pipeline (identity lock, owner-confirmed, idempotent, never retried).
+- Evidence: `tests/integration/test/youtube-comments.test.ts` with a fake YouTube API (mock only); full integration suite passed (119).
+- Not live-verified: Google consent, real comment listing, real replies. No DMs (not in the YouTube API). Moderation not built.
+- Also corrected the stale Facebook entry in the Socials platform catalog.

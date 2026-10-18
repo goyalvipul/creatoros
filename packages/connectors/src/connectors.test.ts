@@ -8,6 +8,7 @@ import {
   TikTokConnector,
   TodoConnector,
   buildGoogleAuthUrl,
+  readGoogleClientConfig,
   classifyHttpError,
   ensureFreshToken,
   generatePkce,
@@ -488,5 +489,36 @@ describe('social connectors never claim more than they can verify', () => {
     expect((await snap.getCapabilities(ctx)).state).toBe('UNSUPPORTED');
     await expect(snap.syncFull(ctx)).rejects.toBeInstanceOf(ConnectorError);
     expect((await CONNECTORS.manual.getCapabilities(ctx)).read).toBe(false);
+  });
+});
+
+describe('separate Google client for YouTube', () => {
+  const base = {
+    GOOGLE_CLIENT_ID: 'g-id',
+    GOOGLE_CLIENT_SECRET: 'g-secret',
+    GOOGLE_REDIRECT_URI: 'https://x/cb',
+  };
+  it('shares the Google client when no YouTube client is set', () => {
+    expect(readGoogleClientConfig(base, 'youtube')?.clientId).toBe('g-id');
+  });
+  it('uses its own client, never borrowing the Gmail secret, and falls back only for the redirect URI', () => {
+    const env = { ...base, YOUTUBE_GOOGLE_CLIENT_ID: 'y-id' };
+    expect(readGoogleClientConfig(env, 'youtube')).toEqual({
+      clientId: 'y-id',
+      clientSecret: undefined,
+      redirectUri: 'https://x/cb',
+    });
+    expect(
+      readGoogleClientConfig(
+        { ...env, YOUTUBE_GOOGLE_CLIENT_SECRET: 'y-secret', YOUTUBE_GOOGLE_REDIRECT_URI: 'https://y/cb' },
+        'youtube',
+      ),
+    ).toMatchObject({ clientSecret: 'y-secret', redirectUri: 'https://y/cb' });
+  });
+  it('leaves Gmail on the Google client', () => {
+    expect(readGoogleClientConfig({ ...base, YOUTUBE_GOOGLE_CLIENT_ID: 'y-id' }, 'gmail')?.clientId).toBe(
+      'g-id',
+    );
+    expect(readGoogleClientConfig({ ...base, YOUTUBE_GOOGLE_CLIENT_ID: 'y-id' })?.clientId).toBe('g-id');
   });
 });

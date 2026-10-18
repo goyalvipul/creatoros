@@ -30,7 +30,25 @@ export interface GoogleClientConfig {
   redirectUri: string;
 }
 
-export function readGoogleClientConfig(env: Record<string, string | undefined>): GoogleClientConfig | null {
+/**
+ * OAuth client for a Google-backed provider. YouTube may use its own client (YOUTUBE_GOOGLE_CLIENT_ID / _CLIENT_SECRET /
+ * _REDIRECT_URI) so it can belong to a different Google project/account than Gmail; the redirect URI falls back to
+ * GOOGLE_REDIRECT_URI (same callback path). Without YOUTUBE_GOOGLE_CLIENT_ID, YouTube shares the GOOGLE_* client.
+ * A client secret is never borrowed from the other client.
+ */
+export function readGoogleClientConfig(
+  env: Record<string, string | undefined>,
+  provider?: string,
+): GoogleClientConfig | null {
+  if (provider === 'youtube' && env.YOUTUBE_GOOGLE_CLIENT_ID) {
+    const redirectUri = env.YOUTUBE_GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT_URI;
+    if (!redirectUri) return null;
+    return {
+      clientId: env.YOUTUBE_GOOGLE_CLIENT_ID,
+      clientSecret: env.YOUTUBE_GOOGLE_CLIENT_SECRET || undefined,
+      redirectUri,
+    };
+  }
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) return null;
   return {
     clientId: env.GOOGLE_CLIENT_ID,

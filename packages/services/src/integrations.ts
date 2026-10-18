@@ -58,13 +58,14 @@ export function connectorContext(
   env: ServiceEnv,
   conn: Conn | null | undefined,
   overrides: Partial<ConnectorContext> = {},
+  provider?: string,
 ): ConnectorContext {
   return {
     fetch: (input, init) => fetch(input, init),
     now: () => Date.now(),
     credentials: loadCredentials(env, conn),
     config: {
-      googleClient: readGoogleClientConfig(env.processEnv) ?? undefined,
+      googleClient: readGoogleClientConfig(env.processEnv, conn?.provider ?? provider) ?? undefined,
       instagramClient: readInstagramClientConfig(env.processEnv) ?? undefined,
       ...(conn?.config ?? {}),
     },
@@ -147,7 +148,7 @@ export async function listIntegrations(ctx: Ctx, overrides: Partial<ConnectorCon
     const connector = getConnector(provider);
     let caps;
     try {
-      caps = await connector.getCapabilities(connectorContext(ctx.db, ctx.env, conn, overrides));
+      caps = await connector.getCapabilities(connectorContext(ctx.db, ctx.env, conn, overrides, provider));
     } catch (e) {
       caps = {
         provider,
@@ -207,7 +208,7 @@ export async function startOAuth(
 ) {
   if (provider === 'facebook') return startFacebookOAuth(ctx);
   const connector = getConnector(provider);
-  const cctx = connectorContext(ctx.db, ctx.env, null, overrides);
+  const cctx = connectorContext(ctx.db, ctx.env, null, overrides, provider);
   const res = await connector.connect(cctx, input);
   if (res.status !== 'REDIRECT' || !res.oauth)
     return { status: res.status, steps: res.steps ?? [], authorizeUrl: null };
@@ -255,10 +256,10 @@ export async function completeOAuth(
     );
   if (st.provider === 'instagram') return completeInstagramOAuth(db, env, st, input.code, overrides);
   if (st.provider === 'facebook') return completeFacebookOAuth(db, env, st, input.code, overrides);
-  const client = readGoogleClientConfig(env.processEnv);
+  const client = readGoogleClientConfig(env.processEnv, st.provider);
   if (!client)
     throw badRequest('Google OAuth client is not configured on the server.', undefined, 'NOT_CONFIGURED');
-  const cctx = connectorContext(db, env, null, overrides);
+  const cctx = connectorContext(db, env, null, overrides, st.provider);
   const creds = await exchangeGoogleCode(
     cctx,
     client,

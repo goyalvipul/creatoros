@@ -8,3 +8,4 @@ export * from './meta/instagram';
 export * from './todo';
 export * from './social';
 export * from './registry';
+export * from './meta/facebook';

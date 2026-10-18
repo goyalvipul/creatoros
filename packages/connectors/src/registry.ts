@@ -15,8 +15,12 @@ const tiktok = new TikTokConnector();
 const instagram = new InstagramLoginConnector();
 const facebook = new GatedConnector(
   'facebook',
-  ['Facebook Pages integration (Facebook Login) is not implemented yet.'],
-  ['Use manual publication records for Facebook Pages for now.'],
+  [
+    'Needs FACEBOOK_APP_ID and FACEBOOK_APP_SECRET (parent Meta app) in .env; then use Connect Facebook Page.',
+  ],
+  [
+    'Set FACEBOOK_APP_ID / FACEBOOK_APP_SECRET, add the Facebook Login redirect URI and the Page webhook (docs/socials/FACEBOOK_SETUP.md).',
+  ],
 );
 const threads = new GatedConnector(
   'threads',

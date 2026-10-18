@@ -109,6 +109,12 @@ export default function IntegrationsPage() {
                         <InstagramCard row={p} connect={connect} reload={reload} />
                       </li>
                     );
+                  if (p.provider === 'facebook')
+                    return (
+                      <li key={p.provider} className="md:col-span-2">
+                        <FacebookCard row={p} connect={connect} reload={reload} />
+                      </li>
+                    );
                   return (
                     <li key={p.provider}>
                       <Card className="h-full">
@@ -394,6 +400,140 @@ function InstagramCard({
       <div className="mt-3">
         <ActionButton variant="primary" onAction={() => connect('instagram')}>
           {accounts.length ? 'Connect another account' : 'Connect Instagram'}
+        </ActionButton>
+      </div>
+    </Card>
+  );
+}
+
+/** Facebook Pages: one block per connected Page. Messenger + Page comments, read and reply. Never tokens. */
+function FacebookCard({
+  row,
+  connect,
+  reload,
+}: {
+  row: any;
+  connect: (provider: string) => Promise<void>;
+  reload: () => unknown;
+}) {
+  const pages: any[] = row.connections ?? [];
+  const caps = row.capabilities;
+  return (
+    <Card>
+      <div className="flex items-start gap-2">
+        <h2 className="flex-1 font-semibold">Facebook Pages</h2>
+        <StateBadge state={row.state} />
+      </div>
+      <p className="mt-1 text-sm text-muted">
+        Read and reply to Messenger messages and comments on your Page posts. Nothing is sent until you press
+        send on a reply. Messenger replies are only possible within 24 hours of the person's last message.
+      </p>
+      {pages.length === 0 && caps.blockers?.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-muted">
+          {caps.blockers.map((b: string) => (
+            <li key={b}>{b}</li>
+          ))}
+        </ul>
+      )}
+      {pages.length === 0 && caps.setupSteps?.length > 0 && (
+        <details className="mt-2 text-sm">
+          <summary className="cursor-pointer text-accent">How to set this up</summary>
+          <ol className="mt-1 list-decimal space-y-1 pl-5 text-muted">
+            {caps.setupSteps.map((s: string) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+        </details>
+      )}
+      <ul className="mt-3 grid gap-3 md:grid-cols-2">
+        {pages.map((c) => {
+          const cfg = c.config ?? {};
+          const missing: string[] = cfg.webhook?.missing ?? [];
+          const sync = cfg.social?.sync;
+          return (
+            <li key={c.id} className="rounded-lg border border-border p-3">
+              <div className="flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{cfg.pageName ?? c.label}</p>
+                  <p className="truncate text-xs text-muted">
+                    Page ID {c.principalHint}
+                    {cfg.category ? ` · ${cfg.category}` : ''}
+                  </p>
+                </div>
+                <StateBadge state={c.state} />
+              </div>
+              {c.lastError && <p className="mt-2 text-sm text-bad">{c.lastError}</p>}
+              <IdentityLink connectionId={c.id} identity={c.identity} />
+              <p className="mt-2 text-xs text-muted">Granted: {(c.scopes ?? []).join(', ') || 'none'}</p>
+              {cfg.declinedPermissions?.length > 0 && (
+                <p className="mt-1 text-xs text-muted">
+                  Not granted: {cfg.declinedPermissions.join(', ')}. Reconnect and allow them.
+                </p>
+              )}
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                <Badge tone={cfg.webhook && missing.length === 0 ? 'ok' : 'neutral'}>
+                  {cfg.webhook
+                    ? missing.length === 0
+                      ? 'Webhooks subscribed'
+                      : `Webhooks missing: ${missing.join(', ')}`
+                    : 'Webhooks not checked'}
+                </Badge>
+                <span>Last sync: {c.lastSyncAt ? ago(c.lastSyncAt) : 'never'}</span>
+              </p>
+              {sync?.counts && (
+                <p className="mt-1 text-xs text-muted">
+                  Last import: {sync.counts.posts ?? 0} posts, {sync.counts.comments ?? 0} comments,{' '}
+                  {sync.counts.messages ?? 0} messages.
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <ActionButton
+                  variant="primary"
+                  onAction={async () => {
+                    await post(`/socials/accounts/${c.id}/sync`);
+                    await reload();
+                  }}
+                  success="Sync finished"
+                >
+                  Sync now
+                </ActionButton>
+                <ActionButton
+                  onAction={async () => {
+                    await post(`/socials/accounts/${c.id}/facebook/test`);
+                    await reload();
+                  }}
+                  success="Connection checked"
+                >
+                  Test
+                </ActionButton>
+                <ActionButton
+                  onAction={async () => {
+                    await post(`/socials/accounts/${c.id}/facebook/subscribe`);
+                    await reload();
+                  }}
+                  success="Webhooks subscribed"
+                >
+                  Subscribe webhooks
+                </ActionButton>
+                <ActionButton onAction={() => connect('facebook')}>Reconnect</ActionButton>
+                <ActionButton
+                  variant="danger"
+                  confirm="Disconnect this Page and delete the stored token? Imported messages stay."
+                  onAction={async () => {
+                    await post(`/connections/${c.id}/disconnect`, {});
+                    await reload();
+                  }}
+                >
+                  Disconnect
+                </ActionButton>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-3">
+        <ActionButton variant="primary" onAction={() => connect('facebook')}>
+          {pages.length ? 'Connect another Page' : 'Connect Facebook Page'}
         </ActionButton>
       </div>
     </Card>

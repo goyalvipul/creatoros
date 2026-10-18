@@ -12,12 +12,16 @@ import {
 } from '@creatoros/db';
 import {
   ConnectorError,
+  FACEBOOK_SCOPES,
   INSTAGRAM_SCOPES,
   listInstagramCommentsPage,
   listInstagramConversationPage,
   listInstagramMediaPage,
+  readFacebookClientConfig,
   readInstagramClientConfig,
+  replyToFacebookComment,
   replyToInstagramComment,
+  sendFacebookMessage,
   sendInstagramDm,
   type ConnectorContext,
 } from '@creatoros/connectors';
@@ -75,11 +79,31 @@ export type CapabilityStatus =
   | 'NOT_CONFIGURED';
 
 /** Honest per-account capability model. `AVAILABLE` only when the permission is granted AND the feature is built. */
+const fbClient = (env: ServiceEnv) => {
+  const c = readFacebookClientConfig({ ...env.processEnv, APP_BASE_URL: env.appBaseUrl });
+  if (!c) throw new ConnectorError('NOT_CONFIGURED', 'Facebook is not configured on the server.');
+  return c;
+};
+
 export function instagramCapabilities(conn: Conn, env: ServiceEnv) {
   const granted = conn.scopes ?? [];
   const live = conn.state === 'ACTIVE' || conn.state === 'PARTIAL_SYNC';
   const need = (scope: string): CapabilityStatus =>
     !live ? 'NEEDS_RECONNECT' : granted.includes(scope) ? 'AVAILABLE' : 'MISSING_PERMISSION';
+  if (conn.provider === 'facebook')
+    return {
+      readMessages: need(FACEBOOK_SCOPES.messaging),
+      sendMessages: need(FACEBOOK_SCOPES.messaging),
+      readComments: need(FACEBOOK_SCOPES.readContent),
+      replyComments: need(FACEBOOK_SCOPES.engagement),
+      webhooks: (readFacebookClientConfig({ ...env.processEnv, APP_BASE_URL: env.appBaseUrl })
+        ?.webhookVerifyToken
+        ? 'AVAILABLE'
+        : 'NOT_CONFIGURED') as CapabilityStatus,
+      publishing: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      insights: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      mentions: 'NOT_IMPLEMENTED' as CapabilityStatus,
+    };
   const webhooks: CapabilityStatus = readInstagramClientConfig(env.processEnv)?.webhookVerifyToken
     ? 'AVAILABLE'
     : 'NOT_CONFIGURED';
@@ -103,7 +127,7 @@ async function loadConnection(db: Db, orgId: string, id: string): Promise<Conn> 
     .select()
     .from(providerConnections)
     .where(and(eq(providerConnections.id, id), eq(providerConnections.orgId, orgId)));
-  if (!c || c.provider !== 'instagram') throw notFound('Social account');
+  if (!c || (c.provider !== 'instagram' && c.provider !== 'facebook')) throw notFound('Social account');
   return c;
 }
 
@@ -112,7 +136,12 @@ export async function listSocialAccounts(ctx: Ctx) {
   const conns = await ctx.db
     .select()
     .from(providerConnections)
-    .where(and(eq(providerConnections.orgId, ctx.orgId), eq(providerConnections.provider, 'instagram')));
+    .where(
+      and(
+        eq(providerConnections.orgId, ctx.orgId),
+        sql`${providerConnections.provider} in ('instagram','facebook')`,
+      ),
+    );
   const counts = rowsOf<{ id: string; need: number; unread: number }>(
     await ctx.db.execute(sql`
       select t.provider_connection_id as id,
@@ -132,7 +161,7 @@ export async function listSocialAccounts(ctx: Ctx) {
     await ctx.db.execute(sql`
       select a.provider_connection_id as conn, a.id, a.handle, c.name as channel, b.name as brand
       from social_accounts a join channels c on c.id = a.channel_id left join brands b on b.id = c.brand_id
-      where a.org_id = ${ctx.orgId} and a.deleted_at is null and a.provider_connection_id is not null and a.platform = 'instagram'`),
+      where a.org_id = ${ctx.orgId} and a.deleted_at is null and a.provider_connection_id is not null and a.platform in ('instagram','facebook')`),
   );
   const linkedByConn = new Map(linkedRows.map((r) => [r.conn, r]));
   return conns
@@ -142,7 +171,7 @@ export async function listSocialAccounts(ctx: Ctx) {
       const n = counts.find((x) => x.id === c.id);
       return {
         id: c.id,
-        platform: 'INSTAGRAM',
+        platform: c.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
         accountId: c.principalHint,
         username: cfg.username ?? null,
         label: c.label,
@@ -209,7 +238,7 @@ export async function ingestSocialEvent(ctx: Ctx, ev: SocialEvent) {
   const accountId = conn.principalHint;
   if (!accountId) throw badRequest('This connection has no provider account id; reconnect it.');
   const r = await ingestMessage(ctx, {
-    source: 'INSTAGRAM',
+    source: conn.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
     principal: accountId,
     providerThreadId: ev.providerThreadId,
     providerMsgId: ev.providerMsgId,
@@ -278,6 +307,8 @@ const MAX_PAGES = 4;
  * that does not count against MAX_PAGES.
  */
 const MAX_EMPTY_COMMENT_PAGES = 12;
+/** Busy posts have thousands of comments: read up to 40 pages of 50 per post and run (a post is only marked synced when its list ended). */
+const MAX_COMMENT_PAGES = 40;
 const MAX_EMPTY_CONVERSATION_PAGES = 60;
 const MAX_COMMENT_MEDIA = 30;
 
@@ -378,8 +409,8 @@ export async function syncInstagramAccount(
         let after: string | null = null;
         let dataPages = 0;
         let emptyPages = 0;
-        while (dataPages < MAX_PAGES && emptyPages < MAX_EMPTY_COMMENT_PAGES) {
-          const p = await listInstagramCommentsPage(cctx, m.provider_media_id, { after }, version);
+        while (dataPages < MAX_COMMENT_PAGES && emptyPages < MAX_EMPTY_COMMENT_PAGES) {
+          const p = await listInstagramCommentsPage(cctx, m.provider_media_id, { after, limit: 50 }, version);
           if (p.items.length) dataPages += 1;
           else emptyPages += 1;
           for (const c of p.items) {
@@ -756,7 +787,7 @@ export async function sendOutbound(
   if (!thread || !conn) return fail('FAILED', 'Conversation or account no longer exists.');
   // identity lock: every link in the chain must agree
   if (
-    conn.provider !== 'instagram' ||
+    (conn.provider !== 'instagram' && conn.provider !== 'facebook') ||
     thread.providerConnectionId !== conn.id ||
     thread.principal !== row0.providerAccountId ||
     conn.principalHint !== row0.providerAccountId ||
@@ -773,7 +804,7 @@ export async function sendOutbound(
   const elig = sendEligibility(thread, conn, new Date(), env);
   if (!elig.canSend) return fail('FAILED', elig.reasons.join(' '));
   if (conn.expiresAt && conn.expiresAt.getTime() < Date.now())
-    return fail('FAILED', 'The Instagram token has expired. Reconnect the account.');
+    return fail('FAILED', 'The access token has expired. Reconnect the account.');
 
   const cctx = connectorContext(db, env, conn, overrides);
   const version = readInstagramClientConfig(env.processEnv)?.graphVersion;
@@ -787,11 +818,23 @@ export async function sendOutbound(
         .orderBy(desc(messages.receivedAt))
         .limit(1);
       if (!last?.providerMsgId) return fail('FAILED', 'No comment to reply to.');
-      ({ providerMessageId } = await replyToInstagramComment(
-        cctx,
-        { commentId: last.providerMsgId, text: row0.body },
-        version,
-      ));
+      if (conn.provider === 'facebook')
+        ({ providerMessageId } = await replyToFacebookComment(cctx, fbClient(env), {
+          commentId: last.providerMsgId,
+          text: row0.body,
+        }));
+      else
+        ({ providerMessageId } = await replyToInstagramComment(
+          cctx,
+          { commentId: last.providerMsgId, text: row0.body },
+          version,
+        ));
+    } else if (conn.provider === 'facebook') {
+      ({ providerMessageId } = await sendFacebookMessage(cctx, fbClient(env), {
+        pageId: row0.providerAccountId,
+        recipientId: row0.recipientId,
+        text: row0.body,
+      }));
     } else {
       ({ providerMessageId } = await sendInstagramDm(
         cctx,
@@ -806,7 +849,7 @@ export async function sendOutbound(
       .returning();
     // record it in the conversation so state becomes WAITING and the reply shows in the history
     await ingestMessage(systemCtx({ db, env }, row0.orgId), {
-      source: 'INSTAGRAM',
+      source: conn.provider === 'facebook' ? 'FACEBOOK' : 'INSTAGRAM',
       principal: row0.providerAccountId,
       providerThreadId: thread.providerThreadId,
       providerMsgId: providerMessageId ?? `out:${row0.id}`,

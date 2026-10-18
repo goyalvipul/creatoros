@@ -7,6 +7,7 @@ import {
   listConnectionsForSync,
   markStaleDevicesOffline,
   notify,
+  processFacebookWebhookEvents,
   processMetaWebhookEvents,
   processOutbox,
   pruneBackups,
@@ -18,7 +19,7 @@ import {
   runSync,
   snapshotAnalytics,
   syncDueTaskLinks,
-  syncInstagramAccount,
+  syncSocialAccount,
   systemCtx,
   verifyBackup,
   type ConnectorOverrides,
@@ -199,13 +200,13 @@ export async function jobMaintenance(d: WorkerDeps) {
 export async function jobSocialSync(d: WorkerDeps) {
   const rows = rowsOf<{ id: string; org_id: string }>(
     await d.db.execute(
-      sql`select id, org_id from provider_connections where provider = 'instagram' and state in ('ACTIVE','PARTIAL_SYNC') and encrypted_token_ref is not null`,
+      sql`select id, org_id from provider_connections where provider in ('instagram','facebook') and state in ('ACTIVE','PARTIAL_SYNC') and encrypted_token_ref is not null`,
     ),
   );
   const out = { accounts: rows.length, ok: 0, failed: 0 };
   for (const r of rows) {
     try {
-      await syncInstagramAccount(systemCtx({ db: d.db, env: d.env }, r.org_id), r.id, d.overrides);
+      await syncSocialAccount(systemCtx({ db: d.db, env: d.env }, r.org_id), r.id, d.overrides);
       out.ok += 1;
     } catch {
       out.failed += 1;
@@ -219,7 +220,10 @@ export const JOB_TABLE = {
   events: jobEvents,
   actions: jobActions,
   'social-sync': jobSocialSync,
-  'social-events': (d: WorkerDeps) => processMetaWebhookEvents(d.db, d.env, d.overrides),
+  'social-events': async (d: WorkerDeps) => ({
+    instagram: await processMetaWebhookEvents(d.db, d.env, d.overrides),
+    facebook: await processFacebookWebhookEvents(d.db, d.env, d.overrides),
+  }),
   'sync-fast': (d: WorkerDeps) => jobSync(d, 'fast'),
   'sync-slow': (d: WorkerDeps) => jobSync(d, 'slow'),
   backup: (d: WorkerDeps) => jobBackup(d, 'scheduled'),

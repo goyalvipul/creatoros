@@ -10,6 +10,9 @@ import {
   runSync,
   instagramDiagnosticsSummary,
   runInstagramDiagnostics,
+  subscribeFacebookPageWebhooks,
+  syncSocialAccount,
+  testFacebookPage,
   subscribeInstagramWebhooks,
   syncInstagramAccount,
   createThreadCollaboration,
@@ -105,7 +108,7 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       role: 'EDITOR',
       params: idParam,
     },
-    ({ ctx, params }) => syncInstagramAccount(ctx, params.id, ov()),
+    ({ ctx, params }) => syncSocialAccount(ctx, params.id, ov()),
   );
 
   route(
@@ -132,6 +135,29 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       await runInstagramDiagnostics(ctx, params.id, ov());
       return instagramDiagnosticsSummary(ctx, params.id);
     },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/accounts/:id/facebook/subscribe',
+      tag: 'Socials',
+      summary:
+        'Subscribe the Facebook Page to messages and feed webhooks (Meta-side list only; nothing is sent)',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => subscribeFacebookPageWebhooks(ctx, params.id, ov()),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/accounts/:id/facebook/test',
+      tag: 'Socials',
+      summary: 'Read-only check that the stored Page token works',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    ({ ctx, params }) => testFacebookPage(ctx, params.id, ov()),
   );
   route(
     {

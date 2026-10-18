@@ -6,8 +6,9 @@ type Conn = typeof providerConnections.$inferSelect;
 type Acct = typeof socialAccounts.$inferSelect;
 
 /** Providers whose connections must map to exactly one Channels > social account to import posts. */
-const PLATFORM_OF: Record<string, 'instagram' | 'youtube' | 'tiktok'> = {
+const PLATFORM_OF: Record<string, 'instagram' | 'facebook' | 'youtube' | 'tiktok'> = {
   instagram: 'instagram',
+  facebook: 'facebook',
   meta: 'instagram',
   youtube: 'youtube',
   tiktok: 'tiktok',
@@ -23,7 +24,8 @@ export function connectionIdentity(conn: Conn) {
   const platform = PLATFORM_OF[conn.provider];
   if (!platform) return null;
   const cfg = (conn.config ?? {}) as Record<string, any>;
-  const verifiedId = conn.provider === 'instagram' ? (conn.principalHint ?? null) : null;
+  const verifiedId =
+    conn.provider === 'instagram' || conn.provider === 'facebook' ? (conn.principalHint ?? null) : null;
   const username = typeof cfg.username === 'string' && cfg.username ? cfg.username : null;
   return { platform, verifiedId, username };
 }

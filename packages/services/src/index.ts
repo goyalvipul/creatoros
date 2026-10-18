@@ -27,3 +27,4 @@ export * from './workflows';
 export * from './socials-ops';
 export * from './instagram-diagnostics';
 export * from './identity';
+export * from './facebook';

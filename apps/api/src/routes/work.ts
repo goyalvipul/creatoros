@@ -20,6 +20,7 @@ import {
   changeDealStage,
   completeAction,
   completeOAuth,
+  receiveFacebookWebhook,
   receiveInstagramWebhook,
   verifyMetaHandshake,
   connectorContext,
@@ -729,7 +730,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       tag: 'Integrations',
       summary: 'Begin OAuth (PKCE). Returns the consent URL; nothing is connected until you approve.',
       role: 'OWNER',
-      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram']) }),
+      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram', 'facebook']) }),
       body: z.object({
         publish: z.boolean().optional(),
         comments: z.boolean().optional(),
@@ -766,6 +767,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   app.get('/integrations/oauth/callback', oauthCallbackSchema, oauthCallback);
   // Instagram Login has its own redirect URI, separate from the Google one and from the webhook.
   app.get('/integrations/meta/instagram/callback', oauthCallbackSchema, oauthCallback);
+  app.get('/integrations/meta/facebook/callback', oauthCallbackSchema, oauthCallback);
 
   // Meta webhooks: separate from OAuth. Handshake echoes hub.challenge; deliveries are HMAC-verified over the raw body.
   app.get(
@@ -814,6 +816,60 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
             hasSignature: Boolean(req.headers['x-hub-signature-256']),
           },
           'meta webhook rejected',
+        );
+        throw e;
+      }
+    },
+  );
+  // Facebook Page webhooks: same handshake token, but deliveries are signed with the PARENT Meta app secret.
+  app.get(
+    '/integrations/meta/facebook/webhook',
+    { schema: { tags: ['Integrations'], summary: 'Facebook Page webhook verification handshake' } },
+    async (req, reply) => {
+      const q = z
+        .object({
+          'hub.mode': z.string().max(50).optional(),
+          'hub.verify_token': z.string().max(500).optional(),
+          'hub.challenge': z.string().max(500).optional(),
+        })
+        .parse(req.query);
+      const challenge = verifyMetaHandshake(env, {
+        mode: q['hub.mode'],
+        verifyToken: q['hub.verify_token'],
+        challenge: q['hub.challenge'],
+      });
+      return reply.type('text/plain').send(challenge);
+    },
+  );
+  app.post(
+    '/integrations/meta/facebook/webhook',
+    {
+      bodyLimit: 256 * 1024,
+      schema: { tags: ['Integrations'], summary: 'Facebook Page webhook delivery (signed)' },
+    },
+    async (req, reply) => {
+      const raw = typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody) ? req.rawBody : '';
+      try {
+        const r = await receiveFacebookWebhook(
+          db,
+          env,
+          raw,
+          req.headers['x-hub-signature-256'] as string | undefined,
+        );
+        req.log.info(
+          { received: r.received, stored: r.stored, duplicates: r.duplicates },
+          'facebook webhook accepted',
+        );
+        return reply.send({ data: r, meta: {}, error: null });
+      } catch (e) {
+        req.log.warn(
+          {
+            code: (e as any)?.code,
+            status: (e as any)?.status,
+            bytes: Buffer.byteLength(raw),
+            hasSignature: Boolean(req.headers['x-hub-signature-256']),
+          },
+          'facebook webhook rejected',
         );
         throw e;
       }

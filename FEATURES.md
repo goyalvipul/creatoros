@@ -81,3 +81,5 @@ Each provider is built to its documented contract and always reports one of `ACT
 | AI features                                                                                                | Limited | Rules-based only (priorities, screening, similarity). The provider interface exists for a model later, none is called.                     |
 | Socials: identity-locked multi-account Instagram inbox, DM and comment replies                             | Limited | Verified against fake responses only; no live Meta call made, endpoints unverified. Facebook, Threads, TikTok, YouTube comments not built. |
 | Workflows: draft / approval / automatic reply rules, approval queue, simulation, kill switch               | Limited | Automatic needs a passing test, per-account opt-in and activation. No drag-and-drop canvas, delays or AI nodes.                            |
+
+| Facebook Page Messenger + comments (read, reply) | Implemented, mock-tested; requires credentials and Meta dashboard setup (`docs/socials/FACEBOOK_SETUP.md`) |

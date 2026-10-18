@@ -80,3 +80,10 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - Applied live: @mehakviking account `064daec5...` linked to its connection (verified id stored), 64 posts imported, repeat import is a no-op.
 - Tests: `tests/integration/test/identity-link.test.ts` (mock Instagram). Live evidence is the CLI run above (`instagram-link.js`).
 - Still blocked externally: comments and DMs return 0 records (likely Meta app access level / App Review); no webhook POST received yet.
+
+## Facebook Pages (Messenger + Page comments)
+
+- Implemented: Facebook Login connect (one connection per Page, encrypted Page token), webhook subscription, historical sync (posts, comments, Messenger), signed Page webhook (`/api/v1/integrations/meta/facebook/webhook`, parent app secret), reply to DMs and comments through the shared outbound pipeline (identity lock, idempotent, owner-confirmed).
+- Evidence: `tests/integration/test/facebook.test.ts` with a fake Graph API (mock only). `pnpm test:integration` passed (116 passed).
+- STATUS: BLOCKED_EXTERNAL for live use until `FACEBOOK_APP_ID`/`FACEBOOK_APP_SECRET` are in `.env` and the redirect URI and Page webhook are configured in the Meta dashboard. See `docs/socials/FACEBOOK_SETUP.md`.
+- Not live-verified: OAuth, Page subscription, real webhook delivery, real sends.

@@ -34,6 +34,7 @@ import {
   needsAccountLink,
   unlinkAccount,
 } from './identity';
+import { completeFacebookOAuth, startFacebookOAuth } from './facebook';
 import { audit, emit } from './audit';
 import { decrypt, decryptJson, encrypt, encryptJson, sha256Hex } from './crypto';
 import { importPublications } from './publishing';
@@ -192,7 +193,7 @@ async function setState(db: Db, conn: Conn, state: Conn['state'], lastError: str
 
 export async function startOAuth(
   ctx: Ctx,
-  provider: 'gmail' | 'youtube' | 'instagram',
+  provider: 'gmail' | 'youtube' | 'instagram' | 'facebook',
   input: {
     drafts?: boolean;
     analytics?: boolean;
@@ -204,6 +205,7 @@ export async function startOAuth(
   } = {},
   overrides: Partial<ConnectorContext> = {},
 ) {
+  if (provider === 'facebook') return startFacebookOAuth(ctx);
   const connector = getConnector(provider);
   const cctx = connectorContext(ctx.db, ctx.env, null, overrides);
   const res = await connector.connect(cctx, input);
@@ -252,6 +254,7 @@ export async function completeOAuth(
       'OAUTH_DENIED',
     );
   if (st.provider === 'instagram') return completeInstagramOAuth(db, env, st, input.code, overrides);
+  if (st.provider === 'facebook') return completeFacebookOAuth(db, env, st, input.code, overrides);
   const client = readGoogleClientConfig(env.processEnv);
   if (!client)
     throw badRequest('Google OAuth client is not configured on the server.', undefined, 'NOT_CONFIGURED');

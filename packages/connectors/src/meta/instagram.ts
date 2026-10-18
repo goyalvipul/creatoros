@@ -531,6 +531,28 @@ export function parseInstagramWebhookEntry(entry: any): {
       link: null,
     });
   }
+  // Some deliveries (including the dashboard's Test button) carry DMs as changes[field=messages] instead of messaging[].
+  for (const ch of entry.changes ?? []) {
+    const v = ch?.value;
+    if (ch?.field !== 'messages' || !v?.message?.mid || v.message.is_deleted) continue;
+    const echo = Boolean(v.message.is_echo);
+    const participant = String(echo ? v.recipient?.id : v.sender?.id);
+    if (!participant || participant === 'undefined') continue;
+    out.push({
+      accountId,
+      mediaId: null,
+      kind: 'DM',
+      providerThreadId: `dm:${participant}`,
+      providerMsgId: String(v.message.mid),
+      participantId: participant,
+      participantName: null,
+      direction: echo ? 'OUTBOUND' : 'INBOUND',
+      text: typeof v.message.text === 'string' ? v.message.text : '',
+      hasMedia: Array.isArray(v.message.attachments) && v.message.attachments.length > 0,
+      receivedAt: new Date(Number(v.timestamp) || Number(entry.time) * 1000 || Date.now()),
+      link: null,
+    });
+  }
   for (const ch of entry.changes ?? []) {
     const v = ch?.value;
     if (ch?.field !== 'comments' || !v?.id) continue;

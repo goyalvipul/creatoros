@@ -290,3 +290,31 @@ describe('Meta webhooks', () => {
     await expect(receiveInstagramWebhook(h.db, env, big, sign(big))).rejects.toMatchObject({ status: 413 });
   });
 });
+
+describe('webhook entry shapes', () => {
+  it('parses DMs delivered as changes[field=messages] as well as messaging[]', async () => {
+    const { parseInstagramWebhookEntry } = await import('@creatoros/connectors');
+    const ev = parseInstagramWebhookEntry({
+      id: '178',
+      time: 1792285164,
+      changes: [
+        {
+          field: 'messages',
+          value: {
+            sender: { id: 'u1' },
+            recipient: { id: '178' },
+            timestamp: '1792285164',
+            message: { mid: 'm-1', text: 'hi' },
+          },
+        },
+      ],
+    });
+    expect(ev).toHaveLength(1);
+    expect(ev[0]).toMatchObject({
+      kind: 'DM',
+      providerMsgId: 'm-1',
+      participantId: 'u1',
+      direction: 'INBOUND',
+    });
+  });
+});

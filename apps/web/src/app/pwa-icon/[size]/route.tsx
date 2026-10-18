@@ -4,7 +4,7 @@ export const dynamic = 'force-static';
 
 export async function GET(_req: Request, ctx: { params: Promise<{ size: string }> }) {
   const { size } = await ctx.params;
-  const px = size === '512' ? 512 : 192;
+  const px = size === '1024' ? 1024 : size === '512' ? 512 : 192;
   return new ImageResponse(
     <div
       style={{
@@ -27,5 +27,5 @@ export async function GET(_req: Request, ctx: { params: Promise<{ size: string }
 }
 
 export function generateStaticParams() {
-  return [{ size: '192' }, { size: '512' }];
+  return [{ size: '192' }, { size: '512' }, { size: '1024' }];
 }

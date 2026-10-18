@@ -95,6 +95,20 @@ export function providerAccountId(conn: Pick<Conn, 'provider' | 'principalHint' 
 
 const YT_COMMENTS_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
 
+/** Human name of the connected account: @username (Instagram), Page name (Facebook), channel title (YouTube). */
+export function accountDisplayName(c: Pick<Conn, 'provider' | 'label' | 'config'>): string {
+  const cfg = (c.config ?? {}) as any;
+  const n =
+    c.provider === 'youtube'
+      ? cfg.youtube?.title
+      : c.provider === 'facebook'
+        ? cfg.pageName
+        : cfg.username
+          ? `@${cfg.username}`
+          : null;
+  return n || c.label || 'Account';
+}
+
 export const sourceOf = (conn: Pick<Conn, 'provider'>) =>
   conn.provider === 'facebook' ? 'FACEBOOK' : conn.provider === 'youtube' ? 'YOUTUBE' : 'INSTAGRAM';
 
@@ -198,6 +212,7 @@ export async function listSocialAccounts(ctx: Ctx) {
         platform: c.provider === 'facebook' ? 'FACEBOOK' : c.provider === 'youtube' ? 'YOUTUBE' : 'INSTAGRAM',
         accountId: providerAccountId(c),
         username: cfg.username ?? null,
+        displayName: accountDisplayName(c),
         label: c.label,
         profilePictureUrl: cfg.profilePictureUrl ?? null,
         state: c.state,
@@ -605,7 +620,9 @@ export async function listSocialThreads(
     await ctx.db.execute(sql`
       select t.id, t.source as platform, t.kind, t.state, t.priority, t.labels, t.opted_out as "optedOut", t.starred, t.archived_local as "archivedLocal", t.follow_up_at as "followUpAt",
              t.provider_connection_id as "connectionId", t.principal as "accountId", c.label as "accountLabel",
-             c.config->>'username' as "accountUsername", t.participant_id as "participantId", t.participant_name as "participantName",
+             c.config->>'username' as "accountUsername",
+             coalesce(case c.provider when 'youtube' then c.config->'youtube'->>'title' when 'facebook' then c.config->>'pageName' else '@' || (c.config->>'username') end, c.label) as "accountName",
+             t.participant_id as "participantId", t.participant_name as "participantName",
              t.last_inbound_at as "lastInboundAt", t.last_outbound_at as "lastOutboundAt", t.opportunity_id as "opportunityId",
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview,
              (select i.caption from social_media_items i where i.connection_id = t.provider_connection_id and i.provider_media_id = t.provider_media_id) as "mediaCaption",
@@ -711,6 +728,7 @@ export async function getSocialThread(ctx: Ctx, id: string) {
           connectionId: conn.id,
           accountId: t.principal,
           username: cfg.username ?? null,
+          displayName: accountDisplayName(conn),
           label: conn.label,
           state: conn.state,
         }

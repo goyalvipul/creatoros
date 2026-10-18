@@ -195,7 +195,7 @@ export async function socialsOverview(ctx: Ctx, q: OverviewQuery = {}) {
   const needsReply = rowsOf<any>(
     await ctx.db.execute(sql`
       select t.id, t.participant_name as "participantName", t.kind, t.last_inbound_at as "lastInboundAt",
-             c.config->>'username' as "accountUsername",
+             c.config->>'username' as "accountUsername", coalesce(case c.provider when 'youtube' then c.config->'youtube'->>'title' when 'facebook' then c.config->>'pageName' else '@' || (c.config->>'username') end, c.label) as "accountName", c.provider::text as "accountProvider",
              (select m.body_preview from messages m where m.thread_id = t.id order by m.received_at desc limit 1) as preview
       from conversation_threads t left join provider_connections c on c.id = t.provider_connection_id
       where t.org_id = ${ctx.orgId} and t.state = 'NEED_REPLY' and not t.archived_local and t.merged_into_id is null
@@ -204,7 +204,7 @@ export async function socialsOverview(ctx: Ctx, q: OverviewQuery = {}) {
   );
   const leads = rowsOf<any>(
     await ctx.db.execute(sql`
-      select t.id, t.participant_name as "participantName", t.opportunity_id as "opportunityId", c.config->>'username' as "accountUsername", t.last_inbound_at as "lastInboundAt"
+      select t.id, t.participant_name as "participantName", t.opportunity_id as "opportunityId", c.config->>'username' as "accountUsername", coalesce(case c.provider when 'youtube' then c.config->'youtube'->>'title' when 'facebook' then c.config->>'pageName' else '@' || (c.config->>'username') end, c.label) as "accountName", c.provider::text as "accountProvider", t.last_inbound_at as "lastInboundAt"
       from conversation_threads t left join provider_connections c on c.id = t.provider_connection_id
       where t.org_id = ${ctx.orgId} and t.opportunity_id is not null and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE') ${conn}
       order by t.last_inbound_at desc nulls last limit 8`),

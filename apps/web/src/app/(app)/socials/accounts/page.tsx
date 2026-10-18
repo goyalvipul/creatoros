@@ -1,5 +1,6 @@
 'use client';
 
+import { accountLabel } from '@/lib/social-label';
 import Link from 'next/link';
 import { useState } from 'react';
 import {
@@ -69,9 +70,10 @@ export default function SocialAccountsPage() {
                 <Card>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-medium">@{a.username ?? a.accountId}</p>
+                      <p className="font-medium">{accountLabel(a)}</p>
                       <p className="text-xs text-muted">
-                        Instagram · account id {a.accountId} · {titleCase(a.state)}
+                        {a.platform === 'INSTAGRAM' ? 'Instagram' : titleCase(a.platform)} · account id{' '}
+                        {a.accountId} · {titleCase(a.state)}
                       </p>
                     </div>
                     <div className="flex gap-1">

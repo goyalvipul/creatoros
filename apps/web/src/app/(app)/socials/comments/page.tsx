@@ -1,5 +1,6 @@
 'use client';
 
+import { accountLabel } from '@/lib/social-label';
 import Link from 'next/link';
 import { Async, Badge, EmptyState, PageHeader } from '@/components/ui';
 import { useApi } from '@/lib/api';
@@ -29,7 +30,7 @@ export default function CommentsPage() {
                 <Link href={`/socials/inbox?thread=${t.id}`} className="block px-3 py-2 hover:bg-panel2">
                   <div className="flex items-center gap-2">
                     <span className="font-medium">{t.participantName ?? t.participantId}</span>
-                    <Badge>@{t.accountUsername ?? t.accountId}</Badge>
+                    <Badge>{accountLabel(t)}</Badge>
                     <Badge tone={t.state === 'NEED_REPLY' ? 'warn' : 'neutral'}>{titleCase(t.state)}</Badge>
                   </div>
                   {t.mediaCaption && <div className="truncate text-xs text-muted">On: {t.mediaCaption}</div>}

@@ -1,5 +1,6 @@
 'use client';
 
+import { accountLabel } from '@/lib/social-label';
 import Link from 'next/link';
 import { Async, Badge, EmptyState, PageHeader } from '@/components/ui';
 import { useApi } from '@/lib/api';
@@ -27,7 +28,7 @@ export default function LeadsPage() {
               <li key={t.id}>
                 <Link href={`/socials/inbox?thread=${t.id}`} className="block px-3 py-2 hover:bg-panel2">
                   <span className="font-medium">{t.participantName ?? t.participantId}</span>{' '}
-                  <Badge>@{t.accountUsername ?? t.accountId}</Badge>{' '}
+                  <Badge>{accountLabel(t)}</Badge>{' '}
                   {t.opportunityId ? (
                     <Badge tone="ok">Confirmed lead</Badge>
                   ) : (

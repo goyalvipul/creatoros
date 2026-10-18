@@ -18,6 +18,7 @@ import {
 } from '@/components/ui';
 import { patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase, when } from '@/lib/format';
+import { accountLabel } from '@/lib/social-label';
 
 function Inbox() {
   const params = useSearchParams();
@@ -48,7 +49,8 @@ function Inbox() {
           <option value="">All accounts</option>
           {(accounts.data ?? []).map((a) => (
             <option key={a.id} value={a.id}>
-              @{a.username ?? a.accountId}
+              {accountLabel(a)}
+              {a.linked?.channel ? ` (${a.linked.channel})` : ''}
             </option>
           ))}
         </Select>
@@ -113,7 +115,7 @@ function Inbox() {
                       </div>
                       <div className="truncate text-xs text-muted">{t.preview}</div>
                       <div className="mt-1 flex flex-wrap gap-1 text-[11px] text-muted">
-                        <Badge>@{t.accountUsername ?? t.accountId}</Badge>
+                        <Badge>{accountLabel(t)}</Badge>
                         <Badge tone={t.state === 'NEED_REPLY' ? 'warn' : 'neutral'}>
                           {titleCase(t.state)}
                         </Badge>
@@ -233,7 +235,9 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
             <div>
               <span className="text-muted">Reply as</span>{' '}
               <strong>
-                {t.replyAs ? `@${t.replyAs.username ?? t.replyAs.accountId}` : 'account disconnected'}
+                {t.replyAs
+                  ? (t.replyAs.displayName ?? `@${t.replyAs.username ?? t.replyAs.accountId}`)
+                  : 'account disconnected'}
               </strong>
             </div>
             <div>

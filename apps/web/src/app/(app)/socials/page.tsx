@@ -1,5 +1,6 @@
 'use client';
 
+import { accountLabel } from '@/lib/social-label';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Async, Badge, Button, Card, CardTitle, EmptyState, PageHeader, Select, Stat } from '@/components/ui';
@@ -27,7 +28,8 @@ export default function SocialsOverview() {
           <option value="">All accounts</option>
           {(accounts.data ?? []).map((a) => (
             <option key={a.id} value={a.id}>
-              Instagram @{a.username ?? a.accountId}
+              {accountLabel(a)}
+              {a.linked?.channel ? ` (${a.linked.channel})` : ''}
             </option>
           ))}
         </Select>
@@ -78,7 +80,8 @@ export default function SocialsOverview() {
                           >
                             {t.participantName}
                           </Link>{' '}
-                          <Badge>@{t.accountUsername}</Badge> <Badge>{titleCase(t.kind)}</Badge>
+                          <Badge>{t.accountName ?? `@${t.accountUsername}`}</Badge>{' '}
+                          <Badge>{titleCase(t.kind)}</Badge>
                           <div className="truncate text-xs text-muted">
                             {t.preview} · {ago(t.lastInboundAt)}
                           </div>
@@ -101,7 +104,7 @@ export default function SocialsOverview() {
                           >
                             {t.participantName}
                           </Link>{' '}
-                          <Badge>@{t.accountUsername}</Badge>
+                          <Badge>{t.accountName ?? `@${t.accountUsername}`}</Badge>
                         </li>
                       ))}
                     </ul>

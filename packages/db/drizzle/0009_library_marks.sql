@@ -1,0 +1,6 @@
+-- Library marks / orientation / extra / pending (0009)
+-- No schema changes needed:
+--   * Width/height come from file_instances.tech (ffprobe) — already stored.
+--   * Marks use existing media_tags + file_tag_links (file_instance_id keyed).
+-- This migration is a placeholder to keep the journal linear; the SQL is a no-op.
+-- CREATE INDEX IF NOT EXISTS "file_instances_tech_jsonb_idx" ON "file_instances" USING GIN ("tech");

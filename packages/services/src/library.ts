@@ -12,13 +12,15 @@ const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 export interface LibraryQuery {
   q?: string;
   kind?: string;
-  /** Filter on the *effective* availability (what the owner can actually open right now). */
   availability?: string;
   rootId?: string;
   deviceId?: string;
   tagId?: string;
   linked?: boolean;
   duplicates?: boolean;
+  orientation?: string; // landscape | portrait | square | unknown
+  pending?: string; // youtube | instagram | tiktok
+  extra?: string; // exclude | include | only
   limit?: number;
   cursor?: string;
 }
@@ -30,6 +32,54 @@ export const EFFECTIVE_AVAILABILITY = sql`case
   when r.state = 'UNREACHABLE' then 'ROOT_UNREACHABLE'
   when d.state in ('OFFLINE','PENDING') then 'DEVICE_OFFLINE'
   else f.availability::text end`;
+
+/** Orientation computed from width/height in tech jsonb (rotation 90/270 swaps). */
+export const ORIENTATION_SQL = sql`case
+  when (f.tech->>'width') is not null and (f.tech->>'height') is not null
+       and ((f.tech->>'width')::int) > 0 and ((f.tech->>'height')::int) > 0
+  then case
+    when (f.tech->>'rotation')::int in (90,270)
+    then case
+      when ((f.tech->>'height')::int) > ((f.tech->>'width')::int) then 'LANDSCAPE'
+      when ((f.tech->>'width')::int) > ((f.tech->>'height')::int) then 'PORTRAIT'
+      else 'SQUARE'
+    end
+    else case
+      when ((f.tech->>'width')::int) > ((f.tech->>'height')::int) then 'LANDSCAPE'
+      when ((f.tech->>'height')::int) > ((f.tech->>'width')::int) then 'PORTRAIT'
+      else 'SQUARE'
+    end
+  end
+  else 'UNKNOWN' end`;
+
+function tagExistsSql(alias: string, name: string) {
+  return sql`exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
+    where t.file_instance_id = ${alias}.id and mt.org_id = ${ctxOrgPlaceholder} and lower(mt.name) = lower(${name}))`;
+}
+
+// shared org placeholder resolved at call time below via closures
+export const extraExcludeSql = (orgId: string) => sql`not exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
+  where t.file_instance_id = f.id and mt.org_id = ${orgId} and lower(mt.name) = 'extra')`;
+
+export function orientationSql() {
+  return ORIENTATION_SQL;
+}
+
+export function pendingSql(platform: string, orgId: string) {
+  return sql`not exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
+    where t.file_instance_id = f.id and mt.org_id = ${orgId} and lower(mt.name) = lower(${`uploaded:${platform}`}))
+    and not exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
+    where t.file_instance_id = f.id and mt.org_id = ${orgId} and lower(mt.name) = 'extra')`;
+}
+
+export function extraSql(mode: string, orgId: string) {
+  if (mode === 'exclude') return extraExcludeSql(orgId);
+  if (mode === 'only') {
+    return sql`exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
+      where t.file_instance_id = f.id and mt.org_id = ${orgId} and lower(mt.name) = 'extra')`;
+  }
+  return sql`true`; // include
+}
 
 export interface CopyPaths {
   local: string;
@@ -76,7 +126,9 @@ const FILE_SELECT = sql`
   r.display_path as "rootPath", r.smb_path as "rootSmb", r.mount_path as "rootMount", r.path_os as "rootOs",
   exists(select 1 from derived_previews p where p.file_instance_id = f.id and p.status = 'READY') as "hasPreview",
   (select count(*)::int from file_instances c where c.media_object_id = f.media_object_id and f.media_object_id is not null and c.id <> f.id and c.archived_at is null) as "otherCopies",
-  (select count(*)::int from asset_file_links l where l.file_instance_id = f.id) as "assetLinks"`;
+  (select count(*)::int from asset_file_links l where l.file_instance_id = f.id) as "assetLinks",
+  (f.tech->>'width')::int as "techWidth",
+  (f.tech->>'height')::int as "techHeight"`;
 
 function shapeFile(r: any) {
   const copy = copyPathsFor(r, {
@@ -90,7 +142,18 @@ function shapeFile(r: any) {
   void rootSmb;
   void rootMount;
   void rootOs;
-  return { ...rest, copyPaths: copy };
+
+  // Compute orientation from width/height (ffprobe stores in tech)
+  let orientation = 'UNKNOWN';
+  const width = Number(r.techWidth);
+  const height = Number(r.techHeight);
+  if (!Number.isNaN(width) && !Number.isNaN(height) && width > 0 && height > 0) {
+    if (width > height) orientation = 'LANDSCAPE';
+    else if (height > width) orientation = 'PORTRAIT';
+    else orientation = 'SQUARE';
+  }
+
+  return { ...rest, copyPaths: copy, orientation, width, height };
 }
 
 export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
@@ -118,17 +181,27 @@ export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
     where.push(
       sql`f.media_object_id is not null and exists(select 1 from file_instances c where c.media_object_id = f.media_object_id and c.id <> f.id and c.archived_at is null)`,
     );
+  if (q.orientation) {
+    where.push(sql`(${orientationSql()}) = ${q.orientation}`);
+  }
+  if (q.pending) {
+    where.push(sql`(${pendingSql(q.pending, ctx.orgId)})`);
+  }
+  if (q.extra) {
+    where.push(sql`(${extraSql(q.extra, ctx.orgId)})`);
+  }
   if (q.cursor) {
     const c = decodeCursor(q.cursor);
     where.push(sql`(f.first_seen_at, f.id) < (${c.t}::timestamptz, ${c.id}::uuid)`);
   }
+  const orderBy = q.pending ? `f.mtime desc nulls last, f.first_seen_at desc` : `f.first_seen_at desc, f.id desc`;
   const res = await ctx.db.execute(sql`
     select ${FILE_SELECT}
     from file_instances f
     join storage_roots r on r.id = f.root_id
     join devices d on d.id = f.device_id
     where ${sql.join(where, sql` and `)}
-    order by f.first_seen_at desc, f.id desc
+    order by ${sql.raw(orderBy)}
     limit ${limit + 1}`);
   const rows = rowsOf<any>(res);
   const page = rows.slice(0, limit);
@@ -322,6 +395,54 @@ export async function evictPreviews(
     removed += 1;
   }
   return { removed, freedBytes: freed };
+}
+
+export async function setFileMarks(
+  ctx: Ctx,
+  input: {
+    fileInstanceId?: string;
+    mediaObjectId?: string;
+    tag: string;
+    on: boolean;
+  },
+) {
+  if (!input.fileInstanceId && !input.mediaObjectId) throw badRequest('fileInstanceId or mediaObjectId required');
+  const fileId = input.fileInstanceId;
+  if (fileId) {
+    const [inst] = await ctx.db
+      .select({ id: fileInstances.id })
+      .from(fileInstances)
+      .where(and(eq(fileInstances.id, fileId), eq(fileInstances.orgId, ctx.orgId)));
+    if (!inst) throw notFound('File');
+  }
+  await ctx.db.transaction(async (tx) => {
+    await tx.execute(
+      sql`insert into media_tags (org_id, name) values (${ctx.orgId}, ${input.tag}) on conflict (org_id, lower(name)) do nothing`,
+    );
+    const tagId = await tx.execute(
+      sql`select id from media_tags where org_id = ${ctx.orgId} and lower(name) = lower(${input.tag})`,
+    );
+    const tagRows = rowsOf<{ id: string }>(tagId);
+    if (!tagRows.length) throw badRequest('Tag creation failed');
+    const tid = tagRows[0]!.id;
+    if (input.on && fileId) {
+      await tx.execute(
+        sql`insert into file_tag_links (org_id, file_instance_id, tag_id) values (${ctx.orgId}, ${fileId}, ${tid}) on conflict do nothing`,
+      );
+    } else if (!input.on && fileId) {
+      await tx.execute(
+        sql`delete from file_tag_links where file_instance_id = ${fileId} and tag_id = ${tid}`,
+      );
+    }
+  });
+  await audit(
+    ctx,
+    'file.marks.toggle',
+    fileId ? { type: 'file_instance', id: fileId } : { type: 'media_object', id: input.mediaObjectId! },
+    undefined,
+    { tag: input.tag, on: input.on },
+  );
+  return { tag: input.tag, on: input.on };
 }
 
 export async function setFileTags(ctx: Ctx, fileInstanceId: string, tagNames: string[]) {

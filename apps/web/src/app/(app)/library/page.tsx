@@ -69,6 +69,9 @@ function Library() {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [availability, setAvailability] = useState('');
+  const [orientation, setOrientation] = useState('');
+  const [pending, setPending] = useState('');
+  const [extra, setExtra] = useState('exclude');
   const [rootId, setRootId] = useState('');
   const [linked, setLinked] = useState(sp.get('linked') ?? '');
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
@@ -86,6 +89,9 @@ function Library() {
     q: q.trim() || undefined,
     kind: kind || undefined,
     availability: availability || undefined,
+    orientation: orientation || undefined,
+    pending: pending || undefined,
+    extra: extra || undefined,
     rootId: rootId || undefined,
     linked: linked || undefined,
   };
@@ -160,6 +166,24 @@ function Library() {
             >
               <Options values={AVAIL} none="Any availability" />
             </Select>
+            <Select aria-label="Orientation" value={orientation} onChange={(e) => reset(setOrientation)(e.target.value)}>
+              <option value="">All orientations</option>
+              <option value="landscape">Normal 16:9</option>
+              <option value="portrait">Shorts 9:16</option>
+              <option value="square">Square</option>
+              <option value="unknown">Unknown</option>
+            </Select>
+            <Select aria-label="Pending" value={pending} onChange={(e) => reset(setPending)(e.target.value)}>
+              <option value="">Not pending</option>
+              <option value="youtube">Pending YouTube</option>
+              <option value="instagram">Pending Instagram</option>
+              <option value="tiktok">Pending TikTok</option>
+            </Select>
+            <Select aria-label="Extra" value={extra} onChange={(e) => reset(setExtra)(e.target.value)}>
+              <option value="exclude">Hide extra</option>
+              <option value="include">Show extra too</option>
+              <option value="only">Extra only</option>
+            </Select>
             <Select aria-label="Folder" value={rootId} onChange={(e) => reset(setRootId)(e.target.value)}>
               <option value="">Any folder</option>
               {(roots.data ?? []).map((r) => (
@@ -232,6 +256,10 @@ function FilePage({
             >
               {page.items.map((f) => {
                 const Icon = kindIcon[f.fileType as keyof typeof kindIcon] ?? FileIcon;
+                const platforms = ['youtube', 'instagram', 'tiktok'] as const;
+                const hasMark = (platform: string) =>
+                  f.tags.some((t: any) => t.name.toLowerCase() === `uploaded:${platform}`);
+                const isExtra = f.tags.some((t: any) => t.name.toLowerCase() === 'extra');
                 return (
                   <li key={f.id}>
                     <button
@@ -254,6 +282,35 @@ function FilePage({
                         <span className="block truncate text-sm font-medium">{f.fileName}</span>
                         <span className="block truncate text-xs text-muted">
                           {f.deviceName} · {f.rootLabel} · {bytes(f.size)} · {when(f.mtime, tz, false)}
+                        </span>
+                        <span className="flex gap-1 flex-wrap mt-1">
+                          {f.orientation && f.orientation !== 'UNKNOWN' && (
+                            <Badge tone="info" className="text-xs">
+                              {f.width}×{f.height} {f.orientation === 'LANDSCAPE' ? '16:9' : f.orientation === 'PORTRAIT' ? '9:16' : '1:1'}
+                            </Badge>
+                          )}
+                          {platforms.map((p) => (
+                            <button
+                              key={p}
+                              className={`text-xs px-2 py-1 rounded border ${
+                                hasMark(p)
+                                  ? 'bg-accent text-white border-accent'
+                                  : 'bg-panel2 text-muted border-border hover:border-accent'
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                put(`/library/marks`, {
+                                  fileInstanceId: f.id,
+                                  tag: `uploaded:${p}`,
+                                  on: !hasMark(p),
+                                }).catch((err) => console.error(err));
+                              }}
+                              title="Manual mark: I uploaded it"
+                            >
+                              {p}
+                            </button>
+                          ))}
+                          {isExtra && <Badge tone="warn">Extra</Badge>}
                         </span>
                       </span>
                       <span className="flex shrink-0 flex-col items-end gap-1">

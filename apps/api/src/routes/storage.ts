@@ -39,6 +39,7 @@ import {
   requestScan,
   revokeDevice,
   rotateAgentToken,
+  setFileMarks,
   setFileTags,
   setRootState,
   signAgentFetch,
@@ -353,6 +354,9 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
         tagId: z.uuid().optional(),
         linked: boolQ.optional(),
         duplicates: boolQ.optional(),
+        orientation: z.enum(['landscape', 'portrait', 'square', 'unknown']).optional(),
+        pending: z.enum(['youtube', 'instagram', 'tiktok']).optional(),
+        extra: z.enum(['exclude', 'include', 'only']).optional(),
         limit: z.coerce.number().int().min(1).max(200).optional(),
         cursor: z.string().max(500).optional(),
       }),
@@ -367,6 +371,21 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Counts with explicit definitions (instances vs exact objects vs logical assets)',
     },
     ({ ctx }) => libraryCounts(ctx),
+  );
+  route(
+    {
+      method: 'PUT',
+      url: '/library/marks',
+      tag: 'Library',
+      summary: 'Toggle uploaded/extra marks on a file (idempotent)',
+      body: z.object({
+        fileInstanceId: z.uuid().optional(),
+        mediaObjectId: z.uuid().optional(),
+        tag: z.enum(['uploaded:youtube', 'uploaded:instagram', 'uploaded:tiktok', 'extra']),
+        on: z.boolean(),
+      }),
+    },
+    ({ ctx, body }) => setFileMarks(ctx, body),
   );
   route(
     {

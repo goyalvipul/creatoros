@@ -108,8 +108,8 @@ export default function IntegrationsPage() {
       )}
       <Notice tone="info" title="Safe by design" dismissible dismissKey="integrations-safe">
         Gmail is read-only unless you choose “Enable sending” for an account, and even then an e-mail is only
-        sent when you press Send on a reply. Creator OS never posts to social platforms or pays anything on
-        its own. Credentials are stored encrypted on your machine.
+        sent when you press Send on a reply. A video is uploaded only when you press Publish on that file.
+        Nothing is paid on its own. Credentials are stored encrypted on your machine.
       </Notice>
       <div className="mt-4">
         <Async res={res}>
@@ -230,9 +230,20 @@ export default function IntegrationsPage() {
                                 ? 'Comments: read and reply enabled'
                                 : 'Comments: not enabled'}
                             </Badge>
+                            <Badge
+                              tone={
+                                (conn.scopes ?? []).includes('https://www.googleapis.com/auth/youtube.upload')
+                                  ? 'ok'
+                                  : 'neutral'
+                              }
+                            >
+                              {(conn.scopes ?? []).includes('https://www.googleapis.com/auth/youtube.upload')
+                                ? 'Uploads enabled'
+                                : 'Uploads: not enabled'}
+                            </Badge>
                             <span>
                               Comments appear in Socials (polled; YouTube has no direct messages). Replies are
-                              sent only when you press send.
+                              sent only when you press send. A video is uploaded only when you press Publish.
                             </span>
                           </p>
                         )}
@@ -278,13 +289,41 @@ export default function IntegrationsPage() {
                               <ActionButton
                                 variant="primary"
                                 onAction={async () => {
+                                  const scopes: string[] = conn.scopes ?? [];
                                   const r = await post('/integrations/youtube/oauth/start', {
                                     comments: true,
+                                    analytics: scopes.includes(
+                                      'https://www.googleapis.com/auth/yt-analytics.readonly',
+                                    ),
+                                    upload: scopes.includes('https://www.googleapis.com/auth/youtube.upload'),
                                   });
                                   if (r.authorizeUrl) window.location.href = r.authorizeUrl;
                                 }}
                               >
                                 Enable comments
+                              </ActionButton>
+                            )}
+                          {p.provider === 'youtube' &&
+                            conn &&
+                            connected &&
+                            !(conn.scopes ?? []).includes('https://www.googleapis.com/auth/youtube.upload') && (
+                              <ActionButton
+                                variant="primary"
+                                onAction={async () => {
+                                  const scopes: string[] = conn.scopes ?? [];
+                                  const r = await post('/integrations/youtube/oauth/start', {
+                                    upload: true,
+                                    comments: scopes.includes(
+                                      'https://www.googleapis.com/auth/youtube.force-ssl',
+                                    ),
+                                    analytics: scopes.includes(
+                                      'https://www.googleapis.com/auth/yt-analytics.readonly',
+                                    ),
+                                  });
+                                  if (r.authorizeUrl) window.location.href = r.authorizeUrl;
+                                }}
+                              >
+                                Enable uploads
                               </ActionButton>
                             )}
                           {p.provider === 'youtube' &&
@@ -633,6 +672,17 @@ function FacebookCard({
                 >
                   Subscribe webhooks
                 </ActionButton>
+                {!(c.scopes ?? []).includes('pages_manage_posts') && (
+                  <ActionButton
+                    variant="primary"
+                    onAction={async () => {
+                      const r = await post('/integrations/facebook/oauth/start', { videos: true });
+                      if (r.authorizeUrl) window.location.href = r.authorizeUrl;
+                    }}
+                  >
+                    Enable Page videos
+                  </ActionButton>
+                )}
                 <ActionButton onAction={() => connect('facebook')}>Reconnect</ActionButton>
                 <ActionButton
                   variant="danger"

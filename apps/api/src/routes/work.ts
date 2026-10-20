@@ -584,13 +584,27 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object({
         dealId: uuid.nullable().optional(),
         invoiceNo: z.string().max(40).optional(),
-        amountMinor: z.number().int().positive(),
+        amountMinor: z.number().int().positive().optional(),
         currency: currency.optional(),
         issuedAt: date.nullable().optional(),
         dueAt: date.nullable().optional(),
         termsDays: z.number().int().min(0).max(365).optional(),
         notes: z.string().max(2000).nullable().optional(),
         draft: z.boolean().optional(),
+        billFrom: z.string().max(2000).nullable().optional(),
+        billTo: z.string().max(2000).nullable().optional(),
+        bankDetails: z.string().max(4000).nullable().optional(),
+        lines: z
+          .array(
+            z.object({
+              description: z.string().max(2000),
+              quantity: z.number().positive().max(1_000_000),
+              unitPriceMinor: z.number().int().min(0),
+              taxPercent: z.number().min(0).max(100),
+            }),
+          )
+          .max(50)
+          .optional(),
       }),
     },
     ({ ctx, body }) => createInvoice(ctx, body),
@@ -611,6 +625,19 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
           dueAt: date.nullable(),
           notes: z.string().max(2000).nullable(),
           dealId: uuid.nullable(),
+          billFrom: z.string().max(2000).nullable(),
+          billTo: z.string().max(2000).nullable(),
+          bankDetails: z.string().max(4000).nullable(),
+          lines: z
+            .array(
+              z.object({
+                description: z.string().max(2000),
+                quantity: z.number().positive().max(1_000_000),
+                unitPriceMinor: z.number().int().min(0),
+                taxPercent: z.number().min(0).max(100),
+              }),
+            )
+            .max(50),
         })
         .partial(),
     },
@@ -940,6 +967,8 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object({
         publish: z.boolean().optional(),
         comments: z.boolean().optional(),
+        upload: z.boolean().optional(),
+        videos: z.boolean().optional(),
         messages: z.boolean().optional(),
         reconnect: z.boolean().optional(),
         drafts: z.boolean().optional(),
@@ -1187,7 +1216,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Global search across 10 entity types',
       query: z.object({ q: z.string().trim().min(1).max(200) }),
     },
-    ({ ctx, query, session }) => search(ctx, query.q, 6, session.role !== 'VIEWER'),
+    ({ ctx, query, session }) => search(ctx, query.q, 6, session.role),
   );
   route(
     {

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, post, refresh, setUnauthorizedHandler, useApi } from '@/lib/api';
-import { navFor } from './nav';
+import { canOpen, navFor } from './nav';
 import { CommandPalette, QuickAdd } from './palette';
 import { Button, Spinner, useToast } from './ui';
 
@@ -266,7 +266,11 @@ export function Shell({ children }: { children: ReactNode }) {
         )}
 
         <main id="main" className="mx-auto w-full max-w-7xl p-3 pb-28 md:p-6 md:pb-10">
-          {children}
+          {canOpen(role, path) ? (
+            children
+          ) : (
+            <p className="text-sm text-muted">This section is only available to the owner.</p>
+          )}
         </main>
       </div>
 
@@ -342,7 +346,7 @@ export function Shell({ children }: { children: ReactNode }) {
       )}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} role={role} />
-      <QuickAdd open={addOpen} onClose={() => setAddOpen(false)} />
+            <QuickAdd open={addOpen} onClose={() => setAddOpen(false)} role={role} />
     </div>
   );
 }

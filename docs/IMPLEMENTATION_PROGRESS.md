@@ -114,3 +114,21 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 - Sorting: thread list by latest activity of either direction; messages newest first.
 - Live CAD: `ensureLiveRates` (Frankfurter, fallback open.er-api; refreshed at most hourly when the Invoices tab or finance summary is read) writes `fx_rates`; each invoice shows its value in the base currency and the rate used; Received/Outstanding/Overdue/Expenses are combined in base currency. If both providers fail the last rate is kept (or totals fall back to per-currency); nothing is invented.
 - Evidence: `tests/integration/test/mail.test.ts` (fake providers; the live rate endpoints themselves were not called in tests). Suite passed (132).
+
+## Publishing: attach files and publish them
+
+- Implemented: migration `0010_publish_items` (`publish_items`, `publish_drafts`, `publication_records.file_instance_id`). A title can link library videos. Publish is explicit, one request id, worker attempts 1, claimed from `QUEUED` so a retry does not upload twice. States `QUEUED` / `UPLOADING` / `PUBLISHED` / `FAILED` / `UNCERTAIN` (uncertain only after bytes may have been sent). The worker streams the file from the online agent; the original is not changed. Offline agent marks the draft `FAILED`.
+- Platforms: Instagram Reel resumable upload, YouTube resumable `videos.insert` behind opt-in `youtube.upload` ("Enable uploads"), Facebook Page video behind opt-in `pages_manage_posts` ("Enable Page videos", not added to the normal Page login). TikTok stays disabled (audit required). "Add a live post" is unchanged.
+- Plan matrix: brand filter `GET /publishing/matrix?brandId=` (brands come from Channels; accounts are that brand's channels). Title links to `/publishing/[variantId]`. Cells show `published/attached` from two separate counts when files are attached. `DELETE /variants/:id` removes a plan row; files and posts that already went out stay. Migration `0011_variant_brand` stores `distribution_variants.brand_id` and backfills it from the asset or project when those already have a brand.
+- Library list includes each file's tags. The Library page must not call `.some` on a missing tag list (that crashed the page).
+- Evidence file written, not executed (owner will restart containers): `tests/integration/test/publishing-upload.test.ts`. Not live-verified against YouTube, Instagram or Facebook.
+
+## Content ideas: edit, status, and project copy
+
+- Ideas can be edited with the capture form prefilled, moved New → Researching → Approved / Rejected / Archived, restored from archive (`archived_from`) or from Rejected back to New, and soft-deleted (`deleted_at`). Delete does not remove a project already created from the idea.
+- New fields on the idea and copied onto the project at conversion: song title, optional library audio file, detailed concept (sanitized HTML), audience, competitor, hook, narrative, distribution plan. The project page can edit its own copy. Migration `0012_idea_brief`. Not executed here.
+- The idea form is a page (`/content/new`, `/content/[id]`). Detailed concept replaces the pitch box and sits at the top, with browser speech-to-text. Unsaved writing is kept in this browser's localStorage and restored on return.
+
+## Invoice documents
+
+- New and edit invoices are pages (`/collaborations/invoices/new`, `/collaborations/invoices/[id]`). Fields match a paper invoice: date, due, number, currency, from, to, line items (description, quantity, unit price, tax percent), and bank details at the end. Line amount, subtotal, tax, and amount due are calculated. The stored invoice total is that amount due. An older invoice with no lines opens as one line at its existing amount. Migration `0013_invoice_document`. Not executed here.

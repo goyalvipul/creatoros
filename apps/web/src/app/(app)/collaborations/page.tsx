@@ -28,9 +28,9 @@ import {
   Td,
   Textarea,
 } from '@/components/ui';
-import { api, del, patch, post, refresh, useApi } from '@/lib/api';
+import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { SuggestionCard } from './invoice-suggestions';
-import { ago, dateInput, money, title as titleCase, toMinor, when } from '@/lib/format';
+import { ago, money, title as titleCase, toMinor, when } from '@/lib/format';
 import { PRIORITIES } from '@/lib/options';
 
 type Tab = 'inbox' | 'pipeline' | 'invoices' | 'partners';
@@ -513,12 +513,12 @@ function FoundInEmail() {
 }
 
 function InvoiceActions({ inv }: { inv: any }) {
-  const [edit, setEdit] = useState(false);
+  const router = useRouter();
   const locked = inv.status === 'VOID';
   return (
     <div className="flex justify-end gap-1.5">
       {!locked && (
-        <Button size="sm" onClick={() => setEdit(true)}>
+        <Button size="sm" onClick={() => router.push(`/collaborations/invoices/${inv.id}`)}>
           Edit
         </Button>
       )}
@@ -536,99 +536,15 @@ function InvoiceActions({ inv }: { inv: any }) {
           Delete
         </ActionButton>
       )}
-      <EditInvoice inv={inv} open={edit} onClose={() => setEdit(false)} />
     </div>
   );
 }
 
-function EditInvoice({ inv, open, onClose }: { inv: any; open: boolean; onClose: () => void }) {
-  const deals = useApi<any[]>('/deals', { query: { limit: 200 } });
-  const paid = inv.paidMinor > 0;
-  const [f, setF] = useState({
-    invoiceNo: inv.invoiceNo as string,
-    amount: (inv.amountMinor / 100).toFixed(2),
-    currency: inv.currency as string,
-    dueAt: inv.dueAt ? dateInput(inv.dueAt) : '',
-    dealId: (inv.dealId ?? '') as string,
-    notes: (inv.notes ?? '') as string,
-  });
-  return (
-    <FormDialog
-      open={open}
-      onClose={onClose}
-      title={`Edit ${inv.invoiceNo}`}
-      onSubmit={async () => {
-        const amountMinor = toMinor(f.amount);
-        if (!amountMinor) throw new Error('Enter a valid amount');
-        await api(`/invoices/${inv.id}`, {
-          method: 'PATCH',
-          body: {
-            invoiceNo: f.invoiceNo.trim(),
-            amountMinor,
-            currency: f.currency.toUpperCase(),
-            dueAt: f.dueAt || null,
-            dealId: f.dealId || null,
-            notes: f.notes.trim() || null,
-          },
-        });
-        await refresh('/invoices', '/finance', '/deals');
-      }}
-    >
-      {paid && (
-        <p className="text-xs text-muted">
-          Payments are recorded, so the currency is fixed and the amount cannot go below what was received.
-        </p>
-      )}
-      <div className="grid grid-cols-3 gap-3">
-        <Field label="Invoice no.">
-          <Input required value={f.invoiceNo} onChange={(e) => setF({ ...f, invoiceNo: e.target.value })} />
-        </Field>
-        <Field label="Amount">
-          <Input
-            required
-            inputMode="decimal"
-            value={f.amount}
-            onChange={(e) => setF({ ...f, amount: e.target.value })}
-          />
-        </Field>
-        <Field label="Currency">
-          <Input
-            maxLength={3}
-            disabled={paid}
-            value={f.currency}
-            onChange={(e) => setF({ ...f, currency: e.target.value })}
-          />
-        </Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Due date">
-          <Input type="date" value={f.dueAt} onChange={(e) => setF({ ...f, dueAt: e.target.value })} />
-        </Field>
-        <Field label="Deal">
-          <Select value={f.dealId} onChange={(e) => setF({ ...f, dealId: e.target.value })}>
-            <option value="">No deal</option>
-            {(deals.data ?? []).map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
-      <Field label="Notes">
-        <Textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
-      </Field>
-    </FormDialog>
-  );
-}
-
 function Invoices() {
+  const router = useRouter();
   const fin = useApi<any>('/finance/summary');
   const [status, setStatus] = useState('');
   const inv = useApi<any[]>('/invoices', { query: { status: status || undefined } });
-  const [adding, setAdding] = useState(false);
-  const deals = useApi<any[]>('/deals', { query: { limit: 200 } });
-  const [f, setF] = useState({ dealId: '', amount: '', currency: 'CAD', termsDays: '30', draft: false });
   return (
     <div className="space-y-5">
       <Async res={fin}>
@@ -678,7 +594,7 @@ function Invoices() {
             none="Any status"
           />
         </Select>
-        <Button variant="primary" className="ml-auto" onClick={() => setAdding(true)}>
+        <Button variant="primary" className="ml-auto" onClick={() => router.push('/collaborations/invoices/new')}>
           <Plus className="size-4" /> New invoice
         </Button>
       </div>
@@ -747,69 +663,6 @@ function Invoices() {
           </Table>
         )}
       </Async>
-      <FormDialog
-        open={adding}
-        onClose={() => setAdding(false)}
-        title="New invoice"
-        submitLabel="Create"
-        onSubmit={async () => {
-          const amountMinor = toMinor(f.amount);
-          if (!amountMinor) throw new Error('Enter a valid amount');
-          await post('/invoices', {
-            dealId: f.dealId || undefined,
-            amountMinor,
-            currency: f.currency.toUpperCase(),
-            termsDays: Number(f.termsDays) || undefined,
-            draft: f.draft,
-          });
-          setF({ dealId: '', amount: '', currency: 'CAD', termsDays: '30', draft: false });
-          await refresh('/invoices', '/finance', '/deals');
-        }}
-      >
-        <Field label="Deal">
-          <Select value={f.dealId} onChange={(e) => setF({ ...f, dealId: e.target.value })}>
-            <option value="">No deal</option>
-            {(deals.data ?? []).map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.title}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Amount">
-            <Input
-              required
-              inputMode="decimal"
-              value={f.amount}
-              onChange={(e) => setF({ ...f, amount: e.target.value })}
-            />
-          </Field>
-          <Field label="Currency">
-            <Input
-              maxLength={3}
-              value={f.currency}
-              onChange={(e) => setF({ ...f, currency: e.target.value })}
-            />
-          </Field>
-          <Field label="Terms (days)">
-            <Input
-              type="number"
-              min={0}
-              value={f.termsDays}
-              onChange={(e) => setF({ ...f, termsDays: e.target.value })}
-            />
-          </Field>
-        </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={f.draft}
-            onChange={(e) => setF({ ...f, draft: e.target.checked })}
-          />{' '}
-          Save as draft (do not issue yet)
-        </label>
-      </FormDialog>
     </div>
   );
 }

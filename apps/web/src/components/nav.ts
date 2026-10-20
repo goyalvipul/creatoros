@@ -34,17 +34,31 @@ export const NAV = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 
-/** Sections a read-only viewer cannot open (the API refuses them too): email/CRM, media library, devices, integrations. */
-const VIEWER_HIDDEN: readonly string[] = [
-  '/today',
-  '/library',
+/** Only the owner can open these. Editors and viewers keep Home, Inbox & Today, Content, Production and Library. */
+export const OWNER_ONLY = [
+  '/publishing',
+  '/calendar',
   '/collaborations',
-  '/storage',
-  '/integrations',
   '/socials',
   '/workflows',
-];
+  '/analytics',
+  '/channels',
+  '/storage',
+  '/integrations',
+  '/settings',
+] as const;
+
+/** Viewers also stay out of the inbox queue and the media library. */
+const VIEWER_HIDDEN = ['/today', '/library'] as const;
 
 export function navFor(role?: string) {
-  return role === 'VIEWER' ? NAV.filter((n) => !VIEWER_HIDDEN.includes(n.href)) : NAV;
+  if (role === 'OWNER') return NAV;
+  const hidden: readonly string[] = role === 'VIEWER' ? [...OWNER_ONLY, ...VIEWER_HIDDEN] : OWNER_ONLY;
+  return NAV.filter((n) => !hidden.includes(n.href));
+}
+
+export function canOpen(role: string | undefined, path: string) {
+  if (role === 'OWNER') return true;
+  const blocked = role === 'VIEWER' ? [...OWNER_ONLY, ...VIEWER_HIDDEN] : OWNER_ONLY;
+  return !blocked.some((href) => path === href || path.startsWith(`${href}/`));
 }

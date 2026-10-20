@@ -71,6 +71,34 @@
       "when": 1792782000000,
       "tag": "0009_library_marks",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792870000000,
+      "tag": "0010_publish_items",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792960000000,
+      "tag": "0011_variant_brand",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793050000000,
+      "tag": "0012_idea_brief",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793140000000,
+      "tag": "0013_invoice_document",
+      "breakpoints": true
     }
   ]
 }

@@ -1,178 +1,290 @@
-# Creator OS - agent handoff (read this first)
+# Creator OS — agent handoff (read this first)
 
-One-file briefing for a new AI agent (or a new human) picking up this repository, especially on the Ubuntu host.
-It summarises what exists, where it lives, how it is deployed, what is verified, what is not, and the traps seen.
-Deeper detail: `AGENTS.md` (rules), `docs/PRODUCT_SPEC.md` (intent), `docs/ARCHITECTURE.md` (structure),
-`docs/DECISIONS.md` (why), `docs/IMPLEMENTATION_PROGRESS.md` (ledger), `docs/OPERATIONS.md` (run/backup/restart),
-`docs/EXTERNAL_PREREQUISITES.md` (owner steps), `docs/TEST_MATRIX.md` (T01-T35 mapping), `FEATURES.md` (capability matrix).
+One-file briefing for a new AI agent or a person picking up this repository. It says what the product is, where the code lives, how a change is made, which commands deploy it, and what is true right now.
 
-## 1. What the product is
+Deeper detail, when you need it: `AGENTS.md` (short rules), `docs/PRODUCT_SPEC.md` (full intent), `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`, `docs/IMPLEMENTATION_PROGRESS.md` (ledger), `docs/OPERATIONS.md` (backup and the scanner), `docs/EXTERNAL_PREREQUISITES.md`, `docs/TEST_MATRIX.md`, `FEATURES.md`.
 
-Creator OS is a private, self-hosted operating system for one owner who runs a virtual singer brand ("Mehak") and future
-brands. It answers: what have I created, on which machine, where is each version posted, what messages/payments need a
-reply, and what should I do next. It must work with zero third-party credentials. Single owner today; the data model is
-org-scoped and role-ready (VIEWER < EDITOR < OWNER).
+**Keep this file current.** If you change a screen, an API, a migration, a command, or what is actually running, update the matching section here in the same change. Do not leave the next agent reading yesterday's behavior.
 
-Modules: multi-machine file inventory (scanner agents), logical assets/versions/duplicates, ideas and production
-projects (scenes, checklists, generation jobs), publishing matrix and calendar, CRM (inquiries, deals, deliverables,
-invoices, payments), internal action queue plus Todo integration, notifications, analytics/goals, integrations
-(Google/YouTube/Gmail, Postiz, Todo), backups, audit log, PWA.
+Last updated: 2026-10-19, on the Ubuntu host `guardobox`, working tree not yet committed.
 
-## 2. Non-negotiable rules (also in AGENTS.md)
+## 1. What this product is
 
-1. Never modify, move or delete the owner's original media. The agent is read-only.
-2. Nothing is sent, posted or paid without owner confirmation.
-3. No fake data. Unconfigured integrations say `NOT_CONFIGURED` / `BLOCKED_EXTERNAL` with the next step. Demo data is labelled DEMO.
-4. Postgres/Redis never published beyond loopback. No default password. Secrets only in `.env`.
-5. Counts come from their own tables, never from multiplying joins.
-6. "Missing" only after complete scans plus grace. Offline is not missing.
-7. Report honestly what was run and what was not.
+Creator OS is a private, self-hosted app for one owner. The owner runs a virtual singer, **Mehak**, and will add more brands later. The daily question is: what have I created, on which machine, where has each version been posted, which message or payment needs a reply, and what should I do next.
 
-## 3. Repository map
+It must stay useful with zero third-party credentials. Nothing is posted, emailed, or paid until the owner presses the button for that one action. Original media files are never moved, renamed, or deleted. The scanner agent is read-only.
+
+Today it is a single owner. Every owned row is scoped by `org_id`. Roles are VIEWER < EDITOR < OWNER.
+
+### How the owner's world is organized
 
 ```
-apps/api            Fastify REST /api/v1, auth, CSRF, idempotency, agent ingest + stream, OpenAPI
-apps/worker         BullMQ consumers, scheduler, sync jobs, backups, restore test
-apps/web            Next.js 16 PWA (standalone build). Pages in src/app/(app)/*
-apps/scanner-agent  Go read-only scanner (Windows service / Linux systemd)
-packages/domain     Pure rules, enums, Zod, priority/count logic
-packages/db         Drizzle schema (77 tables), SQL migrations (0000 + custom 0001 extras)
-packages/services   ALL business logic (API, worker and tests call it)
-packages/connectors Google/YouTube/Gmail, Postiz, Todo adapters, behind typed interfaces
-packages/ui         shared components
-packages/config     shared lint/TS config
-infra/docker        Dockerfiles, Caddyfile
-infra/scripts       dev, build-agent, backup, restore, diagnostics, restart-test, tailscale-serve, init-env, go
-tests/integration   Vitest against real Postgres in Docker (T01-T35 etc.)
-tests/e2e           Playwright, desktop + 360px
-docs/               documentation   openapi/ generated spec   .cursor/rules/ master spec rule
+Brand (Channels page: Mehak, and later others)
+  └─ Channel (a purpose under that brand, for example the main Mehak channel)
+       └─ Social account (YouTube, Instagram, Facebook, TikTok, …)
+            linked to a provider connection in Integrations
+
+Creative project (Production) and logical asset (Library → Assets)
+  └─ Distribution variant, called a "title" on the Publishing plan
+       └─ Attached library videos (file instances on a Windows PC)
+            └─ One publish action per file per account
 ```
 
-Where things go: business logic in `packages/services`; routes in `apps/api/src/routes/*` using `makeRouter`
-(`apps/api/src/http.ts`; viewer-private GET paths are listed there); responses are `{data, meta, error}`; jobs in
-`apps/worker/src/jobs.ts` and `main.ts`; UI in `apps/web/src/app/(app)/*`. Every new route/behaviour needs an
-integration test (`tests/integration/test`) and, for UI, an e2e spec (`tests/e2e/specs`).
+Brands, channels, and accounts are created on **Channels**. Production projects and Publishing titles can belong to a brand. A new brand does not appear in Publishing until it exists on Channels. Its accounts show up as columns only after they are added under that brand's channels.
 
-## 4. Stack and runtime
+## 2. Rules that do not bend
 
-- pnpm 12 workspaces, TypeScript 5.9 ESM strict, Node >= 22. Postgres 17, Redis 7, Caddy 2, Go 1.27 for the agent, ffmpeg/ffprobe.
-- Compose services: `db`, `redis`, `migrate`, `api`, `worker`, `web`, `caddy` (published on host port 8080). Memory limits:
-  api 768m, worker 768m, web 512m, db 1g, redis 384m, caddy 128m. Profile `dev` adds loopback-only db-proxy/redis-proxy.
-- Next bakes `rewrites()` at build time, so `API_INTERNAL_URL` must be set when building the web image.
-- `AGENT_LOOPBACK_HOST` rewrites 127.0.0.1/localhost agent URLs so the API container can reach an agent on the Docker host
-  (default `host.docker.internal`; on Linux use the Docker bridge address, usually `172.17.0.1`).
-- Auth: session cookie, Argon2id, CSRF, login throttling, optional TOTP. No public sign-up: the first-run wizard creates the
-  owner; further users are created by the owner under Settings.
+1. Never modify, move, or delete the owner's original media. The scanner is read-only.
+2. Nothing is sent, posted, or paid without an explicit owner action on that item.
+3. No fake data. An unconfigured integration reports `NOT_CONFIGURED` or `BLOCKED_EXTERNAL` and the next human step. Demo rows are labelled DEMO and can be removed.
+4. Postgres and Redis are not published beyond loopback. No default password. Secrets live only in `.env`, never in code, logs, chat, or git.
+5. Counts come from their own tables. Never count by joining file instances × publications × deliverables.
+6. A file is "missing" only after complete scans plus a grace period. Offline is not missing.
+7. Say what you ran and what you did not. A written test that was not executed is not evidence.
 
-## 5. Commands
+## 3. Where the code lives
+
+```
+apps/api            Fastify REST under /api/v1. Routes: src/routes/{core,content,storage,work,socials}.ts
+apps/worker         BullMQ. Scheduled jobs in src/jobs.ts. On-demand jobs (sync, backup, publish) in src/main.ts
+apps/web            Next.js App Router PWA. Screens in src/app/(app)/*
+apps/scanner-agent  Go, read-only. Windows service or Linux systemd
+packages/domain     Enums, Zod, pure rules
+packages/db         Drizzle schema in src/schema/*, SQL migrations in drizzle/*.sql plus drizzle/meta/_journal.json
+packages/services   All business logic. The API, the worker, and tests call this. Do not put rules only in a route.
+packages/connectors Platform HTTP: Google, YouTube, Gmail, Meta, publish uploads, Postiz, Todo
+packages/ui         Shared UI bits (the app's own components are apps/web/src/components/ui.tsx)
+infra/docker        Dockerfile (one file, targets migrate / api / worker / web) and Caddyfile
+infra/scripts       dev, backup, restore, diagnostics, restart-test, tailscale, agent build
+tests/integration   Vitest + real Postgres
+tests/e2e           Playwright, desktop and 360px
+```
+
+HTTP: `makeRouter` in `apps/api/src/http.ts`. GET defaults to VIEWER; other methods default to EDITOR. Responses are `{data, meta, error}`. Viewer-private GETs are the `PRIVATE_GET` regex in that file.
+
+UI components used everywhere: `PageHeader`, `Select`, `Button`, `ActionButton` (confirm + toast), `FormDialog`, `useApi`, `post`, `put`, `del`, `refresh` from `@/lib/api` and `@/components/ui`.
+
+### Screens
+
+| Path | What it is |
+| --- | --- |
+| `/` | Home / daily briefing |
+| `/today` | Inbox and today |
+| `/content` | Ideas |
+| `/production`, `/production/[id]` | Projects, scenes, checklists |
+| `/library` | Files across machines. Filters, upload marks, Extra tag |
+| `/publishing` | Plan matrix: titles × accounts for the selected brand |
+| `/publishing/[variantId]` | One title: link videos, publish each file to one account |
+| `/calendar` | Publications, deadlines, commitments |
+| `/collaborations`, `/collaborations/threads/[id]`, `/collaborations/deals/[id]` | CRM, email, invoices |
+| `/collaborations/invoices/new`, `/collaborations/invoices/[id]` | Invoice document: from, to, lines, bank details |
+| `/socials/*` | Comments, inbox, leads, scheduled. Not the email inbox |
+| `/channels` | Brands → channels → social accounts |
+| `/storage` | Devices, scan roots, pairing |
+| `/integrations` | OAuth and opt-in scopes |
+| `/analytics`, `/workflows`, `/settings` | Reports, automations, health, demo data |
+
+### Route files
+
+| File | Owns |
+| --- | --- |
+| `apps/api/src/routes/core.ts` | Auth, health, settings, search |
+| `apps/api/src/routes/content.ts` | Brands, projects, assets, publishing, publications |
+| `apps/api/src/routes/storage.ts` | Devices, roots, library, file stream, library marks |
+| `apps/api/src/routes/work.ts` | Integrations OAuth, mail, CRM, backups, jobs |
+| `apps/api/src/routes/socials.ts` | Social inbox, comments, workflows |
+
+### Migrations
+
+Hand-written SQL in `packages/db/drizzle/NNNN_name.sql`, plus a new entry in `packages/db/drizzle/meta/_journal.json` (next `idx` after the last one). Update the matching Drizzle table in `packages/db/src/schema/`. Do not edit a migration that has already been applied on the server. Current last migration: **`0013_invoice_document`**.
+
+The `migrate` container runs these once, before the API starts. It does not run again just because you rebuilt the API.
+
+## 4. How to change or add a feature
+
+1. Read this file and the service you will touch. Follow an existing function instead of inventing a new pattern.
+2. If the database changes: next SQL file, journal entry, Drizzle column. Prefer a nullable column or a new table over rewriting history.
+3. Put the behavior in `packages/services`. Routes stay thin.
+4. Add the route with `makeRouter`. Side effects that must not double-run go on a BullMQ job with `attempts: 1` and a claimed database row (see publish).
+5. Build the screen in `apps/web/src/app/(app)/`. Empty, error, and offline states are part of the screen. Keep it usable at 360px.
+6. Add an integration test under `tests/integration/test`. The owner sometimes says not to run it; still write it, and say you did not run it.
+7. Update this file and `docs/IMPLEMENTATION_PROGRESS.md`.
+8. Deploy with the command in section 6. `docker compose build` alone does not change the site the owner is looking at.
+
+Do not commit unless the owner asks. Do not push. The owner pushes.
+
+## 5. What is true right now (2026-10-19)
+
+These behaviors are in the working tree. They are on the running site only after the deploy command in section 6 has been run since the edit.
+
+### Publishing
+
+- The plan dropdown is **brands** from Channels (`GET /catalog`), not creative projects. `GET /publishing/matrix?brandId=` limits both the account columns (via `channels.brand_id`) and the title rows.
+- A title created while a brand is selected stores `distribution_variants.brand_id`. Older titles were backfilled from the asset's brand or the project's brand. A title with no brand shows only under **All brands**.
+- Each row has an **×** on the right. `DELETE /variants/:id` removes the plan row. The file is not deleted. A publication that already went out stays (`variant_id` is set null).
+- Opening a title goes to `/publishing/[variantId]`. **Link a file** searches library videos only. Unlink does not delete the file or a post already sent.
+- **Publish** is per file and per account. Same `requestId` does not upload twice. Worker job name `publish`, queue `requests`, `attempts: 1`. The draft row is claimed from `QUEUED`. States: `QUEUED`, `UPLOADING`, `PUBLISHED`, `FAILED`, `UNCERTAIN`. Uncertain means bytes may have arrived; do not auto-retry.
+- The worker streams the file from the online Windows agent with the same signed URL as `/files/:id/stream` (`packages/services/src/agent-file.ts`). If that PC is off, the draft becomes `FAILED` and is not marked published.
+- YouTube needs opt-in scope `youtube.upload` (**Enable uploads** on Integrations). Privacy must be chosen; nothing defaults to public. Facebook Page video needs opt-in `pages_manage_posts` (**Enable Page videos**). That scope is not part of a normal Page reconnect. Instagram posts a Reel when `instagram_business_content_publish` is granted. TikTok stays disabled (audit). **Add a live post** is still the manual path.
+- Code: `packages/services/src/publishing.ts`, `packages/services/src/publish-run.ts`, `packages/connectors/src/publish-upload.ts`, `apps/worker/src/jobs.ts` (`jobPublish`), `apps/web/src/app/(app)/publishing/`.
+- Test written, not run: `tests/integration/test/publishing-upload.test.ts`. Not live-verified against YouTube, Instagram, or Facebook.
+- Live Instagram for @mehakviking has been Meta `API access blocked` (OAuthException 200). The button should show that error. Reconnect does not clear a Meta block.
+
+### Content ideas
+
+- Status path on each card: New → Start researching → Approve, Reject, Archive, or Delete. **Bring back** restores an archived idea to the status it had before archive (`ideas.archived_from`), and a rejected idea to New. Delete sets `deleted_at`. It hides the idea and leaves any Production project that was already created.
+- **New idea** and **Edit** are pages (`/content/new`, `/content/[id]`), not a dialog. The form opens with every field filled in. Saving an idea that already has a project does not change that project.
+- Pitch is no longer a separate box. **Detailed concept** is the writing field at the top. Old pitches are shown in that field the first time you edit them. Search looks at the concept text. **Dictate** on that field uses the browser speech service (Chrome or Edge); other browsers show the control disabled. Caddy must send `Permissions-Policy: microphone=(self)`. `microphone=()` blocks the laptop prompt; phone browsers often ignore it. Restart Caddy after changing `infra/docker/Caddyfile`.
+- Unsaved writing is stored in this browser (`localStorage` key `cos-idea-draft:`). Closing the app and opening New idea or that idea again restores it. **Discard** clears it. **Capture** or **Save** clears it after the server accepts the idea.
+- Extra fields: song title plus an optional library audio file, detailed concept (bold, italic, underline, lists; emoji is plain text), audience, competitor, hook, narrative, and distribution. Detailed concept is stored as HTML and sanitized in `packages/domain/src/rich-html.ts` (those tags only, no attributes).
+- **Make a project** copies those fields onto the project, along with the brief and concept the project already had. Production → Details → Edit changes the project copy. Later idea edits do not follow it.
+- Code: `packages/services/src/projects.ts` (`createIdea`, `updateIdea`, `deleteIdea`, `convertIdea`), `apps/api/src/routes/content.ts`, `apps/web/src/app/(app)/content/page.tsx`, `apps/web/src/components/creative-fields.tsx`, `apps/web/src/app/(app)/production/[id]/page.tsx`. Migration `0012_idea_brief`.
+
+### Library
+
+- List rows include tags (`packages/services/src/library.ts`). The page uses those for YouTube / Instagram / TikTok marks and the Extra tag (`PUT /library/marks`). A missing `tags` array must be treated as empty. Calling `.some` on it crashed the whole Library page.
+
+### Mail, invoices, socials (already in earlier commits)
+
+- Collaborations inbox is email and pasted threads. Social threads stay in Socials.
+- Editors and viewers do not see Publishing, Calendar, Collaborations, Socials, Workflows, Analytics, Channels, Storage & Devices, Integrations or Settings. The nav hides them and those API paths require OWNER. They still have Home, Content and Production. Editors also have Inbox & Today and Library. Viewers do not.
+- `GET /socials/platforms` fills the social tabs. Stored Instagram diagnostics are attached only when an Instagram connection exists. Do not run that probe on the first account in the list: a Facebook or YouTube connection makes the probe throw `Social account not found` and every tab fails.
+- Gmail: starred sync, invoice search, full message text, per-message reply, live CAD totals. Sending mail needs **Enable sending** (`gmail.send`).
+- YouTube comments need **Enable comments** (`youtube.force-ssl`).
+- Invoice amounts in CAD use a stored FX rate (Frankfurter, then open.er-api). If both fail, the last rate is kept. Nothing is invented.
+- An invoice document is a page: `/collaborations/invoices/new` and `/collaborations/invoices/[id]`. From, to, dates, number, currency, lines (description, quantity, unit price, tax percent) and bank details are editable. Line amount, subtotal, tax and amount due are calculated; amount due is stored as `invoices.amount_minor`. Lines live in `invoice_lines`. Creating without lines (email suggestions, tests) still sends `amountMinor` only. Migration `0013_invoice_document`. Code: `packages/services/src/crm.ts` (`createInvoice`, `updateInvoice`, `getInvoice`), `apps/api/src/routes/work.ts`, `apps/web/src/app/(app)/collaborations/invoice-editor.tsx`.
+
+## 6. Commands
+
+Run these from the repo root: `~/workspace/creatoros` on the Ubuntu server, or the clone on the Windows PC.
+
+### Deploy so the owner actually sees the change
+
+`docker compose build` only creates images. The containers already running keep the old image. `docker compose restart` starts those same containers again. It does not load new code or a changed `.env`.
+
+After application code changes, including a new migration:
+
+```bash
+docker compose up -d --build
+```
+
+That rebuilds api, worker, web, and migrate, runs pending migrations, then starts the new containers. Postgres data is kept.
+
+If you only need some of the services, include **migrate** whenever a new SQL file exists. The API will query columns that do not exist yet if you skip it.
+
+```bash
+docker compose up -d --build --force-recreate migrate api web
+```
+
+`--force-recreate` replaces those containers even when Compose thinks nothing changed. Use it when a rebuild did not show up in the browser.
+
+Check:
+
+```bash
+docker compose ps
+docker compose logs migrate --tail 30
+curl -sS http://127.0.0.1:8080/api/v1/health/ready
+```
+
+Web, API, and worker should have been created just now. Migrate should say it exited after "migrations applied". Then reload the browser page. The service worker does not cache HTML. A normal reload is enough.
+
+### Day to day
+
+| You want | Command |
+| --- | --- |
+| Status | `docker compose ps` |
+| Follow one log | `docker compose logs -f api` (or `worker`, `web`, `caddy`, `migrate`) |
+| Stop / start the same containers | `docker compose stop` / `docker compose start` |
+| Restart without new code | `docker compose restart` |
+| Apply a `.env` change (not `API_INTERNAL_URL`) | `docker compose up -d` |
+| `API_INTERNAL_URL` changed | `docker compose up -d --build web` |
+| Change still invisible | `docker compose up -d --force-recreate` |
+| Health | `curl -sS http://127.0.0.1:8080/api/v1/health/ready` |
+| Support bundle, no secrets | `pnpm diagnostics` |
+| Backup / restore | `pnpm backup` / `pnpm restore` |
+| Prove restarts keep data | `pnpm restart-test` |
+| Tailscale HTTPS | `pnpm tailscale enable` |
+
+Do not change `POSTGRES_PASSWORD` after the first start. Changing `ENCRYPTION_KEY` makes stored OAuth tokens unreadable; reconnect integrations after that.
+
+### Develop and test
+
+Prefer tests on a machine with more than this server's 3.8 GB RAM. The Ubuntu box is the running app.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm check               # format, lint, typecheck, unit
-pnpm test:integration    # real Postgres in Docker (starts its own container)
-pnpm test:agent          # Go tests
-pnpm test:e2e            # Playwright (its pretest builds web against the test API)
+pnpm dev                         # local API + web; needs the dev compose profile for Postgres/Redis
+pnpm check                       # format, lint, typecheck, unit
+pnpm typecheck
+pnpm --filter @creatoros/web typecheck
+pnpm test:integration            # real Postgres. Unset TEST_DATABASE_URL first so the harness starts its own DB
+pnpm test:agent                  # Go
+pnpm test:e2e                    # Playwright. Do not run bare playwright after pnpm build
 pnpm build
-docker compose up -d --build
-docker compose ps
-pnpm backup | pnpm restore | pnpm diagnostics | pnpm restart-test
-pnpm tailscale enable    # Tailscale Serve https :8443 -> Caddy :8080
-pnpm agent:build -- --all   # cross-compile scanner agent
+pnpm db:migrate
+pnpm agent:build -- --all
 ```
 
-Restart rules (full text in `docs/OPERATIONS.md`): after editing `.env` run `docker compose up -d` (recreates changed
-containers); after code changes run `docker compose up -d --build`. `docker compose restart` does NOT re-read `.env`.
+On Windows, before any `docker` command in an agent shell: `. .\infra\scripts\docker-env.ps1`. If that changes the directory, `cd` back to the repo.
 
-## 6. Scanner agent essentials
+`pnpm test:e2e` builds the web app against the test API. A bundle from `pnpm build` points at another API and every browser test fails at sign-in.
 
-- Commands: `pair | run | install | uninstall | start | stop | status | reset-state | systemd-unit`. Service commands are
-  Windows-only; Linux uses a systemd unit (`systemd-unit` prints it).
-- Default dirs: `C:\ProgramData\CreatorOS\agent`, `~/.config/creatoros-agent`, or `/var/lib/creatoros-agent` (root).
-- Listens on 7755. Device identity = UUID in `agent.json`, not hostname or IP.
-- Pairing: one-time expiring code from the UI. Requests signed: `Authorization: Bearer`, `x-agent-timestamp`,
-  `x-agent-signature = HMAC-SHA256(key, ts + "." + sha256hex(body))`.
-- Stream contract (API -> agent): `GET {listenUrl}/v1/stream?root=&path=&exp=&sig=` with Range; the agent re-checks the path is inside the root.
-- Ingest contract: a COMPLETE scan must report every present file; unreported files become missing candidates (2 complete
-  scans + grace before CONFIRMED_MISSING). An empty "complete" scan of a populated root is treated as UNREACHABLE.
-- Never kill-and-forget: stop via `creatoros-agent stop` / `systemctl stop`; see OPERATIONS.md for process killing.
+### Git
 
-## 7. Deployment facts (current)
+```bash
+git status
+git log --oneline -15
+git diff
+```
 
-- Dev machine: Windows 11, `D:\creatoros`, PowerShell. Source of truth in git on branch `main`.
-- Remote: https://github.com/goyalvipul/creatoros.git. The Windows PC could not push (no stored credentials); the owner pushes
-  manually with `git push -u origin main`. Check `git log origin/main..main` before assuming the Ubuntu copy is current.
-- Production host: Ubuntu machine "guardobox" (LAN 192.168.1.151, Tailscale 100.108.120.8, 2 cores, 3.8 GB RAM, no GPU),
-  checkout at `~/workspace/creatoros`, app on port 8080 via Caddy. The stack used about 330 MB RAM there.
-  (The other Ubuntu box, "intelnuc", runs Nextcloud AIO on 8080 and was rejected.)
-- GPU Windows PCs with data and scanner agents: 12 GB at 100.113.189.17, 24 GB at 100.85.189.23 (Tailscale IPs).
-- Tailscale HTTPS: on Ubuntu `sudo tailscale set --operator=$USER` once, then `pnpm tailscale enable` gives
-  `https://<machine>.<tailnet>.ts.net:8443`. HTTPS Certificates must be enabled in the Tailscale admin console (DNS).
-- Google OAuth redirect URI must be `<APP_BASE_URL>/api/v1/integrations/oauth/callback`, exactly the same in `.env`
-  (`GOOGLE_REDIRECT_URI`) and in Google Cloud. Google rejects raw IPs and plain-http (except localhost), so use the
-  `.ts.net` https name, your own domain, or `http://localhost:8080` with an SSH tunnel for a one-time connect.
-  When using https also set `APP_BASE_URL` and `ALLOWED_ORIGINS` to that same origin.
-- Secrets live only in `.env` (never commit; `.env.example` documents each key). Key variables: `APP_BASE_URL`,
-  `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, `AGENT_PAIRING_SECRET`,
-  `MEDIA_PREVIEW_CACHE_DIR`, `MEDIA_PREVIEW_MAX_GB`, `GOOGLE_*`, `TODO_*`, `POSTIZ_*`. Losing
-  `CREDENTIAL_ENCRYPTION_KEY` makes stored OAuth tokens unreadable. Back it up separately from DB backups.
-- Accounts: the test owner `owner@creator.test` was created by the previous agent during testing and its password was
-  reset to a temporary one. The owner should create a real owner and change/retire that account.
+Commit only when the owner asks. Do not chain `git commit` with other commands. The owner runs `git push`. Remote: `https://github.com/goyalvipul/creatoros.git`, branch `main`.
 
-## 8. Behaviours worth knowing
+## 7. Runtime
 
-- Notifications: quiet hours (default 22:00-07:00, America/Vancouver) hold non-critical notices via `snoozed_until`;
-  CRITICAL ones bypass. Tests must read the `notifications` table, not the visible list.
-- Todo adapter policy `TODO_OWNS_DUE_AND_COMPLETION`; stable idempotency keys; pending sync shown as pending, never "synced".
-- Soft-delete: partial unique indexes on `deleted_at is null`, so names/handles can be reused after archive.
-- Delete UX: brands/channels/social accounts are archived (OWNER only; brand archive cascades transactionally).
-  `deleteRoot` only works on RETIRED roots, refuses with 409 while files are linked to assets, and never touches files on disk.
-- Counts: distinct physical instances vs exact media objects vs logical assets vs publications are separate numbers on purpose.
-- Backups: `pnpm backup` writes a checksummed pg_dump plus manifest into `backups/`; on-demand restore test exists
-  (RESTORED_TEST, failure creates a CRITICAL `backup.restore_test.failed` notification). Originals are not backed up.
+- pnpm 12, TypeScript 5.9 ESM strict, Node 22 in the images. Postgres 17, Redis 7, Caddy 2, Go for the scanner, ffmpeg/ffprobe.
+- Compose project name `creatoros`. Services: `db`, `redis`, `migrate`, `api`, `worker`, `web`, `caddy`. Host port **8080**. Profile `dev` adds loopback-only `db-proxy` (5432) and `redis-proxy` (6379).
+- Memory limits: db 1g, api 768m, worker 768m, web 512m, redis 384m, caddy 128m.
+- One Dockerfile, `infra/docker/Dockerfile`. Building the web target still compiles the API and the worker in the build stage. Next.js bakes `rewrites()` at build time, so `API_INTERNAL_URL=http://api:4000` is set in that stage.
+- `AGENT_LOOPBACK_HOST` rewrites `127.0.0.1` / `localhost` in agent listen URLs so the API container can reach an agent on the Docker host. On this Linux server set it to the bridge address (often `172.17.0.1`) if the default `host.docker.internal` mapping is not enough.
+- Auth: session cookie, Argon2id, CSRF, login throttling, optional TOTP. No public sign-up. The first visit is the setup wizard.
+- Jobs the owner triggers (sync, backup, publish) go on the BullMQ queue `requests`. Repeating jobs go on `jobs`.
 
-## 9. Verified vs not verified
+### This server
 
-Verified on the Windows dev PC (2026-10-18): frozen install, build, format/lint/typecheck, 60 unit, 80 integration,
-Go vet+test, compose rebuild healthy, backup + restore dry run, restart-test 10/10, Playwright 33/33 (desktop + 360px).
-Later commits added edit/delete of brands/channels/accounts and removal of retired folders (service + API tested; the
-Remove-folder button has no browser test).
+- Host: Ubuntu `guardobox`. Checkout `~/workspace/creatoros`. LAN `192.168.1.151`, Tailscale `100.108.120.8`. About 2 cores and 3.8 GB RAM. No GPU. Do not run the full integration or Playwright suites here.
+- Public URL in use: `https://os.goyalfamily.ca` (Caddy on 8080 behind that name). `APP_BASE_URL` and `ALLOWED_ORIGINS` must be that origin or the browser gets a cross-site error.
+- Scanner PCs (Tailscale): 12 GB GPU at `100.113.189.17`, 24 GB GPU at `100.85.189.23`.
+- The other Ubuntu box `intelnuc` runs Nextcloud on 8080. Do not deploy Creator OS there.
+- Google OAuth redirect must be exactly `<APP_BASE_URL>/api/v1/integrations/oauth/callback`, the same in `.env` and in Google Cloud. Google rejects a raw IP and plain HTTP except localhost.
+- Secrets: `.env` only. Losing `ENCRYPTION_KEY` (documented in `.env.example`; the compose file uses that name) makes stored tokens unreadable. Back it up apart from the database dump.
+- Windows dev PC, when used: `D:\creatoros`, PowerShell. That machine could not push by itself. Confirm `git log origin/main..main` before assuming GitHub matches the server.
 
-Not verified / known gaps:
+## 8. Scanner, in short
 
-- Linux systemd agent steps and the Ubuntu install have not been fully tested by an agent; the owner ran the stack there.
-- The newest code (edit/delete, restart docs) reaches Ubuntu only after pull/copy and `docker compose up -d --build`.
-- Agent memory use not measured.
-- Real Google, Gmail, YouTube, Postiz, Meta, TikTok connections are BLOCKED_EXTERNAL until the owner supplies credentials
-  or approvals (`docs/EXTERNAL_PREREQUISITES.md`). Mocked tests do not prove live integrations.
-- No live Windows service install test beyond what is in the ledger; Tailscale HTTPS needs the one-time admin setup above.
+- Commands: `pair | run | install | uninstall | start | stop | status | reset-state | systemd-unit`. Service install is Windows. Linux prints a systemd unit.
+- Listens on 7755. Identity is the UUID in `agent.json`, not the hostname.
+- Pair with a one-time code from Storage. Requests are HMAC-signed.
+- Stream: `GET {listenUrl}/v1/stream?root=&path=&exp=&sig=`, with Range. The path must stay inside the granted root.
+- A COMPLETE scan must list every file still present. Missing an entry starts the missing-candidate path. An empty complete scan of a root that had files is treated as unreachable, not as "everything was deleted".
+- Stop with `creatoros-agent stop` or `systemctl stop`. Do not kill the process and walk away.
 
-## 10. Environment traps
+## 9. Traps
 
-Windows/PowerShell (dev PC):
+- `docker compose build` does not switch the running site. Follow with `up -d`, or use the single `up -d --build` command.
+- Rebuilding `api` and `web` without `migrate` skips a new migration. The new API then errors on the missing column.
+- `docker compose restart` does not reload `.env` or a new image.
+- Library and Publishing are client pages. A type error fails `pnpm --filter @creatoros/web build` inside the image (`next build` type-checks). `Badge` accepts `className`. Do not call `.some` on a field the list API does not return.
+- PowerShell cannot `cd` into `(app)` or `[id]`. Use the editor tools or `-LiteralPath`.
+- PowerShell `Set-Content -Encoding UTF8` writes a BOM. Use the editor tools.
+- Notification tests must read the `notifications` table. Quiet hours hide non-critical rows from the visible list.
+- Counts, publish cells, and "published / attached" are separate queries. Do not join files to posts and count the product.
+- Facebook `pages_manage_posts` and YouTube `youtube.upload` are opt-in. Do not add them to the default connect scopes or a normal reconnect drops or widens permissions by surprise.
+- Instagram "API access blocked" is a Meta app problem, not an expired token.
 
-- Agent shells need `. .\infra\scripts\docker-env.ps1` before docker; dot-sourcing can change cwd, so `cd` afterwards.
-- Unset `TEST_DATABASE_URL` before integration tests so the harness starts its own container.
-- `Set-Content -Encoding UTF8` writes a BOM; use editor tools or `[IO.File]::WriteAllText(path, text, (New-Object Text.UTF8Encoding $false))`.
-- `cd` into `(app)` / `[id]` folders fails; use `-LiteralPath` or file tools.
-- Docker Desktop must be running for integration tests; if not, vitest reports "No test files found / Collect Error undefined".
-- Run browser tests only with `pnpm test:e2e` (bare `playwright` uses a bundle built for another API address).
-- Do not chain `git commit` with other commands; auto-review sometimes blocks git/docker commands.
+## 10. What a new agent should do first
 
-Ubuntu (production host): Docker is installed; 2 cores and 3.8 GB RAM, so avoid running the full test suites there
-(integration and e2e build images and use a lot of RAM). Develop and test on the Windows PC or a bigger machine, deploy by pull
-
-- `docker compose up -d --build`. Use `docker compose logs -f api` for diagnosis and `pnpm diagnostics` for a bundle.
-
-## 11. Working agreement with the owner
-
-- Owner is technically capable but wants short, direct answers and concrete commands. Explain-only requests (`/explain`)
-  mean no file changes.
-- Commit when work is done (simple `git commit`, do not chain). The owner runs `git push`.
-- Update `docs/IMPLEMENTATION_PROGRESS.md` and `FEATURES.md` when something changes; do not claim completion without test evidence.
-
-## 12. Suggested first steps for a new agent
-
-1. `git status` and `git log --oneline -10`; compare with `origin/main`.
-2. `docker compose ps` and `curl -s localhost:8080/api/v1/health/ready` on the host.
-3. Read `AGENTS.md`, then `docs/IMPLEMENTATION_PROGRESS.md`; ask the owner for the task.
-4. For any change: implement in `packages/services` first, add the route, add tests, then UI; run `pnpm check` and the relevant test set.
+1. Read this file. Then `git status` and `git log --oneline -10`.
+2. `docker compose ps` and `curl -sS http://127.0.0.1:8080/api/v1/health/ready`.
+3. Ask the owner for the task if it is not already in the message. Do not restyle unrelated screens.
+4. Change `packages/services` first, then the route, then the page. Update this file before you stop.
+5. If the owner should see it on `os.goyalfamily.ca`, deploy with section 6 and say whether you ran that command.

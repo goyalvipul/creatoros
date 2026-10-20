@@ -1,9 +1,10 @@
 'use client';
 
+import { richHtmlToText } from '@creatoros/domain';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Lightbulb, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActionButton,
   Async,
@@ -18,11 +19,17 @@ import {
   PageHeader,
   Select,
   StateBadge,
-  Textarea,
 } from '@/components/ui';
-import { patch, post, refresh, useApi } from '@/lib/api';
+import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
-import { IDEA_FORMATS, IDEA_STATUSES, PRIORITIES, PROJECT_TYPES, useBrands } from '@/lib/options';
+import { hasIdeaDraft } from '@/lib/idea-draft';
+import { IDEA_STATUSES, PROJECT_TYPES, useBrands } from '@/lib/options';
+
+function preview(idea: { conceptDetail?: string | null; pitch?: string | null }) {
+  const text = richHtmlToText(idea.conceptDetail ?? '') || idea.pitch || '';
+  if (!text) return null;
+  return text.length > 180 ? `${text.slice(0, 177)}…` : text;
+}
 
 export default function ContentPage() {
   const router = useRouter();
@@ -33,11 +40,13 @@ export default function ContentPage() {
     query: { status: status || undefined, brandId: brandId || undefined, q: q || undefined, limit: 200 },
   });
   const brands = useBrands();
-  const [adding, setAdding] = useState(false);
   const [converting, setConverting] = useState<any>(null);
-  const [f, setF] = useState({ title: '', pitch: '', format: 'OTHER', priority: 'NORMAL', brandId: '' });
   const [cv, setCv] = useState({ title: '', type: 'OTHER', dueAt: '' });
+  const [resume, setResume] = useState(false);
   const reload = () => refresh('/ideas');
+  useEffect(() => {
+    setResume(hasIdeaDraft('new'));
+  }, []);
 
   return (
     <>
@@ -45,8 +54,8 @@ export default function ContentPage() {
         title="Content ideas"
         subtitle="Capture first, decide later. Approved ideas become production projects with a checklist."
         actions={
-          <Button variant="primary" onClick={() => setAdding(true)}>
-            <Plus className="size-4" /> New idea
+          <Button variant="primary" onClick={() => router.push('/content/new')}>
+            <Plus className="size-4" /> {resume ? 'Resume writing' : 'New idea'}
           </Button>
         }
       />
@@ -77,8 +86,8 @@ export default function ContentPage() {
           <EmptyState
             title="No ideas yet"
             action={
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                Capture your first idea
+              <Button variant="primary" onClick={() => router.push('/content/new')}>
+                {resume ? 'Resume writing' : 'Capture your first idea'}
               </Button>
             }
           >
@@ -94,7 +103,11 @@ export default function ContentPage() {
                   <div className="flex items-start gap-2">
                     <Lightbulb className="mt-0.5 size-4 shrink-0 text-warn" />
                     <div className="min-w-0 flex-1">
-                      <h3 className="font-medium">{i.title}</h3>
+                      <h3 className="font-medium">
+                        <Link href={`/content/${i.id}`} className="hover:text-accent">
+                          {i.title}
+                        </Link>
+                      </h3>
                       <div className="mt-1 flex flex-wrap gap-1.5">
                         <StateBadge state={i.status} />
                         <Badge>{titleCase(i.format)}</Badge>
@@ -105,56 +118,113 @@ export default function ContentPage() {
                         )}
                         {i.isDemo && <Badge tone="info">demo</Badge>}
                       </div>
-                      {i.pitch && <p className="mt-2 text-sm text-muted">{i.pitch}</p>}
+                      {preview(i) && <p className="mt-2 text-sm text-muted">{preview(i)}</p>}
                       <p className="mt-2 text-xs text-muted">Captured {ago(i.createdAt)}</p>
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {i.convertedProjectId ? (
-                      <Link className="text-sm text-accent" href={`/production/${i.convertedProjectId}`}>
+                    <Button size="sm" onClick={() => router.push(`/content/${i.id}`)}>
+                      Edit
+                    </Button>
+                    {i.status === 'NEW' && (
+                      <ActionButton
+                        size="sm"
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: 'RESEARCHING' });
+                          await reload();
+                        }}
+                      >
+                        Start researching
+                      </ActionButton>
+                    )}
+                    {(i.status === 'NEW' || i.status === 'RESEARCHING') && (
+                      <ActionButton
+                        size="sm"
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: 'APPROVED' });
+                          await reload();
+                        }}
+                      >
+                        Approve
+                      </ActionButton>
+                    )}
+                    {i.status !== 'REJECTED' && i.status !== 'ARCHIVED' && (
+                      <ActionButton
+                        size="sm"
+                        confirm="Reject this idea? You can still find it under the Rejected filter."
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: 'REJECTED' });
+                          await reload();
+                        }}
+                      >
+                        Reject
+                      </ActionButton>
+                    )}
+                    {i.status === 'REJECTED' && (
+                      <ActionButton
+                        size="sm"
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: 'NEW' });
+                          await reload();
+                        }}
+                      >
+                        Bring back
+                      </ActionButton>
+                    )}
+                    {i.status !== 'ARCHIVED' ? (
+                      <ActionButton
+                        size="sm"
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: 'ARCHIVED' });
+                          await reload();
+                        }}
+                      >
+                        Archive
+                      </ActionButton>
+                    ) : (
+                      <ActionButton
+                        size="sm"
+                        variant="primary"
+                        onAction={async () => {
+                          await patch(`/ideas/${i.id}`, { status: i.archivedFrom || 'NEW' });
+                          await reload();
+                        }}
+                      >
+                        Bring back
+                      </ActionButton>
+                    )}
+                    {!i.convertedProjectId && i.status !== 'REJECTED' && i.status !== 'ARCHIVED' && (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          setCv({
+                            title: i.title.replace(/^DEMO Idea: /, 'DEMO '),
+                            type: 'OTHER',
+                            dueAt: '',
+                          });
+                          setConverting(i);
+                        }}
+                      >
+                        Make a project
+                      </Button>
+                    )}
+                    {i.convertedProjectId && (
+                      <Link className="self-center text-sm text-accent" href={`/production/${i.convertedProjectId}`}>
                         Open project →
                       </Link>
-                    ) : (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          onClick={() => {
-                            setCv({
-                              title: i.title.replace(/^DEMO Idea: /, 'DEMO '),
-                              type: 'OTHER',
-                              dueAt: '',
-                            });
-                            setConverting(i);
-                          }}
-                        >
-                          Make a project
-                        </Button>
-                        {i.status !== 'REJECTED' && (
-                          <ActionButton
-                            size="sm"
-                            confirm="Reject this idea? You can still find it under the Rejected filter."
-                            onAction={async () => {
-                              await patch(`/ideas/${i.id}`, { status: 'REJECTED' });
-                              await reload();
-                            }}
-                          >
-                            Reject
-                          </ActionButton>
-                        )}
-                        {i.status === 'NEW' && (
-                          <ActionButton
-                            size="sm"
-                            onAction={async () => {
-                              await patch(`/ideas/${i.id}`, { status: 'RESEARCHING' });
-                              await reload();
-                            }}
-                          >
-                            Start researching
-                          </ActionButton>
-                        )}
-                      </>
                     )}
+                    <ActionButton
+                      size="sm"
+                      variant="danger"
+                      confirm="Delete this idea? A project already made from it stays in Production."
+                      onAction={async () => {
+                        await del(`/ideas/${i.id}`);
+                        await reload();
+                      }}
+                    >
+                      Delete
+                    </ActionButton>
                   </div>
                 </Card>
               </li>
@@ -162,53 +232,6 @@ export default function ContentPage() {
           </ul>
         )}
       </Async>
-
-      <FormDialog
-        open={adding}
-        onClose={() => setAdding(false)}
-        title="New idea"
-        submitLabel="Capture"
-        onSubmit={async () => {
-          await post('/ideas', {
-            title: f.title.trim(),
-            pitch: f.pitch.trim() || undefined,
-            format: f.format,
-            priority: f.priority,
-            brandId: f.brandId || undefined,
-          });
-          setF({ title: '', pitch: '', format: 'OTHER', priority: 'NORMAL', brandId: '' });
-          await reload();
-        }}
-      >
-        <Field label="Title">
-          <Input required autoFocus value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
-        </Field>
-        <Field label="Pitch (optional)">
-          <Textarea rows={3} value={f.pitch} onChange={(e) => setF({ ...f, pitch: e.target.value })} />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Format">
-            <Select value={f.format} onChange={(e) => setF({ ...f, format: e.target.value })}>
-              <Options values={IDEA_FORMATS} />
-            </Select>
-          </Field>
-          <Field label="Priority">
-            <Select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>
-              <Options values={PRIORITIES} />
-            </Select>
-          </Field>
-        </div>
-        <Field label="Brand">
-          <Select value={f.brandId} onChange={(e) => setF({ ...f, brandId: e.target.value })}>
-            <option value="">No brand yet</option>
-            {brands.map((b: any) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </FormDialog>
 
       <FormDialog
         open={Boolean(converting)}

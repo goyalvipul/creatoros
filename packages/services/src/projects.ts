@@ -25,6 +25,8 @@ import {
   canonicalPath,
   computeProjectProgress,
   osToPathOs,
+  richHtmlToText,
+  sanitizeRichHtml,
   suggestNextStage,
   workflowManifestSchema,
   type ProjectStage,
@@ -37,18 +39,39 @@ type ProjectInsert = typeof creativeProjects.$inferInsert;
 
 // ------------------------------------------------------------------ ideas
 
+function cleanConcept<T extends { conceptDetail?: string | null; songFileId?: string | null }>(input: T): T {
+  if (typeof input.conceptDetail === 'string') {
+    const cleaned = sanitizeRichHtml(input.conceptDetail);
+    input.conceptDetail = cleaned || null;
+  }
+  return input;
+}
+
+async function assertSongFile(ctx: Ctx, fileId: string | null | undefined) {
+  if (!fileId) return;
+  const [file] = await ctx.db
+    .select({ fileType: fileInstances.fileType })
+    .from(fileInstances)
+    .where(and(eq(fileInstances.id, fileId), eq(fileInstances.orgId, ctx.orgId)));
+  if (!file) throw notFound('File');
+  if (file.fileType !== 'AUDIO') throw badRequest('Attach an audio file from the library.');
+}
+
 export async function createIdea(ctx: Ctx, input: Partial<typeof ideas.$inferInsert> & { title: string }) {
   if (!input.title?.trim()) throw badRequest('Title is required');
+  await assertSongFile(ctx, input.songFileId);
+  const clean = cleanConcept({ ...input });
   const [idea] = await ctx.db
     .insert(ideas)
     .values({
-      ...input,
+      ...clean,
       title: input.title.trim(),
       orgId: ctx.orgId,
       createdBy: ctx.userId,
       id: undefined,
       convertedProjectId: null,
       deletedAt: null,
+      archivedFrom: null,
     })
     .returning();
   await audit(ctx, 'idea.create', { type: 'idea', id: idea!.id });
@@ -56,19 +79,44 @@ export async function createIdea(ctx: Ctx, input: Partial<typeof ideas.$inferIns
 }
 
 export async function updateIdea(ctx: Ctx, id: string, patch: Partial<typeof ideas.$inferInsert>) {
-  const { id: _i, orgId: _o, createdBy: _c, convertedProjectId: _p, ...safe } = patch as any;
+  const { id: _i, orgId: _o, createdBy: _c, convertedProjectId: _p, archivedFrom: _a, ...safe } = patch as any;
   const [before] = await ctx.db
     .select()
     .from(ideas)
     .where(and(eq(ideas.id, id), eq(ideas.orgId, ctx.orgId), isNull(ideas.deletedAt)));
   if (!before) throw notFound('Idea');
+  await assertSongFile(ctx, safe.songFileId);
+  const clean = cleanConcept(safe);
+  if (clean.status === 'ARCHIVED' && before.status !== 'ARCHIVED') clean.archivedFrom = before.status;
+  if (clean.status && clean.status !== 'ARCHIVED' && before.status === 'ARCHIVED') clean.archivedFrom = null;
   const [after] = await ctx.db
     .update(ideas)
-    .set({ ...safe, updatedAt: new Date() })
+    .set({ ...clean, updatedAt: new Date() })
     .where(eq(ideas.id, id))
     .returning();
   await audit(ctx, 'idea.update', { type: 'idea', id }, before, after);
   return after!;
+}
+
+/** Hides the idea. A project already created from it is left alone. */
+export async function deleteIdea(ctx: Ctx, id: string) {
+  const [row] = await ctx.db
+    .update(ideas)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(ideas.id, id), eq(ideas.orgId, ctx.orgId), isNull(ideas.deletedAt)))
+    .returning({ id: ideas.id });
+  if (!row) throw notFound('Idea');
+  await audit(ctx, 'idea.delete', { type: 'idea', id });
+  return { id, removed: true };
+}
+
+export async function getIdea(ctx: Ctx, id: string) {
+  const [idea] = await ctx.db
+    .select()
+    .from(ideas)
+    .where(and(eq(ideas.id, id), eq(ideas.orgId, ctx.orgId), isNull(ideas.deletedAt)));
+  if (!idea) throw notFound('Idea');
+  return idea;
 }
 
 export async function listIdeas(
@@ -80,11 +128,16 @@ export async function listIdeas(
   if (q.brandId) where.push(sql`i.brand_id = ${q.brandId}`);
   if (q.q?.trim())
     where.push(
-      sql`(i.title ilike ${'%' + q.q.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%'} or i.pitch ilike ${'%' + q.q.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%'})`,
+      sql`(i.title ilike ${'%' + q.q.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%'} or i.pitch ilike ${'%' + q.q.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%'} or i.concept_detail ilike ${'%' + q.q.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%'})`,
     );
   return rowsOf<any>(
     await ctx.db.execute(
-      sql`select i.* from ideas i where ${sql.join(where, sql` and `)} order by i.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`,
+      sql`select i.id, i.title, i.pitch, i.status, i.format, i.priority, i.brand_id as "brandId",
+            i.created_at as "createdAt", i.converted_project_id as "convertedProjectId", i.is_demo as "isDemo",
+            i.song_title as "songTitle", i.song_file_id as "songFileId", i.concept_detail as "conceptDetail",
+            i.audience, i.competitor, i.hook, i.narrative, i.distribution_plan as "distributionPlan",
+            i.archived_from as "archivedFrom"
+          from ideas i where ${sql.join(where, sql` and `)} order by i.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`,
     ),
   );
 }
@@ -115,6 +168,7 @@ export async function convertIdea(
         .where(eq(creativeProjects.id, idea.convertedProjectId));
       if (p) return { project: p, alreadyConverted: true };
     }
+    const conceptText = idea.pitch?.trim() || richHtmlToText(idea.conceptDetail ?? '') || null;
     const project = await createProjectTx(tx, ctx, {
       title: input.title?.trim() || idea.title,
       type: input.type ?? 'OTHER',
@@ -122,8 +176,16 @@ export async function convertIdea(
       brandId: input.brandId ?? idea.brandId,
       channelId: idea.channelId,
       sourceIdeaId: idea.id,
-      brief: idea.creativeBrief ?? idea.pitch,
-      concept: idea.pitch,
+      brief: idea.creativeBrief ?? conceptText,
+      concept: conceptText,
+      songTitle: idea.songTitle,
+      songFileId: idea.songFileId,
+      conceptDetail: idea.conceptDetail,
+      audience: idea.audience,
+      competitor: idea.competitor,
+      hook: idea.hook,
+      narrative: idea.narrative,
+      distributionPlan: idea.distributionPlan,
       tags: idea.tags,
       priority: idea.priority,
       dueAt: input.dueAt ?? null,
@@ -242,6 +304,11 @@ export async function applyTemplate(ctx: Ctx, projectId: string, templateKey: st
 
 export async function updateProject(ctx: Ctx, id: string, patch: Partial<ProjectInsert>) {
   const { id: _i, orgId: _o, stage: _s, completedAt: _c, ...safe } = patch as any;
+  if (typeof safe.conceptDetail === 'string') {
+    const cleaned = sanitizeRichHtml(safe.conceptDetail);
+    safe.conceptDetail = cleaned || null;
+  }
+  await assertSongFile(ctx, safe.songFileId);
   const [before] = await ctx.db
     .select()
     .from(creativeProjects)

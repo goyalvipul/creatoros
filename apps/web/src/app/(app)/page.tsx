@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
+import { canOpen } from '@/components/nav';
 import { useMe } from '@/components/shell';
 import { Async, Badge, Card, CardTitle, EmptyState, Notice, PageHeader, Stat } from '@/components/ui';
 import { useApi } from '@/lib/api';
@@ -24,6 +25,7 @@ export default function HomePage() {
   const briefing = useApi<any>('/briefing', { refreshInterval: 60_000 });
   const health = useApi<any>('/system/health', { refreshInterval: 60_000 });
   const tz = me.data?.organization?.timezone;
+  const role = me.data?.user?.role as string | undefined;
 
   const problems = Object.entries(health.data?.checks ?? {}).filter(([, c]: any) => !c.ok);
 
@@ -68,7 +70,7 @@ export default function HomePage() {
                           {t.dueAt && <Badge tone="info">{when(t.dueAt, tz, false)}</Badge>}
                         </div>
                       </div>
-                      {t.deepLink && (
+                      {t.deepLink && canOpen(role, String(t.deepLink).split('?')[0]) && (
                         <Link
                           href={t.deepLink}
                           className="shrink-0 text-sm text-accent"
@@ -86,7 +88,7 @@ export default function HomePage() {
             <section aria-label="Counts" className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
               {Object.entries(b.counts).map(([k, v]) => {
                 const meta = COUNT_LINKS[k];
-                if (!meta) return null;
+                if (!meta || !canOpen(role, meta.href.split('?')[0] ?? '/')) return null;
                 const n = Number(v);
                 return (
                   <Link key={k} href={meta.href} className="block rounded-xl focus-visible:outline-2">

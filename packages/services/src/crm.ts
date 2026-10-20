@@ -11,6 +11,7 @@ import {
   externalOrganizations,
   fxRates,
   inboundClassifications,
+  invoiceLines,
   invoices,
   isNull,
   messages,
@@ -945,6 +946,61 @@ export async function pipeline(ctx: Ctx) {
 
 // ---------------------------------------------------------------- invoicing
 
+export interface InvoiceLineInput {
+  description: string;
+  quantity: number;
+  unitPriceMinor: number;
+  taxPercent: number;
+}
+
+function priceLines(lines: InvoiceLineInput[]) {
+  if (!lines.length) throw badRequest('Add at least one line.');
+  let subtotalMinor = 0;
+  let taxMinor = 0;
+  const rows = lines.map((line, ordinal) => {
+    const description = line.description.trim();
+    if (!description) throw badRequest('Each line needs a description.');
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0) throw badRequest('Quantity must be greater than zero.');
+    if (!Number.isInteger(line.unitPriceMinor) || line.unitPriceMinor < 0)
+      throw badRequest('Unit price must be zero or more.');
+    if (!Number.isFinite(line.taxPercent) || line.taxPercent < 0 || line.taxPercent > 100)
+      throw badRequest('Tax percent must be between 0 and 100.');
+    const net = Math.round(line.quantity * line.unitPriceMinor);
+    const tax = Math.round((net * line.taxPercent) / 100);
+    subtotalMinor += net;
+    taxMinor += tax;
+    return {
+      ordinal,
+      description,
+      quantity: line.quantity.toFixed(4),
+      unitPriceMinor: line.unitPriceMinor,
+      taxPercent: line.taxPercent.toFixed(4),
+      netMinor: net,
+      taxMinor: tax,
+      amountMinor: net + tax,
+    };
+  });
+  const amountMinor = subtotalMinor + taxMinor;
+  if (amountMinor <= 0) throw badRequest('The invoice total must be greater than zero.');
+  return { rows, subtotalMinor, taxMinor, amountMinor };
+}
+
+async function replaceInvoiceLines(tx: Executor, invoiceId: string, lines: InvoiceLineInput[]) {
+  const priced = priceLines(lines);
+  await tx.delete(invoiceLines).where(eq(invoiceLines.invoiceId, invoiceId));
+  await tx.insert(invoiceLines).values(
+    priced.rows.map((row) => ({
+      invoiceId,
+      ordinal: row.ordinal,
+      description: row.description,
+      quantity: row.quantity,
+      unitPriceMinor: row.unitPriceMinor,
+      taxPercent: row.taxPercent,
+    })),
+  );
+  return priced;
+}
+
 async function nextInvoiceNo(tx: Executor, orgId: string, year: number) {
   const r = rowsOf<{ n: number }>(
     await tx.execute(
@@ -959,16 +1015,22 @@ export async function createInvoice(
   input: {
     dealId?: string | null;
     invoiceNo?: string;
-    amountMinor: number;
+    amountMinor?: number;
     currency?: string;
     issuedAt?: Date | string | null;
     dueAt?: Date | string | null;
     termsDays?: number;
     notes?: string | null;
     draft?: boolean;
+    billFrom?: string | null;
+    billTo?: string | null;
+    bankDetails?: string | null;
+    lines?: InvoiceLineInput[];
   },
 ) {
-  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0)
+  const priced = input.lines?.length ? priceLines(input.lines) : null;
+  const amountMinor = priced?.amountMinor ?? input.amountMinor;
+  if (amountMinor == null || !Number.isInteger(amountMinor) || amountMinor <= 0)
     throw badRequest('Amount must be a positive whole number of minor units (e.g. cents)');
   return ctx.db.transaction(async (tx) => {
     let currency = input.currency;
@@ -983,7 +1045,7 @@ export async function createInvoice(
       termsDays ??= d.paymentTermsDays ?? undefined;
     }
     currency = (currency ?? 'USD').toUpperCase();
-    const issuedAt = input.draft ? null : new Date(input.issuedAt ?? Date.now());
+    const issuedAt = input.issuedAt ? new Date(input.issuedAt) : input.draft ? null : new Date();
     const dueAt = input.dueAt
       ? new Date(input.dueAt)
       : issuedAt && termsDays
@@ -1006,14 +1068,18 @@ export async function createInvoice(
         issuedAt,
         dueAt,
         currency,
-        amountMinor: input.amountMinor,
+        amountMinor,
         status: input.draft ? 'DRAFT' : 'ISSUED',
         notes: input.notes ?? null,
+        billFrom: input.billFrom?.trim() || null,
+        billTo: input.billTo?.trim() || null,
+        bankDetails: input.bankDetails?.trim() || null,
       })
       .returning();
+    if (priced) await replaceInvoiceLines(tx, i!.id, input.lines!);
     await audit({ ...ctx, db: tx }, 'invoice.create', { type: 'invoice', id: i!.id }, undefined, {
       invoiceNo,
-      amountMinor: input.amountMinor,
+      amountMinor,
       currency,
     });
     return i!;
@@ -1067,6 +1133,10 @@ export async function updateInvoice(
     dueAt?: Date | string | null;
     notes?: string | null;
     dealId?: string | null;
+    billFrom?: string | null;
+    billTo?: string | null;
+    bankDetails?: string | null;
+    lines?: InvoiceLineInput[];
   },
 ) {
   return ctx.db.transaction(async (tx) => {
@@ -1088,8 +1158,9 @@ export async function updateInvoice(
       if (dup) throw conflict(`Invoice number ${no} already exists.`, undefined, 'DUPLICATE_INVOICE_NO');
       set.invoiceNo = no;
     }
-    const amount = input.amountMinor ?? i.amountMinor;
-    if (input.amountMinor !== undefined) {
+    const priced = input.lines ? priceLines(input.lines) : null;
+    const amount = priced?.amountMinor ?? input.amountMinor ?? i.amountMinor;
+    if (priced || input.amountMinor !== undefined) {
       if (!Number.isInteger(amount) || amount <= 0)
         throw badRequest('Amount must be a positive whole number of minor units');
       if (amount < i.paidTotalMinor)
@@ -1108,6 +1179,10 @@ export async function updateInvoice(
     if (input.issuedAt !== undefined) set.issuedAt = input.issuedAt ? new Date(input.issuedAt) : null;
     if (input.dueAt !== undefined) set.dueAt = input.dueAt ? new Date(input.dueAt) : null;
     if (input.notes !== undefined) set.notes = input.notes?.slice(0, 2000) ?? null;
+    if (input.billFrom !== undefined) set.billFrom = input.billFrom?.trim() || null;
+    if (input.billTo !== undefined) set.billTo = input.billTo?.trim() || null;
+    if (input.bankDetails !== undefined) set.bankDetails = input.bankDetails?.slice(0, 4000).trim() || null;
+    if (priced) await replaceInvoiceLines(tx, id, input.lines!);
     if (input.dealId !== undefined) {
       if (input.dealId) {
         const [d] = await tx
@@ -1372,7 +1447,12 @@ export async function getInvoice(ctx: Ctx, id: string) {
     .from(payments)
     .where(eq(payments.invoiceId, id))
     .orderBy(asc(payments.receivedAt));
-  return { ...i, payments: pays };
+  const lines = await ctx.db
+    .select()
+    .from(invoiceLines)
+    .where(eq(invoiceLines.invoiceId, id))
+    .orderBy(asc(invoiceLines.ordinal));
+  return { ...i, payments: pays, lines };
 }
 
 export async function listDeals(ctx: Ctx, q: { stage?: string; q?: string; limit?: number } = {}) {

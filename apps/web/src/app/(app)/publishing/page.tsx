@@ -1,7 +1,8 @@
 'use client';
 
 import clsx from 'clsx';
-import { Plus } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { useMe } from '@/components/shell';
 import {
@@ -23,7 +24,7 @@ import {
   StateBadge,
   Tabs,
 } from '@/components/ui';
-import { post, refresh, useApi } from '@/lib/api';
+import { del, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { VARIANT_TYPES, useAccounts } from '@/lib/options';
 
@@ -42,7 +43,9 @@ const localStamp = (v: string) => (v.length === 16 ? `${v}:00` : v);
 
 export default function PublishingPage() {
   const [tab, setTab] = useState<'matrix' | 'unmatched'>('matrix');
-  const matrix = useApi<any>('/publishing/matrix');
+  const [brandId, setBrandId] = useState('');
+  const catalog = useApi<any[]>('/catalog');
+  const matrix = useApi<any>('/publishing/matrix', { query: brandId ? { brandId } : {} });
   const unmatched = useApi<any[]>('/publications/unmatched');
   const [cell, setCell] = useState<{ row: any; account: any; cell: any } | null>(null);
   const [addVariant, setAddVariant] = useState(false);
@@ -52,9 +55,22 @@ export default function PublishingPage() {
     <>
       <PageHeader
         title="Publishing"
-        subtitle="Which piece of content is going to which account, and what is actually live. Creator OS never posts for you."
+        subtitle="Which title is going to which account. A video is sent only when you press Publish on that file."
         actions={
           <>
+            <Select
+              aria-label="Brand"
+              value={brandId}
+              onChange={(e) => setBrandId(e.target.value)}
+              className="max-w-[14rem]"
+            >
+              <option value="">All brands</option>
+              {(catalog.data ?? []).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </Select>
             <Button onClick={() => setExisting(true)}>Add a live post</Button>
             <Button variant="primary" onClick={() => setAddVariant(true)}>
               <Plus className="size-4" /> New variant
@@ -108,13 +124,16 @@ export default function PublishingPage() {
                           <div className="font-normal">{a.handle}</div>
                         </th>
                       ))}
+                      <th className="w-12 px-2 py-2" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border bg-panel">
                     {m.rows.map((r: any) => (
                       <tr key={r.id}>
                         <td className="px-3 py-2">
-                          <div className="font-medium">{r.title}</div>
+                          <Link href={`/publishing/${r.id}`} className="font-medium text-accent hover:underline">
+                            {r.title}
+                          </Link>
                           <div className="text-xs text-muted">
                             {titleCase(r.format)} · {r.assetTitle}
                           </div>
@@ -123,17 +142,23 @@ export default function PublishingPage() {
                           const c = r.cells.find((x: any) => x.accountId === a.id) ?? {
                             state: 'NOT_APPLICABLE',
                           };
+                          const count = (r.attached ?? 0) > 0;
+                          const label = count
+                            ? `${c.published ?? 0}/${r.attached}`
+                            : c.state === 'NOT_APPLICABLE'
+                              ? 'Not planned'
+                              : titleCase(c.state);
                           return (
                             <td key={a.id} className="px-2 py-2">
                               <button
-                                aria-label={`${r.title} on ${a.platform} ${a.handle}: ${titleCase(c.state)}`}
+                                aria-label={`${r.title} on ${a.platform} ${a.handle}: ${label}`}
                                 className={clsx(
                                   'w-full rounded-lg border border-border px-2 py-1.5 text-left text-xs hover:border-accent',
                                   cellTone[c.state],
                                 )}
                                 onClick={() => setCell({ row: r, account: a, cell: c })}
                               >
-                                {c.state === 'NOT_APPLICABLE' ? 'Not planned' : titleCase(c.state)}
+                                {label}
                                 {c.plannedAt &&
                                   c.state !== 'PUBLISHED_MANUAL' &&
                                   c.state !== 'PUBLISHED_VERIFIED' && (
@@ -146,6 +171,20 @@ export default function PublishingPage() {
                             </td>
                           );
                         })}
+                        <td className="px-2 py-2 text-right">
+                          <ActionButton
+                            size="sm"
+                            variant="ghost"
+                            aria-label={`Remove ${r.title}`}
+                            confirm={`Remove “${r.title}” from the plan? The file stays where it is. A post that already went out stays on the platform.`}
+                            onAction={async () => {
+                              await del(`/variants/${r.id}`);
+                              await refresh('/publishing/matrix', '/variants');
+                            }}
+                          >
+                            <X className="size-4" />
+                          </ActionButton>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -181,13 +220,28 @@ export default function PublishingPage() {
       )}
 
       {cell && <CellDialog ctx={cell} onClose={() => setCell(null)} />}
-      <VariantDialog open={addVariant} onClose={() => setAddVariant(false)} />
+      <VariantDialog
+        open={addVariant}
+        brandId={brandId || null}
+        brandName={(catalog.data ?? []).find((b) => b.id === brandId)?.name ?? null}
+        onClose={() => setAddVariant(false)}
+      />
       <ExistingDialog open={existing} onClose={() => setExisting(false)} />
     </>
   );
 }
 
-function VariantDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+function VariantDialog({
+  open,
+  onClose,
+  brandId,
+  brandName,
+}: {
+  open: boolean;
+  onClose: () => void;
+  brandId?: string | null;
+  brandName?: string | null;
+}) {
   const assets = useApi<any[]>('/assets', { query: { limit: 200 } });
   const [f, setF] = useState({ assetId: '', titleMaster: '', type: 'MASTER' });
   return (
@@ -197,7 +251,12 @@ function VariantDialog({ open, onClose }: { open: boolean; onClose: () => void }
       title="New variant"
       submitLabel="Create"
       onSubmit={async () => {
-        await post('/variants', { assetId: f.assetId, titleMaster: f.titleMaster.trim(), type: f.type });
+        await post('/variants', {
+          assetId: f.assetId,
+          titleMaster: f.titleMaster.trim(),
+          type: f.type,
+          ...(brandId ? { brandId } : {}),
+        });
         setF({ assetId: '', titleMaster: '', type: 'MASTER' });
         await refresh('/publishing', '/variants');
       }}
@@ -220,6 +279,7 @@ function VariantDialog({ open, onClose }: { open: boolean; onClose: () => void }
           <Options values={VARIANT_TYPES} />
         </Select>
       </Field>
+      {brandName && <p className="text-sm text-muted">This title is for {brandName}.</p>}
       {assets.data?.length === 0 && (
         <p className="text-sm text-warn">Create an asset first in Library → Assets.</p>
       )}

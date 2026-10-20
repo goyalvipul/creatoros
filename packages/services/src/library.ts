@@ -52,12 +52,6 @@ export const ORIENTATION_SQL = sql`case
   end
   else 'UNKNOWN' end`;
 
-function tagExistsSql(alias: string, name: string) {
-  return sql`exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
-    where t.file_instance_id = ${alias}.id and mt.org_id = ${ctxOrgPlaceholder} and lower(mt.name) = lower(${name}))`;
-}
-
-// shared org placeholder resolved at call time below via closures
 export const extraExcludeSql = (orgId: string) => sql`not exists(select 1 from file_tag_links t join media_tags mt on mt.id = t.tag_id
   where t.file_instance_id = f.id and mt.org_id = ${orgId} and lower(mt.name) = 'extra')`;
 
@@ -128,7 +122,13 @@ const FILE_SELECT = sql`
   (select count(*)::int from file_instances c where c.media_object_id = f.media_object_id and f.media_object_id is not null and c.id <> f.id and c.archived_at is null) as "otherCopies",
   (select count(*)::int from asset_file_links l where l.file_instance_id = f.id) as "assetLinks",
   (f.tech->>'width')::int as "techWidth",
-  (f.tech->>'height')::int as "techHeight"`;
+  (f.tech->>'height')::int as "techHeight",
+  coalesce((
+    select json_agg(json_build_object('id', t.id, 'name', t.name))
+    from file_tag_links l
+    join media_tags t on t.id = l.tag_id
+    where l.file_instance_id = f.id
+  ), '[]'::json) as tags`;
 
 function shapeFile(r: any) {
   const copy = copyPathsFor(r, {
@@ -153,7 +153,16 @@ function shapeFile(r: any) {
     else orientation = 'SQUARE';
   }
 
-  return { ...rest, copyPaths: copy, orientation, width, height };
+  let tags = r.tags;
+  if (typeof tags === 'string') {
+    try {
+      tags = JSON.parse(tags);
+    } catch {
+      tags = [];
+    }
+  }
+  if (!Array.isArray(tags)) tags = [];
+  return { ...rest, copyPaths: copy, orientation, width, height, tags };
 }
 
 export async function listLibrary(ctx: Ctx, q: LibraryQuery) {

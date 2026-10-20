@@ -42,17 +42,24 @@ const PRIVATE_SEARCH_TYPES = new Set<SearchHit['type']>([
   'organization',
 ]);
 
-/** `includePrivate=false` (viewers) skips files, email and CRM entities. */
-export async function search(ctx: Ctx, q: string, perType = 6, includePrivate = true): Promise<SearchHit[]> {
+const OWNER_SEARCH_TYPES = new Set<SearchHit['type']>(['deal', 'thread', 'contact', 'organization', 'publication']);
+
+/** Viewers skip files and owner-only records. Editors skip publishing, CRM and social records. */
+export async function search(
+  ctx: Ctx,
+  q: string,
+  perType = 6,
+  role: 'VIEWER' | 'EDITOR' | 'OWNER' = 'OWNER',
+): Promise<SearchHit[]> {
   const term = q.trim();
   if (term.length < 2) return [];
   const like = `%${esc(term)}%`;
   const n = perType;
   const org = ctx.orgId;
+  const hidden = (type: SearchHit['type']) =>
+    (role !== 'OWNER' && OWNER_SEARCH_TYPES.has(type)) || (role === 'VIEWER' && PRIVATE_SEARCH_TYPES.has(type));
   const run = async (type: SearchHit['type'], query: ReturnType<typeof sql>) =>
-    !includePrivate && PRIVATE_SEARCH_TYPES.has(type)
-      ? []
-      : rowsOf<any>(await ctx.db.execute(query)).map((r) => ({ type, ...r }) as SearchHit);
+    hidden(type) ? [] : rowsOf<any>(await ctx.db.execute(query)).map((r) => ({ type, ...r }) as SearchHit);
   const parts = await Promise.all([
     run(
       'file',

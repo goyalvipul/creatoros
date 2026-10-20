@@ -16,6 +16,8 @@ export const FACEBOOK_SCOPES = {
   engagement: 'pages_manage_engagement',
 } as const;
 export const FACEBOOK_ALL_SCOPES: string[] = Object.values(FACEBOOK_SCOPES);
+/** Page video upload. Opt-in only — not part of the normal Page login. */
+export const FACEBOOK_VIDEO_SCOPE = 'pages_manage_posts';
 export const FACEBOOK_GRAPH = 'https://graph.facebook.com';
 export const FACEBOOK_WEBHOOK_FIELDS = ['messages', 'messaging_postbacks', 'message_reactions', 'feed'];
 

@@ -66,25 +66,25 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
     const read = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeRead[0]);
     const analytics = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeAnalytics[0]);
     const comments = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeComments[0]);
+    const upload = hasTokens && hasScope(creds, GOOGLE_SCOPES.youtubeUpload[0]);
     const blockers: string[] = [];
     if (!client)
       blockers.push('Google OAuth client is not configured (GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI).');
     if (client && !hasTokens) blockers.push('YouTube channel not connected yet.');
-    blockers.push(
-      'Uploading videos via API is not implemented (read-only import). Publish on YouTube Studio and record/import the result.',
-    );
+    if (hasTokens && !upload)
+      blockers.push('Video upload is off until you press Enable uploads and approve youtube.upload.');
     return {
       provider: 'youtube',
       state: !client || !hasTokens ? 'NOT_CONFIGURED' : 'ACTIVE',
       read,
-      write: false,
+      write: upload,
       incrementalSync: read,
       flags: {
         importUploads: read,
         ownStats: read,
         privateAnalytics: analytics,
         comments,
-        upload: false,
+        upload,
       },
       blockers,
       setupSteps: [
@@ -92,6 +92,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
         'Press Connect in Integrations and approve youtube.readonly (optionally yt-analytics.readonly).',
         'Link the connected channel to the matching social account in Channels.',
         'For Socials comments: press Enable comments and approve youtube.force-ssl (read and reply to comments).',
+        'To publish a video from Publishing: press Enable uploads and approve youtube.upload. Nothing is uploaded until you press Publish on that file.',
       ],
     };
   }
@@ -106,6 +107,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
       ...GOOGLE_SCOPES.youtubeRead,
       ...(input.analytics ? GOOGLE_SCOPES.youtubeAnalytics : []),
       ...(input.comments ? GOOGLE_SCOPES.youtubeComments : []),
+      ...(input.upload ? GOOGLE_SCOPES.youtubeUpload : []),
     ];
     return {
       status: 'REDIRECT',

@@ -109,19 +109,24 @@ function originAllowed(req: FastifyRequest, deps: AppDeps): boolean {
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
- * Private areas: email/CRM/finance, integrations, devices and the media library. A VIEWER can read the creative
- * pipeline (ideas, projects, publishing, calendar) but not these; reads here need at least EDITOR.
+ * Private areas: email/CRM/finance, integrations, devices and the media library. A VIEWER can read ideas and
+ * projects, but not these. Reads here need at least EDITOR, unless the path is owner-only below.
  */
 const PRIVATE_GET =
   /^\/(threads|messages|opportunities|deals|organizations|contacts|invoices|fx-rates|finance|todo|integrations|connections|devices|pairing-codes|roots|scan-runs|physical-shares|library|files|suggestions|duplicates|actions|briefing|notifications|socials|workflows|mail)(\/|$)/;
+
+/** Publishing, calendar, CRM, socials, workflows, analytics, channels, storage, integrations and settings. */
+const OWNER_ONLY =
+  /^\/(publishing|variants|publications|calendar|threads|messages|intake|opportunities|deals|deliverables|organizations|contacts|invoices|fx-rates|finance|mail|socials|workflows|analytics|goals|brands|channels|social-accounts|devices|pairing-codes|roots|scan-runs|physical-shares|integrations|connections|organization|follow-up-rules|audit|demo|auth\/sessions|auth\/totp)(\/|$)/;
 
 export function makeRouter(app: FastifyInstance, deps: AppDeps) {
   return function route<P = unknown, Q = unknown, B = unknown>(
     opts: RouteOpts<P, Q, B>,
     handler: (c: RouteCtx<P, Q, B>) => Promise<unknown> | unknown,
   ) {
-    const role: Role =
+    const minimum: Role =
       opts.role ?? (opts.method === 'GET' && !PRIVATE_GET.test(opts.url) ? 'VIEWER' : 'EDITOR');
+    const role: Role = opts.role === 'public' || !OWNER_ONLY.test(opts.url) ? minimum : 'OWNER';
     const schema: Record<string, unknown> = { tags: [opts.tag], summary: opts.summary };
     if (opts.params) schema.params = jsonSchemaOf(opts.params);
     if (opts.query) schema.querystring = jsonSchemaOf(opts.query);

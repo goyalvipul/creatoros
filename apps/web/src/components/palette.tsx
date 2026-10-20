@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, post, refresh } from '@/lib/api';
-import { navFor } from './nav';
+import { canOpen, navFor } from './nav';
 import { Badge, Dialog, Field, FormDialog, Input, Select, Textarea, useToast } from './ui';
 import { dateInput, title as titleCase } from '@/lib/format';
 
@@ -45,13 +45,15 @@ export function CommandPalette({
       try {
         const rows = await api<any[]>('/search', { query: { q: term } });
         setResults(
-          rows.map((r) => ({
-            key: `${r.type}:${r.id}`,
-            label: r.title,
-            sub: r.subtitle,
-            href: r.link ?? '/',
-            kind: r.type,
-          })),
+          rows
+            .map((r) => ({
+              key: `${r.type}:${r.id}`,
+              label: r.title,
+              sub: r.subtitle,
+              href: r.link ?? '/',
+              kind: r.type,
+            }))
+            .filter((r) => canOpen(role, r.href.split('?')[0] ?? '/')),
         );
       } catch {
         setResults([]);
@@ -60,7 +62,7 @@ export function CommandPalette({
       }
     }, 200);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, role]);
 
   const pages = useMemo<Hit[]>(
     () =>
@@ -147,7 +149,7 @@ const IDEA_FORMATS = [
   'OTHER',
 ];
 
-export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function QuickAdd({ open, onClose, role }: { open: boolean; onClose: () => void; role?: string }) {
   const toast = useToast();
   const [kind, setKind] = useState<'idea' | 'action' | 'inquiry'>('idea');
   const [f, setF] = useState<Record<string, string>>({});
@@ -197,7 +199,7 @@ export function QuickAdd({ open, onClose }: { open: boolean; onClose: () => void
         <Select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
           <option value="idea">Content idea</option>
           <option value="action">To-do / reminder</option>
-          <option value="inquiry">Brand inquiry (manual)</option>
+          {role === 'OWNER' && <option value="inquiry">Brand inquiry (manual)</option>}
         </Select>
       </Field>
       {kind === 'idea' && (

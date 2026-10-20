@@ -356,8 +356,9 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
     async ({ ctx }) => {
       const accounts: any[] = await listSocialAccounts(ctx);
       const live: Record<string, string> = {};
-      if (accounts[0]) {
-        const d = await instagramDiagnosticsSummary(ctx, accounts[0].id);
+      const instagram = accounts.find((a) => String(a.platform).toLowerCase() === 'instagram');
+      if (instagram) {
+        const d = await instagramDiagnosticsSummary(ctx, instagram.id);
         for (const i of d.items) live[i.key] = i.verdict;
       }
       return platformCatalog(live);

@@ -24,6 +24,7 @@ import {
   StateBadge,
   Textarea,
 } from '@/components/ui';
+import { CreativeFields, RichHtml, creativeFrom, creativePayload, type CreativeForm } from '@/components/creative-fields';
 import { ApiError, patch, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase, when } from '@/lib/format';
 import { PROJECT_STAGES } from '@/lib/options';
@@ -42,6 +43,8 @@ export default function ProjectPage() {
   const [label, setLabel] = useState('');
   const [decide, setDecide] = useState(false);
   const [d, setD] = useState({ title: '', decision: '' });
+  const [editing, setEditing] = useState(false);
+  const [brief, setBrief] = useState({ brief: '', concept: '', approvedDirection: '', ...creativeFrom({}) });
 
   const move = async (to: string, force = false) => {
     setStageError(null);
@@ -247,7 +250,26 @@ export default function ProjectPage() {
 
               <div className="space-y-4">
                 <Card>
-                  <CardTitle>Details</CardTitle>
+                  <CardTitle
+                    action={
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setBrief({
+                            brief: p.brief ?? '',
+                            concept: p.concept ?? '',
+                            approvedDirection: p.approvedDirection ?? '',
+                            ...creativeFrom(p),
+                          });
+                          setEditing(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    }
+                  >
+                    Details
+                  </CardTitle>
                   <KV
                     items={[
                       ['Format', titleCase(p.contentFormat)],
@@ -255,8 +277,18 @@ export default function ProjectPage() {
                       ['Brief', p.brief ?? '—'],
                       ['Concept', p.concept ?? '—'],
                       ['Direction', p.approvedDirection ?? '—'],
+                      ['Song', p.songTitle ?? '—'],
+                      ['Audience', p.audience ?? '—'],
+                      ['Competitor', p.competitor ?? '—'],
+                      ['Hook', p.hook ?? '—'],
+                      ['Narrative', p.narrative ?? '—'],
+                      ['Distribution', p.distributionPlan ?? '—'],
                     ]}
                   />
+                  <div className="mt-3">
+                    <div className="text-xs font-medium text-muted">Detailed concept</div>
+                    <RichHtml html={p.conceptDetail} />
+                  </div>
                 </Card>
                 <Card>
                   <CardTitle>History</CardTitle>
@@ -343,6 +375,38 @@ export default function ProjectPage() {
                   onChange={(e) => setD({ ...d, decision: e.target.value })}
                 />
               </Field>
+            </FormDialog>
+
+            <FormDialog
+              open={editing}
+              wide
+              onClose={() => setEditing(false)}
+              title="Edit project notes"
+              submitLabel="Save"
+              onSubmit={async () => {
+                await patch(`/projects/${id}`, {
+                  brief: brief.brief.trim() || null,
+                  concept: brief.concept.trim() || null,
+                  approvedDirection: brief.approvedDirection.trim() || null,
+                  ...creativePayload(brief),
+                });
+                await reload();
+              }}
+            >
+              <Field label="Brief">
+                <Textarea rows={3} value={brief.brief} onChange={(e) => setBrief({ ...brief, brief: e.target.value })} />
+              </Field>
+              <Field label="Concept">
+                <Textarea rows={3} value={brief.concept} onChange={(e) => setBrief({ ...brief, concept: e.target.value })} />
+              </Field>
+              <Field label="Direction">
+                <Textarea
+                  rows={3}
+                  value={brief.approvedDirection}
+                  onChange={(e) => setBrief({ ...brief, approvedDirection: e.target.value })}
+                />
+              </Field>
+              <CreativeFields formKey={id} value={brief} onChange={(next: CreativeForm) => setBrief({ ...brief, ...next })} />
             </FormDialog>
           </>
         );

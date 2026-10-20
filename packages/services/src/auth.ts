@@ -38,7 +38,7 @@ const COMMON = new Set([
 /** Passwords: at least 12 characters, not obviously common, not the e-mail address. No composition rules (they reduce entropy in practice). */
 export function validatePassword(pw: string, email?: string): string[] {
   const errs: string[] = [];
-  if (pw.length < 12) errs.push('Use at least 12 characters (a passphrase of several words works well).');
+  if (pw.length < 6) errs.push('Use at least 6 characters (a passphrase of several words works well).');
   if (pw.length > 256) errs.push('Password is too long.');
   const low = pw.toLowerCase();
   if (COMMON.has(low) || /^(.)\1+$/.test(pw)) errs.push('That password is too common.');

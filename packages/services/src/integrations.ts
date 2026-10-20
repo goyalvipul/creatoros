@@ -205,12 +205,14 @@ export async function startOAuth(
     loginHint?: string;
     publish?: boolean;
     comments?: boolean;
+    upload?: boolean;
+    videos?: boolean;
     messages?: boolean;
     reconnect?: boolean;
   } = {},
   overrides: Partial<ConnectorContext> = {},
 ) {
-  if (provider === 'facebook') return startFacebookOAuth(ctx);
+  if (provider === 'facebook') return startFacebookOAuth(ctx, { videos: input.videos });
   const connector = getConnector(provider);
   const cctx = connectorContext(ctx.db, ctx.env, null, overrides, provider);
   const res = await connector.connect(cctx, input);

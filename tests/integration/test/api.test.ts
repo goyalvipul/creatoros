@@ -546,31 +546,38 @@ describe('content flow over HTTP', () => {
       '/notifications',
       '/duplicates/exact',
     ];
+    const ownerOnly = new Set([
+      '/threads',
+      '/deals',
+      '/deals/pipeline',
+      '/organizations',
+      '/contacts',
+      '/invoices',
+      '/finance/summary',
+      '/devices',
+      '/roots',
+      '/integrations',
+    ]);
     for (const p of privateGets) {
       const anon = await api.call('GET', `${V1}${p}`);
       const v = await api.call('GET', `${V1}${p}`, { cookie: viewer });
       const e = await api.call('GET', `${V1}${p}`, { cookie: editor });
       expect([p, anon.status]).toEqual([p, 401]);
       expect([p, v.status]).toEqual([p, 403]);
-      expect([p, e.status < 400]).toEqual([p, true]);
+      expect([p, ownerOnly.has(p) ? e.status : e.status < 400]).toEqual([p, ownerOnly.has(p) ? 403 : true]);
     }
     for (const p of ['/members', '/audit', '/backups', '/pairing-codes']) {
       expect([p, (await api.call('GET', `${V1}${p}`, { cookie: viewer })).status]).toEqual([p, 403]);
       expect([p, (await api.call('GET', `${V1}${p}`, { cookie: editor })).status]).toEqual([p, 403]);
     }
-    // the creative pipeline stays readable
-    for (const p of [
-      '/projects',
-      '/ideas',
-      '/assets',
-      '/publications/unmatched',
-      '/publishing/matrix',
-      '/catalog',
-      '/analytics',
-      '/goals',
-    ]) {
+    // ideas, projects and the library catalogue stay readable; publishing, analytics and channels do not
+    for (const p of ['/projects', '/ideas', '/assets', '/catalog']) {
       const r = await api.call('GET', `${V1}${p}`, { cookie: viewer });
       expect([p, r.status]).toEqual([p, 200]);
+    }
+    for (const p of ['/publications/unmatched', '/publishing/matrix', '/calendar', '/analytics', '/goals', '/socials/platforms', '/workflows', '/brands']) {
+      expect([p, (await api.call('GET', `${V1}${p}`, { cookie: viewer })).status]).toEqual([p, 403]);
+      expect([p, (await api.call('GET', `${V1}${p}`, { cookie: editor })).status]).toEqual([p, 403]);
     }
     // search hides files, email and CRM entities from viewers
     const searchTypes = async (cookie: string) =>

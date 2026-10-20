@@ -13,8 +13,8 @@ import {
 } from 'drizzle-orm/pg-core';
 import { createdAt, int8, pk, ts, updatedAt } from './columns';
 import { privacy, provenance, provider, publicationState, scheduleStatus, variantType } from './enums';
-import { channels, orgRef, socialAccounts, users } from './identity';
-import { assetVersions, logicalAssets } from './storage';
+import { brands, channels, orgRef, socialAccounts, users } from './identity';
+import { assetVersions, fileInstances, logicalAssets } from './storage';
 import { creativeProjects } from './production';
 import { dealDeliverables } from './crm';
 
@@ -28,6 +28,7 @@ export const distributionVariants = pgTable(
       .references(() => logicalAssets.id, { onDelete: 'cascade' }),
     assetVersionId: uuid('asset_version_id').references(() => assetVersions.id, { onDelete: 'set null' }),
     projectId: uuid('project_id').references(() => creativeProjects.id, { onDelete: 'set null' }),
+    brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'set null' }),
     channelId: uuid('channel_id').references(() => channels.id, { onDelete: 'set null' }),
     format: variantType('format').notNull().default('MASTER'),
     titleMaster: text('title_master').notNull(),
@@ -47,6 +48,7 @@ export const distributionVariants = pgTable(
   },
   (t) => [
     index('distribution_variants_asset_idx').on(t.assetId),
+    index('distribution_variants_brand_idx').on(t.brandId),
     index('distribution_variants_org_ready_idx').on(t.orgId, t.readiness),
   ],
 );
@@ -82,6 +84,7 @@ export const publicationRecords = pgTable(
     targetId: uuid('target_id').references(() => publicationTargets.id, { onDelete: 'set null' }),
     variantId: uuid('variant_id').references(() => distributionVariants.id, { onDelete: 'set null' }),
     assetVersionId: uuid('asset_version_id').references(() => assetVersions.id, { onDelete: 'set null' }),
+    fileInstanceId: uuid('file_instance_id').references(() => fileInstances.id, { onDelete: 'set null' }),
     socialAccountId: uuid('social_account_id')
       .notNull()
       .references(() => socialAccounts.id),
@@ -136,6 +139,60 @@ export const publicationRecords = pgTable(
     index('publication_records_planned_idx').on(t.orgId, t.plannedAt),
     index('publication_records_variant_idx').on(t.variantId),
     index('publication_records_account_idx').on(t.socialAccountId),
+    index('publication_records_file_idx').on(t.fileInstanceId),
+  ],
+);
+
+/** Videos the owner attached to a title. Removing a row does not delete the file or a post that already went out. */
+export const publishItems = pgTable(
+  'publish_items',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    variantId: uuid('variant_id')
+      .notNull()
+      .references(() => distributionVariants.id, { onDelete: 'cascade' }),
+    fileInstanceId: uuid('file_instance_id')
+      .notNull()
+      .references(() => fileInstances.id, { onDelete: 'restrict' }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('publish_items_uq').on(t.variantId, t.fileInstanceId),
+    index('publish_items_org_idx').on(t.orgId),
+  ],
+);
+
+/** Per-file, per-account caption and the upload job. One row; a second Publish does not upload again. */
+export const publishDrafts = pgTable(
+  'publish_drafts',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    itemId: uuid('item_id')
+      .notNull()
+      .references(() => publishItems.id, { onDelete: 'cascade' }),
+    socialAccountId: uuid('social_account_id')
+      .notNull()
+      .references(() => socialAccounts.id),
+    title: text('title'),
+    caption: text('caption'),
+    hashtags: text('hashtags')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    privacy: text('privacy'),
+    requestId: text('request_id'),
+    uploadState: text('upload_state').notNull().default('DRAFT'),
+    publicationId: uuid('publication_id').references(() => publicationRecords.id, { onDelete: 'set null' }),
+    error: text('error'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('publish_drafts_item_account_uq').on(t.itemId, t.socialAccountId),
+    uniqueIndex('publish_drafts_request_uq').on(t.orgId, t.requestId).where(sql`${t.requestId} is not null`),
+    index('publish_drafts_state_idx').on(t.orgId, t.uploadState),
   ],
 );
 

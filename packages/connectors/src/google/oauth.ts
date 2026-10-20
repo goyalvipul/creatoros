@@ -23,6 +23,8 @@ export const GOOGLE_SCOPES = {
   youtubeAnalytics: ['https://www.googleapis.com/auth/yt-analytics.readonly'],
   /** Read AND reply to/moderate comments. Needed for Socials comment replies. */
   youtubeComments: ['https://www.googleapis.com/auth/youtube.force-ssl'],
+  /** Upload videos. Opt-in; needs a reconnect. */
+  youtubeUpload: ['https://www.googleapis.com/auth/youtube.upload'],
 } as const;
 
 export interface GoogleClientConfig {

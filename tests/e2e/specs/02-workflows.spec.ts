@@ -25,9 +25,10 @@ test('ideas become projects; checklist gates "ready"; override is explicit', asy
   const problems = watchProblems(page);
   await page.goto('/content');
   await page.getByRole('button', { name: 'New idea' }).click();
+  await expect(page).toHaveURL(/\/content\/new$/);
   await page.getByLabel('Title').fill('Acoustic rooftop session');
-  await page.getByLabel('Pitch (optional)').fill('One take, golden hour.');
-  await page.getByRole('dialog').getByRole('button', { name: 'Capture' }).click();
+  await page.getByRole('textbox', { name: 'Detailed concept' }).fill('One take, golden hour.');
+  await page.getByRole('button', { name: 'Capture' }).click();
   const card = page.getByRole('listitem').filter({ hasText: 'Acoustic rooftop session' });
   await expect(card).toBeVisible();
   await card.getByRole('button', { name: 'Make a project' }).click();

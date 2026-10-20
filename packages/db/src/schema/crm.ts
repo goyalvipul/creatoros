@@ -361,6 +361,9 @@ export const invoices = pgTable(
     fxRateDate: ts('fx_rate_date'),
     fxSource: text('fx_source'),
     notes: text('notes'),
+    billFrom: text('bill_from'),
+    billTo: text('bill_to'),
+    bankDetails: text('bank_details'),
     isDemo: boolean('is_demo').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -369,6 +372,22 @@ export const invoices = pgTable(
     uniqueIndex('invoices_no_uq').on(t.orgId, t.invoiceNo),
     index('invoices_due_idx').on(t.orgId, t.status, t.dueAt),
   ],
+);
+
+export const invoiceLines = pgTable(
+  'invoice_lines',
+  {
+    id: pk(),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    description: text('description').notNull(),
+    quantity: numeric('quantity', { precision: 12, scale: 4 }).notNull(),
+    unitPriceMinor: int8('unit_price_minor').notNull(),
+    taxPercent: numeric('tax_percent', { precision: 7, scale: 4 }).notNull().default('0'),
+  },
+  (t) => [index('invoice_lines_invoice_idx').on(t.invoiceId)],
 );
 
 export const payments = pgTable(

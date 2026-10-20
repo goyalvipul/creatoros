@@ -257,9 +257,10 @@ function FilePage({
               {page.items.map((f) => {
                 const Icon = kindIcon[f.fileType as keyof typeof kindIcon] ?? FileIcon;
                 const platforms = ['youtube', 'instagram', 'tiktok'] as const;
+                const tags: { name?: string }[] = Array.isArray(f.tags) ? f.tags : [];
                 const hasMark = (platform: string) =>
-                  f.tags.some((t: any) => t.name.toLowerCase() === `uploaded:${platform}`);
-                const isExtra = f.tags.some((t: any) => t.name.toLowerCase() === 'extra');
+                  tags.some((t) => t.name?.toLowerCase() === `uploaded:${platform}`);
+                const isExtra = tags.some((t) => t.name?.toLowerCase() === 'extra');
                 return (
                   <li key={f.id}>
                     <button
@@ -303,7 +304,9 @@ function FilePage({
                                   fileInstanceId: f.id,
                                   tag: `uploaded:${p}`,
                                   on: !hasMark(p),
-                                }).catch((err) => console.error(err));
+                                })
+                                  .then(() => refresh('/library'))
+                                  .catch((err) => console.error(err));
                               }}
                               title="Manual mark: I uploaded it"
                             >

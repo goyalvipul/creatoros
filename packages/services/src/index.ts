@@ -9,6 +9,8 @@ export * from './library';
 export * from './assets';
 export * from './projects';
 export * from './publishing';
+export * from './publish-run';
+export * from './agent-file';
 export * from './crm';
 export * from './actions';
 export * from './integrations';

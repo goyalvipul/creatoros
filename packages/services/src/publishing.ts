@@ -77,6 +77,17 @@ export async function updateVariant(ctx: Ctx, id: string, patch: Partial<Variant
   return v;
 }
 
+/** Removes a plan row. The file stays. A post that already went out stays, no longer tied to this title. */
+export async function deleteVariant(ctx: Ctx, id: string) {
+  const [v] = await ctx.db
+    .delete(distributionVariants)
+    .where(and(eq(distributionVariants.id, id), eq(distributionVariants.orgId, ctx.orgId)))
+    .returning({ id: distributionVariants.id });
+  if (!v) throw notFound('Variant');
+  await audit(ctx, 'variant.delete', { type: 'variant', id });
+  return { id, removed: true };
+}
+
 export async function listVariants(
   ctx: Ctx,
   q: { assetId?: string; readiness?: string; projectId?: string } = {},
@@ -125,7 +136,7 @@ export async function setTarget(
 }
 
 /** Variants x accounts grid. Each cell is the record state, an explicit N/A, or NOT_PLANNED; nothing is inferred as published. */
-export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?: string } = {}) {
+export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?: string; projectId?: string } = {}) {
   const accWhere = [sql`sa.org_id = ${ctx.orgId}`, sql`sa.deleted_at is null`, sql`sa.active`];
   if (q.brandId) accWhere.push(sql`c.brand_id = ${q.brandId}`);
   const accounts = rowsOf<any>(
@@ -135,6 +146,15 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
   );
   const vWhere = [sql`v.org_id = ${ctx.orgId}`];
   if (q.assetId) vWhere.push(sql`v.asset_id = ${q.assetId}`);
+  if (q.projectId) vWhere.push(sql`v.project_id = ${q.projectId}`);
+  if (q.brandId)
+    vWhere.push(sql`(
+      v.brand_id = ${q.brandId}
+      or (v.brand_id is null and a.brand_id = ${q.brandId})
+      or (v.brand_id is null and exists (
+        select 1 from creative_projects p where p.id = v.project_id and p.brand_id = ${q.brandId}
+      ))
+    )`);
   const variants = rowsOf<any>(
     await ctx.db.execute(
       sql`select v.id, v.title_master as title, v.format, v.readiness, v.asset_id as "assetId", a.title as "assetTitle" from distribution_variants v join logical_assets a on a.id = v.asset_id where ${sql.join(vWhere, sql` and `)} order by v.created_at desc limit 300`,
@@ -170,13 +190,38 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
         plannedAt: r.plannedAt,
       });
   }
+  const attached = new Map<string, number>();
+  const published = new Map<string, number>();
+  if (ids.length) {
+    const idList = sql.join(
+      ids.map((i) => sql`${i}::uuid`),
+      sql`, `,
+    );
+    for (const r of rowsOf<{ variantId: string; n: number }>(
+      await ctx.db.execute(
+        sql`select variant_id as "variantId", count(*)::int as n from publish_items where variant_id in (${idList}) group by variant_id`,
+      ),
+    ))
+      attached.set(r.variantId, r.n);
+    for (const r of rowsOf<{ variantId: string; accountId: string; n: number }>(
+      await ctx.db.execute(
+        sql`select variant_id as "variantId", social_account_id as "accountId", count(*)::int as n
+            from publication_records
+            where variant_id in (${idList}) and file_instance_id is not null and state in ('PUBLISHED_VERIFIED','PUBLISHED_MANUAL')
+            group by variant_id, social_account_id`,
+      ),
+    ))
+      published.set(`${r.variantId}:${r.accountId}`, r.n);
+  }
   return {
     accounts,
     rows: variants.map((v) => ({
       ...v,
+      attached: attached.get(v.id) ?? 0,
       cells: accounts.map((a) => ({
         accountId: a.id,
         ...(cells.get(`${v.id}:${a.id}`) ?? { state: 'NOT_PLANNED', recordId: null }),
+        published: published.get(`${v.id}:${a.id}`) ?? 0,
       })),
     })),
   };

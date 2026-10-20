@@ -1,7 +1,8 @@
-import { backupRuns, desc, eq, organizations, sql, type Db } from '@creatoros/db';
+import { backupRuns, desc, eq, organizations, publishDrafts, sql, type Db } from '@creatoros/db';
 import {
   createBackup,
   detectNearDuplicates,
+  executePublish,
   evictPreviews,
   linkPendingGenerationOutputs,
   listConnectionsForSync,
@@ -213,6 +214,18 @@ export async function jobSocialSync(d: WorkerDeps) {
     }
   }
   return out;
+}
+
+/** One explicit Publish. The draft row is claimed from QUEUED, so a second delivery does not upload again. */
+export async function jobPublish(d: WorkerDeps, draftId: string) {
+  const [row] = await d.db
+    .select({ orgId: publishDrafts.orgId })
+    .from(publishDrafts)
+    .where(eq(publishDrafts.id, draftId));
+  if (!row) return { skipped: true };
+  return executePublish(systemCtx({ db: d.db, env: d.env }, row.orgId), draftId, {
+    fetch: d.overrides?.fetch as typeof fetch | undefined,
+  });
 }
 
 export const JOB_TABLE = {

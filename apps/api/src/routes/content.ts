@@ -31,10 +31,15 @@ import {
   createBrand,
   createChannel,
   createIdea,
+  deleteIdea,
+  getIdea,
   createProject,
   createRecord,
   createSocialAccount,
   createVariant,
+  deleteVariant,
+  getPublishTitle,
+  linkPublishFile,
   detectNearDuplicates,
   getAsset,
   getProject,
@@ -53,6 +58,8 @@ import {
   listLinkablePublications,
   listUnmatchedPublications,
   listVariants,
+  requestPublish,
+  unlinkPublishFile,
   markPublishedManual,
   publishingMatrix,
   recordDecision,
@@ -257,7 +264,14 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     referenceLinks: z.array(z.url().max(1000)).max(50),
     language: z.string().max(10),
     format: z.enum(CONTENT_FORMAT),
-    audience: z.string().max(500).nullable(),
+    audience: z.string().max(20000).nullable(),
+    songTitle: z.string().max(300).nullable(),
+    songFileId: uuid.nullable(),
+    conceptDetail: z.string().max(50000).nullable(),
+    competitor: z.string().max(20000).nullable(),
+    hook: z.string().max(20000).nullable(),
+    narrative: z.string().max(50000).nullable(),
+    distributionPlan: z.string().max(20000).nullable(),
     score: z.number().int().min(0).max(100).nullable(),
     effortHours: z.number().int().min(0).max(10000).nullable(),
     priority: z.enum(PRIORITY),
@@ -300,6 +314,13 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         language: true,
         format: true,
         audience: true,
+        songTitle: true,
+        songFileId: true,
+        conceptDetail: true,
+        competitor: true,
+        hook: true,
+        narrative: true,
+        distributionPlan: true,
         score: true,
         effortHours: true,
         priority: true,
@@ -315,6 +336,16 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   );
   route(
     {
+      method: 'GET',
+      url: '/ideas/:id',
+      tag: 'Content',
+      summary: 'One idea',
+      params: idParam,
+    },
+    ({ ctx, params }) => getIdea(ctx, params.id),
+  );
+  route(
+    {
       method: 'PATCH',
       url: '/ideas/:id',
       tag: 'Content',
@@ -323,6 +354,16 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object(ideaFields).partial(),
     },
     ({ ctx, params, body }) => updateIdea(ctx, params.id, body as any),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/ideas/:id',
+      tag: 'Content',
+      summary: 'Delete an idea. A project already created from it stays.',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteIdea(ctx, params.id),
   );
   route(
     {
@@ -355,6 +396,14 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     brief: z.string().max(20000).nullable(),
     concept: z.string().max(20000).nullable(),
     approvedDirection: z.string().max(20000).nullable(),
+    audience: z.string().max(20000).nullable(),
+    songTitle: z.string().max(300).nullable(),
+    songFileId: uuid.nullable(),
+    conceptDetail: z.string().max(50000).nullable(),
+    competitor: z.string().max(20000).nullable(),
+    hook: z.string().max(20000).nullable(),
+    narrative: z.string().max(50000).nullable(),
+    distributionPlan: z.string().max(20000).nullable(),
     tags: strArr,
     pinned: z.boolean(),
     priority: z.enum(PRIORITY),
@@ -799,7 +848,12 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z
         .object(variantFields)
         .partial()
-        .extend({ assetId: uuid, titleMaster: variantFields.titleMaster }),
+        .extend({
+          assetId: uuid,
+          titleMaster: variantFields.titleMaster,
+          projectId: uuid.nullable().optional(),
+          brandId: uuid.nullable().optional(),
+        }),
     },
     ({ ctx, body }) => createVariant(ctx, body as any),
   );
@@ -813,6 +867,16 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object(variantFields).partial(),
     },
     ({ ctx, params, body }) => updateVariant(ctx, params.id, body as any),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/variants/:id',
+      tag: 'Publishing',
+      summary: 'Remove a title from the plan. Files and posts that already went out stay.',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteVariant(ctx, params.id),
   );
   route(
     {
@@ -831,9 +895,64 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       url: '/publishing/matrix',
       tag: 'Publishing',
       summary: 'Asset × account matrix (published / planned / not applicable / missing)',
-      query: z.object({ assetId: uuid.optional(), brandId: uuid.optional() }),
+      query: z.object({
+        assetId: uuid.optional(),
+        brandId: uuid.optional(),
+        projectId: uuid.optional(),
+      }),
     },
     ({ ctx, query }) => publishingMatrix(ctx, query),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/variants/:id/publish',
+      tag: 'Publishing',
+      summary: 'A title, its attached videos, and each account publish button',
+      params: idParam,
+    },
+    ({ ctx, params }) => getPublishTitle(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/variants/:id/files',
+      tag: 'Publishing',
+      summary: 'Attach a library video to a title',
+      status: 201,
+      params: idParam,
+      body: z.object({ fileInstanceId: uuid }),
+    },
+    ({ ctx, params, body }) => linkPublishFile(ctx, params.id, body.fileInstanceId),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/variants/:id/files/:itemId',
+      tag: 'Publishing',
+      summary: 'Unlink a video from a title (the file and any post already sent stay)',
+      params: z.object({ id: uuid, itemId: uuid }),
+    },
+    ({ ctx, params }) => unlinkPublishFile(ctx, params.id, params.itemId),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/publishing/publish',
+      tag: 'Publishing',
+      summary: 'Publish one attached video to one account. Nothing is sent until this is called.',
+      status: 201,
+      body: z.object({
+        itemId: uuid,
+        socialAccountId: uuid,
+        requestId: uuid,
+        title: z.string().max(300).nullable().optional(),
+        caption: z.string().max(5000).nullable().optional(),
+        hashtags: z.array(z.string().max(100)).max(30).optional(),
+        privacy: z.enum(PRIVACY).nullable().optional(),
+      }),
+    },
+    ({ ctx, body }) => requestPublish(ctx, body, { enqueue: deps.enqueue }),
   );
 
   const recordBody = z.object({

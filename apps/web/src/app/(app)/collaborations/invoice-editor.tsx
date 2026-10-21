@@ -66,11 +66,10 @@ export function InvoiceEditor({ invoiceId }: { invoiceId?: string }) {
   const seededFrom = useRef(false);
 
   useEffect(() => {
-    if (invoiceId || seededFrom.current || !me.data) return;
+    const name = me.data?.organization?.name;
+    if (invoiceId || seededFrom.current || !name) return;
     seededFrom.current = true;
-    setForm((current) =>
-      current && !current.billFrom ? { ...current, billFrom: me.data.organization.name } : current,
-    );
+    setForm((current) => (current && !current.billFrom ? { ...current, billFrom: name } : current));
   }, [invoiceId, me.data]);
 
   useEffect(() => {

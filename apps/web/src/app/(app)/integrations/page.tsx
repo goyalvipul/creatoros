@@ -43,7 +43,7 @@ const KEYED: Record<
   string,
   {
     fields: {
-      name: 'baseUrl' | 'apiKey' | 'accessToken' | 'igUserId';
+      name: 'baseUrl' | 'apiKey' | 'accessToken' | 'igUserId' | 'signingSecret';
       label: string;
       type?: string;
       hint?: string;
@@ -52,8 +52,19 @@ const KEYED: Record<
 > = {
   todo: {
     fields: [
-      { name: 'baseUrl', label: 'Todo API base URL', type: 'url', hint: 'e.g. http://localhost:5000/api' },
-      { name: 'apiKey', label: 'API token', type: 'password' },
+      {
+        name: 'baseUrl',
+        label: 'Workspace OS address',
+        type: 'url',
+        hint: 'The address Workspace OS publishes, for example http://100.108.120.8:4390. Not localhost.',
+      },
+      { name: 'apiKey', label: 'Access token', type: 'password', hint: 'The creatoros token, shown once.' },
+      {
+        name: 'signingSecret',
+        label: 'Signing secret',
+        type: 'password',
+        hint: 'Starts with wos_whsec_. Shown once in Workspace OS → CreatorOS → Connect.',
+      },
     ],
   },
   postiz: {
@@ -77,7 +88,9 @@ export default function IntegrationsPage() {
   const [vals, setVals] = useState<Record<string, string>>({});
   const reload = () => refresh('/integrations');
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [origin, setOrigin] = useState('');
   useEffect(() => {
+    setOrigin(window.location.origin);
     const q = new URLSearchParams(window.location.search);
     if (q.get('error'))
       setResult({ ok: false, text: `${q.get('error')}${q.get('detail') ? `: ${q.get('detail')}` : ''}` });
@@ -258,6 +271,12 @@ export default function IntegrationsPage() {
                               Add another Gmail account
                             </ActionButton>
                           )}
+                          {p.provider === 'todo' && origin && (
+                            <p className="mt-2 break-all text-xs text-muted">
+                              Webhook address to paste into Workspace OS:{' '}
+                              {origin}/api/v1/integrations/workspace-os/webhook
+                            </p>
+                          )}
                           {KEYED[p.provider] && (
                             <Button
                               variant={connected ? 'secondary' : 'primary'}
@@ -399,9 +418,11 @@ export default function IntegrationsPage() {
             const config: Record<string, unknown> = {};
             if (vals.baseUrl) config.baseUrl = vals.baseUrl.trim();
             if (vals.igUserId) config.igUserId = vals.igUserId.trim();
+            if (setup === 'todo') config.mode = 'workspace-os';
             await post(`/integrations/${setup}/key`, {
               apiKey: vals.apiKey || undefined,
               accessToken: vals.accessToken || undefined,
+              signingSecret: vals.signingSecret || undefined,
               config,
             });
             await post(`/integrations/${setup}/test`, {}).catch(() => undefined);

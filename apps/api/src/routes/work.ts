@@ -77,6 +77,7 @@ import {
   pipeline,
   recentCompleted,
   recordGoalObservation,
+  receiveWorkspaceWebhook,
   recordPayment,
   reopenAction,
   requestBackup,
@@ -117,6 +118,17 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   const { db, config } = deps;
   const env = config.env;
   const ov = () => deps.overrides ?? {};
+
+  // Workspace OS signs the raw body. The reply is `{ externalId }` with no API envelope, which is what it stores.
+  app.post(
+    '/integrations/workspace-os/webhook',
+    { bodyLimit: 256 * 1024 },
+    async (req, reply) => {
+      const raw = typeof req.rawBody === 'string' ? req.rawBody : '';
+      const out = await receiveWorkspaceWebhook(db, env, raw, req.headers, deps.now?.().getTime());
+      return reply.status(out.status).send(out.body);
+    },
+  );
 
   // ================================================================ inbox / collaborations
   route(
@@ -1128,6 +1140,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         apiKey: z.string().max(4000).optional(),
         accessToken: z.string().max(8000).optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        signingSecret: z.string().max(500).optional(),
       }),
     },
     ({ ctx, params, body }) => saveKeyConnection(ctx, params.provider, body),

@@ -24,6 +24,7 @@ import {
   setSetupStep,
   systemHealth,
   updateFollowUpRule,
+  deleteMember,
   resetMemberPassword,
   updateMember,
   updateOrganization,
@@ -356,6 +357,17 @@ export function coreRoutes(app: FastifyInstance, deps: AppDeps) {
       await resetMemberPassword(ctx, params.id, body.password);
       return { ok: true };
     },
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/members/:id',
+      tag: 'Settings',
+      summary: 'Permanently delete a person. Their files and posts stay. They cannot sign in again.',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteMember(ctx, params.id),
   );
 
   // ------------------------------------------------------------ rules, audit, demo

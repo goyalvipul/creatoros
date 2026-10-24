@@ -29,7 +29,12 @@ export async function buildApp(
         ? false
         : ({
             level: config.logLevel,
-            redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-hub-signature-256"]'],
+            redact: [
+              'req.headers.authorization',
+              'req.headers.cookie',
+              'req.headers["x-hub-signature-256"]',
+              'req.headers["x-wos-signature"]',
+            ],
             serializers: logSerializers,
             ...(opts.logStream ? { stream: opts.logStream } : {}),
           } as any),

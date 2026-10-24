@@ -151,6 +151,8 @@ These behaviors are in the working tree. They are on the running site only after
 
 - Collaborations inbox is email and pasted threads. Social threads stay in Socials.
 - Editors and viewers do not see Publishing, Calendar, Collaborations, Socials, Workflows, Analytics, Channels, Storage & Devices, Integrations or Settings. The nav hides them and those API paths require OWNER. They still have Home, Content and Production. Editors also have Inbox & Today and Library. Viewers do not.
+- Settings → Team: an owner can permanently delete another person (`DELETE /members/:id`). That removes their sign-in. Files, posts and deals stay. You cannot delete yourself, and the last active owner stays.
+- Workspace OS publishes tasks into Today. Integrations → Todo app stores the address, the `creatoros` access token and the `wos_whsec_` signing secret. The webhook is `POST /api/v1/integrations/workspace-os/webhook` (raw body HMAC, 5 minute skew, deduped by `X-WOS-Event-Id`). Completing a received task is patched back. A missed webhook is filled by listing `/api/v1/integrations/creatoros/tasks` on the fast sync. Details: `docs/TODO_ADAPTER_CONTRACT.md`.
 - `GET /socials/platforms` fills the social tabs. Stored Instagram diagnostics are attached only when an Instagram connection exists. Do not run that probe on the first account in the list: a Facebook or YouTube connection makes the probe throw `Social account not found` and every tab fails.
 - A social reply is not blocked by a 24 hour window. Send stays available. Nothing is sent until the owner presses Send. `sendEligibility` in `packages/services/src/social.ts`.
 - Gmail: starred sync, invoice search, full message text, per-message reply, live CAD totals. Sending mail needs **Enable sending** (`gmail.send`).

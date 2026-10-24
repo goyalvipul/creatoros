@@ -284,18 +284,31 @@ function Team() {
                     </Button>
                   )}{' '}
                   {owner && m.id !== me.data?.user.id && (
-                    <ActionButton
-                      size="sm"
-                      confirm={m.status === 'ACTIVE' ? `Disable ${m.name}'s access?` : undefined}
-                      onAction={async () => {
-                        await patch(`/members/${m.id}`, {
-                          status: m.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE',
-                        });
-                        await refresh('/members');
-                      }}
-                    >
-                      {m.status === 'ACTIVE' ? 'Disable' : 'Enable'}
-                    </ActionButton>
+                    <span className="inline-flex flex-wrap gap-1">
+                      <ActionButton
+                        size="sm"
+                        confirm={m.status === 'ACTIVE' ? `Disable ${m.name}'s access?` : undefined}
+                        onAction={async () => {
+                          await patch(`/members/${m.id}`, {
+                            status: m.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE',
+                          });
+                          await refresh('/members');
+                        }}
+                      >
+                        {m.status === 'ACTIVE' ? 'Disable' : 'Enable'}
+                      </ActionButton>
+                      <ActionButton
+                        size="sm"
+                        variant="danger"
+                        confirm={`Delete ${m.name} permanently? They cannot sign in again. Files and posts they worked on stay.`}
+                        onAction={async () => {
+                          await del(`/members/${m.id}`);
+                          await refresh('/members');
+                        }}
+                      >
+                        Delete
+                      </ActionButton>
+                    </span>
                   )}
                 </Td>
               </tr>

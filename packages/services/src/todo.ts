@@ -18,6 +18,7 @@ import {
 import { audit, emit } from './audit';
 import { sha256Hex } from './crypto';
 import { connectorContext } from './integrations';
+import { resolveWorkspaceConflict, syncWorkspaceLink } from './workspace-os';
 import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 
 const todo = new TodoConnector();
@@ -140,6 +141,8 @@ export async function syncTaskLink(
   const [a] = await db.select().from(internalActions).where(eq(internalActions.id, link.actionId));
   const integ = await loadIntegration(db, link.orgId);
   if (!a || !integ) throw notFound('Todo integration');
+  if ((integ.conn.config as { mode?: string } | null)?.mode === 'workspace-os')
+    return syncWorkspaceLink(db, env, linkId, overrides);
   const cctx = connectorContext(db, env, integ.conn, overrides);
   const tz = (await db.execute(
     sql`select timezone from organizations where id = ${link.orgId}`,
@@ -321,6 +324,12 @@ export async function resolveTodoConflict(
     .where(and(eq(taskLinks.id, linkId), eq(taskLinks.orgId, ctx.orgId)));
   if (!link) throw notFound('Task link');
   if (link.syncState !== 'CONFLICT') throw conflict('This link has no conflict to resolve.');
+  const integMode = await loadIntegration(ctx.db, ctx.orgId);
+  if ((integMode?.conn.config as { mode?: string } | null)?.mode === 'workspace-os') {
+    await resolveWorkspaceConflict(ctx, link, resolution, overrides);
+    await audit(ctx, 'todo.conflict.resolve', { type: 'task_link', id: linkId }, undefined, { resolution });
+    return (await ctx.db.select().from(taskLinks).where(eq(taskLinks.id, linkId)))[0]!;
+  }
   if (resolution === 'USE_REMOTE') {
     await ctx.db
       .update(taskLinks)

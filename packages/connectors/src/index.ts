@@ -6,6 +6,7 @@ export * from './google/gmail';
 export * from './google/youtube';
 export * from './meta/instagram';
 export * from './todo';
+export * from './workspace-os';
 export * from './social';
 export * from './registry';
 export * from './meta/facebook';

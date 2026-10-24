@@ -10,6 +10,7 @@ import {
   type SyncResult,
 } from './types';
 import { http } from './http';
+import { probeWorkspace } from './workspace-os';
 
 /**
  * Generic adapter for the owner's self-hosted Todoist-like PWA. The real API is discovered at setup time, so
@@ -26,6 +27,8 @@ export interface TodoConfig {
   completion?: { style: 'boolean' | 'status'; doneValue?: string; openValue?: string };
   projectId?: string;
   defaultTags?: string[];
+  /** `workspace-os` uses the signed webhook and `/api/v1/integrations/creatoros` instead of the generic paths. */
+  mode?: 'generic' | 'workspace-os';
 }
 
 export interface RemoteTaskFields {
@@ -276,12 +279,20 @@ export class TodoConnector implements Connector<RemoteTask, any> {
       write: configured,
       incrementalSync: configured,
       flags: { createTask: configured, updateTask: configured, readCompletion: configured, etag: configured },
-      blockers: configured ? [] : ['Todo API is not configured.'],
-      setupSteps: [
-        'Open the Todo PWA, find its API base URL and generate an API token (do not share the database).',
-        'Enter the base URL + token in Integrations → Todo. Adjust endpoint paths and field names if they differ from the defaults.',
-        'Press "Test connection", then link or create tasks from the Today queue.',
-      ],
+      blockers: configured ? [] : ['Workspace OS is not configured.'],
+      setupSteps:
+        (ctx.config as TodoConfig | undefined)?.mode === 'workspace-os' || !configured
+          ? [
+              'In Workspace OS open Settings → CreatorOS → Connect and copy the signing secret. It is shown once.',
+              'Create an access token with the creatoros scope. It is shown once.',
+              'In Creator OS enter the Workspace OS address (for example http://100.108.120.8:4390), the access token and the signing secret, then press Test connection.',
+              'Paste the webhook address shown on this card into Workspace OS as the CreatorOS webhook address, then send a test.',
+            ]
+          : [
+              'Open the Todo PWA, find its API base URL and generate an API token (do not share the database).',
+              'Enter the base URL + token in Integrations → Todo. Adjust endpoint paths and field names if they differ from the defaults.',
+              'Press "Test connection", then link or create tasks from the Today queue.',
+            ],
     };
   }
 
@@ -298,6 +309,24 @@ export class TodoConnector implements Connector<RemoteTask, any> {
 
   async health(ctx: ConnectorContext): Promise<HealthResult> {
     const now = new Date(ctx.now()).toISOString();
+    if ((ctx.config as TodoConfig).mode === 'workspace-os') {
+      try {
+        await probeWorkspace(ctx, this.cfg(ctx).baseUrl);
+        return { ok: true, state: 'ACTIVE', checkedAt: now };
+      } catch (e) {
+        const err = e as ConnectorError;
+        if (err.kind === 'NOT_CONFIGURED')
+          return { ok: false, state: 'NOT_CONFIGURED', detail: err.message, checkedAt: now };
+        if (err.kind === 'CONFLICT')
+          return { ok: false, state: 'PAUSED', detail: err.message, checkedAt: now };
+        return {
+          ok: false,
+          state: err.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'OFFLINE',
+          detail: err.message,
+          checkedAt: now,
+        };
+      }
+    }
     try {
       const ep = this.endpoint(ctx, 'health');
       await http(ctx, this.url(ctx, ep.path), {

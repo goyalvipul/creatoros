@@ -19,6 +19,7 @@ import {
   runActionsEngine,
   runSync,
   snapshotAnalytics,
+  reconcileWorkspaceTasks,
   syncDueTaskLinks,
   syncSocialAccount,
   systemCtx,
@@ -121,7 +122,9 @@ export async function jobSync(d: WorkerDeps, scope: 'fast' | 'slow' | 'all' = 'a
   const r = await each(d, picked, 'connection sync', (c) => runSync(d.db, d.env, c.id, {}, d.overrides));
   let todo: unknown = null;
   if (scope !== 'slow')
-    todo = await syncDueTaskLinks(d.db, d.env, { now: nowOf(d), overrides: d.overrides }).catch((e) => {
+    todo = await syncDueTaskLinks(d.db, d.env, { now: nowOf(d), overrides: d.overrides })
+      .then(async (pushed) => ({ ...pushed, ...(await reconcileWorkspaceTasks(d.db, d.env, d.overrides)) }))
+      .catch((e) => {
       log(d, 'error', 'todo sync failed', { err: String(e) });
       return null;
     });

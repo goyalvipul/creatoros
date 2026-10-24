@@ -16,6 +16,7 @@ export * from './actions';
 export * from './integrations';
 export * from './notifications';
 export * from './todo';
+export * from './workspace-os';
 export * from './insights';
 export * from './ops';
 export * from './auth';

@@ -42,6 +42,7 @@ import { audit, emit } from './audit';
 import { decrypt, decryptJson, encrypt, encryptJson, sha256Hex } from './crypto';
 import { importPublications } from './publishing';
 import { ingestMessage } from './crm';
+import { workspaceOrigin } from '@creatoros/connectors';
 import { badRequest, notFound, systemCtx, type Ctx, type ServiceEnv } from './types';
 
 type Conn = typeof providerConnections.$inferSelect;
@@ -489,7 +490,13 @@ export async function setConnectionPaused(ctx: Ctx, connectionId: string, paused
 export async function saveKeyConnection(
   ctx: Ctx,
   provider: 'todo' | 'postiz' | 'meta' | 'tiktok',
-  input: { label?: string; apiKey?: string; accessToken?: string; config?: Record<string, unknown> },
+  input: {
+    label?: string;
+    apiKey?: string;
+    accessToken?: string;
+    signingSecret?: string;
+    config?: Record<string, unknown>;
+  },
 ) {
   const [existing] = await ctx.db
     .select()
@@ -500,10 +507,23 @@ export async function saveKeyConnection(
     ...prev,
     ...(input.apiKey ? { apiKey: input.apiKey } : {}),
     ...(input.accessToken ? { accessToken: input.accessToken } : {}),
+    ...(input.signingSecret ? { signingSecret: input.signingSecret } : {}),
   };
+  const config = { ...(existing?.config ?? {}), ...(input.config ?? {}) } as Record<string, unknown>;
+  delete config.signingSecret;
+  if (provider === 'todo' && (input.signingSecret || config.mode === 'workspace-os' || prev.signingSecret)) {
+    config.mode = 'workspace-os';
+    if (typeof config.baseUrl === 'string' && config.baseUrl.trim()) {
+      try {
+        config.baseUrl = workspaceOrigin(config.baseUrl);
+      } catch (e) {
+        throw badRequest((e as Error).message);
+      }
+    }
+  }
   const values = {
     label: input.label ?? existing?.label ?? provider,
-    config: { ...(existing?.config ?? {}), ...(input.config ?? {}) },
+    config,
     encryptedTokenRef: Object.keys(creds).length ? encryptJson(creds, ctx.env.encryptionKey) : null,
     state: 'NOT_CONFIGURED' as const,
     updatedAt: new Date(),

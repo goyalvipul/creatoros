@@ -41,6 +41,8 @@ export interface Credentials {
   /** epoch ms */
   expiresAt?: number;
   apiKey?: string;
+  /** Workspace OS webhook signing secret (`wos_whsec_...`). Encrypted with the other credentials. */
+  signingSecret?: string;
   scopes?: string[];
   principal?: string;
   tokenType?: string;

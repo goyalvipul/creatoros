@@ -1,5 +1,19 @@
 # Todo adapter contract
 
+Workspace OS is the Todo app this install talks to. Its contract is a signed webhook into Creator OS and a scoped token back out.
+
+1. In Workspace OS, Settings → CreatorOS → Connect. Copy the signing secret (`wos_whsec_...`, shown once) and create an access token with scope `creatoros` (`wos_...`, shown once).
+2. In Creator OS, Integrations → Todo app: set the Workspace OS address (`http://100.108.120.8:4390`, not localhost), the access token and the signing secret. Test connection.
+3. Paste the webhook address shown on that card into Workspace OS. It is `https://<creator-os>/api/v1/integrations/workspace-os/webhook`. Send a test. A published task then appears on Today.
+4. Completing or editing that item in Creator OS is sent back. Workspace OS does not echo that change. A later edit made there is sent again.
+5. Pausing the connection here makes Creator OS answer `503` so Workspace OS retries. Pausing publishing in Workspace OS makes Test connection report that publishing is paused.
+
+The signature is `v1=` plus HMAC-SHA256 of `timestamp + "." + raw body`, and timestamps older than 5 minutes are rejected. The same `X-WOS-Event-Id` is applied once.
+
+The generic field-map adapter below still runs when the connection is not in `workspace-os` mode.
+
+# Generic adapter (only if Workspace OS mode is off)
+
 Creator OS can send its own action items (from the Today queue) to your self-hosted Todo PWA. Your Todo app's real API is not
 known to Creator OS in advance, so the adapter is **configuration, not code**: endpoint paths, field names, priority values and
 the way completion is represented are all settable in _Integrations → Todo_. The defaults below are what a Todo app has to

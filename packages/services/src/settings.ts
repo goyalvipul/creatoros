@@ -191,6 +191,68 @@ export async function updateMember(
   );
 }
 
+/** Removes the person from this workspace. Their files, posts and deals stay. They cannot sign in again. */
+export async function deleteMember(ctx: Ctx, userId: string) {
+  if (userId === ctx.userId) throw conflict('You cannot delete your own sign-in.', undefined, 'SELF');
+  const [m] = await ctx.db
+    .select()
+    .from(organizationMemberships)
+    .where(and(eq(organizationMemberships.orgId, ctx.orgId), eq(organizationMemberships.userId, userId)));
+  if (!m) throw notFound('Member');
+  if (m.role === 'OWNER' && m.status === 'ACTIVE' && (await activeOwners(ctx)) <= 1)
+    throw conflict('There must always be at least one active owner.', undefined, 'LAST_OWNER');
+  const [person] = await ctx.db
+    .select({ email: users.email, name: users.name })
+    .from(users)
+    .where(eq(users.id, userId));
+  await ctx.db.transaction(async (tx) => {
+    const [org] = await tx
+      .select({ ownerUserId: organizations.ownerUserId })
+      .from(organizations)
+      .where(eq(organizations.id, ctx.orgId));
+    if (org?.ownerUserId === userId) {
+      const [next] = await tx
+        .select({ userId: organizationMemberships.userId })
+        .from(organizationMemberships)
+        .where(
+          and(
+            eq(organizationMemberships.orgId, ctx.orgId),
+            eq(organizationMemberships.role, 'OWNER'),
+            eq(organizationMemberships.status, 'ACTIVE'),
+            sql`${organizationMemberships.userId} <> ${userId}`,
+          ),
+        )
+        .limit(1);
+      if (!next) throw conflict('There must always be at least one active owner.', undefined, 'LAST_OWNER');
+      await tx
+        .update(organizations)
+        .set({ ownerUserId: next.userId, updatedAt: new Date() })
+        .where(eq(organizations.id, ctx.orgId));
+    }
+    await audit(
+      { ...ctx, db: tx },
+      'member.delete',
+      { type: 'user', id: userId },
+      { email: person?.email, name: person?.name, role: m.role },
+      { removed: true },
+    );
+    const [elsewhere] = rowsOf<{ n: number }>(
+      await tx.execute(
+        sql`select count(*)::int as n from organization_memberships where user_id = ${userId} and org_id <> ${ctx.orgId}`,
+      ),
+    );
+    if ((elsewhere?.n ?? 0) > 0) {
+      await tx
+        .delete(organizationMemberships)
+        .where(and(eq(organizationMemberships.orgId, ctx.orgId), eq(organizationMemberships.userId, userId)));
+      await tx.execute(sql`update sessions set revoked_at = now() where user_id = ${userId} and org_id = ${ctx.orgId}`);
+      return;
+    }
+    await tx.delete(users).where(eq(users.id, userId));
+  });
+  return { id: userId, removed: true };
+}
+
 // ------------------------------------------------------------ follow-up rules
 
 export async function listFollowUpRules(ctx: Ctx) {

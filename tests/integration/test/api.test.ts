@@ -185,6 +185,37 @@ describe('first run and auth', () => {
     expect((await api.call('GET', `${V1}/me`, { cookie: fresh })).status).toBe(200);
   });
 
+  it('an owner can permanently delete another person, and cannot delete themselves', async () => {
+    const me = j(await api.call('GET', `${V1}/me`, { cookie: owner })).user;
+    const self = await api.call('DELETE', `${V1}/members/${me.id}`, { cookie: owner });
+    expect(self.status).toBe(409);
+    expect(self.body.error.code).toBe('SELF');
+
+    const created = j(
+      await api.call('POST', `${V1}/members`, {
+        cookie: owner,
+        body: {
+          email: 'gone@creator.test',
+          name: 'Gone',
+          role: 'EDITOR',
+          password: 'a long passphrase for gone',
+        },
+      }),
+    );
+    const theirs = await api.login('gone@creator.test', 'a long passphrase for gone');
+    expect((await api.call('GET', `${V1}/me`, { cookie: theirs })).status).toBe(200);
+    const removed = await api.call('DELETE', `${V1}/members/${created.id}`, { cookie: owner });
+    expect(removed.status).toBe(200);
+    expect((await api.call('GET', `${V1}/me`, { cookie: theirs })).status).toBe(401);
+    const again = await api.call('POST', `${V1}/auth/login`, {
+      body: { email: 'gone@creator.test', password: 'a long passphrase for gone' },
+    });
+    expect(again.status).toBe(401);
+    const listed = j(await api.call('GET', `${V1}/members`, { cookie: owner })) as { email: string }[];
+    expect(listed.some((m) => m.email === 'gone@creator.test')).toBe(false);
+    expect((await api.call('DELETE', `${V1}/members/${created.id}`, { cookie: editor })).status).toBe(403);
+  });
+
   it('validation errors list the offending fields; Idempotency-Key replays', async () => {
     const bad = await api.call('POST', `${V1}/projects`, {
       cookie: owner,

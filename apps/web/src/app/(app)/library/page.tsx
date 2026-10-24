@@ -75,7 +75,7 @@ function Library() {
   const [rootId, setRootId] = useState('');
   const [linked, setLinked] = useState(sp.get('linked') ?? '');
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-  const [openFile, setOpenFile] = useState<string | null>(null);
+  const [openFile, setOpenFile] = useState<string | null>(sp.get('file'));
   const counts = useApi<any>('/library/counts', { refreshInterval: 30_000 });
   const roots = useRoots();
 
@@ -145,13 +145,13 @@ function Library() {
 
       {tab === 'files' && (
         <>
-          <div className="mb-4 flex flex-wrap gap-2">
-            <div className="relative">
+          <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <div className="relative col-span-2 lg:col-span-1">
               <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted" />
               <Input
                 aria-label="Search files"
                 placeholder="Search name or path"
-                className="w-64 pl-8"
+                className="w-full pl-8"
                 value={q}
                 onChange={(e) => reset(setQ)(e.target.value)}
               />
@@ -752,38 +752,61 @@ function Duplicates({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
+const ASSET_CATS = [
+  { id: 'VIDEO', label: 'Videos' },
+  { id: 'IMAGE', label: 'Images' },
+  { id: 'AUDIO', label: 'Audio' },
+  { id: 'DOCUMENT', label: 'Document' },
+  { id: 'PROJECT', label: 'Project' },
+] as const;
+
 function Assets() {
   const [q, setQ] = useState('');
-  const assets = useApi<any[]>('/assets', { query: { q: q || undefined, limit: 200 } });
+  const [kind, setKind] = useState<(typeof ASSET_CATS)[number]['id']>('VIDEO');
+  const [deviceId, setDeviceId] = useState('');
+  const machines = useApi<{ id: string; name: string }[]>('/assets/machines');
+  const assets = useApi<any[]>('/assets', {
+    query: { q: q || undefined, kind, deviceId: deviceId || undefined, limit: 200 },
+  });
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const brands = useBrands();
   const [f, setF] = useState({ title: '', kind: 'VIDEO', brandId: '' });
+  const cat = ASSET_CATS.find((c) => c.id === kind)?.label ?? 'Assets';
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <Tabs tabs={[...ASSET_CATS]} value={kind} onChange={setKind} />
+      <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Input
           aria-label="Search assets"
           placeholder="Search assets"
-          className="w-64"
+          className="col-span-2 w-full lg:col-span-2"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <Button variant="primary" className="ml-auto" onClick={() => setAdding(true)}>
+        <Select aria-label="Machine" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+          <option value="">All machines</option>
+          {(machines.data ?? []).map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </Select>
+        <Button variant="primary" onClick={() => setAdding(true)}>
           <Plus className="size-4" /> New asset
         </Button>
       </div>
       <Async
         res={assets}
         empty={
-          <EmptyState title="No assets yet">
-            An asset is one intended piece of content (a song, a video). It can have many versions and many
-            file copies.
+          <EmptyState title={`No ${cat.toLowerCase()} yet`}>
+            Files already scanned are grouped by the folder they sit in and the machine that holds them. The
+            name is folder_machine, for example Music_12GB.
           </EmptyState>
         }
       >
         {(rows) => (
-          <Table head={['Asset', 'Kind', 'State', 'Versions', 'Files']}>
+          <Table head={['Asset', 'Machine', 'Modified', 'Files']}>
             {rows.map((a) => (
               <tr key={a.id} className="hover:bg-panel2">
                 <Td>
@@ -794,11 +817,8 @@ function Assets() {
                     {a.title}
                   </button>
                 </Td>
-                <Td>{titleCase(a.kind)}</Td>
-                <Td>
-                  <StateBadge state={a.creativeState} />
-                </Td>
-                <Td>{a.versionCount}</Td>
+                <Td>{a.deviceName ?? '—'}</Td>
+                <Td>{a.lastModified ? when(a.lastModified) : '—'}</Td>
                 <Td>{a.fileCount}</Td>
               </tr>
             ))}

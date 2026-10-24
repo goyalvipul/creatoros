@@ -352,6 +352,7 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
         rootId: z.uuid().optional(),
         deviceId: z.uuid().optional(),
         tagId: z.uuid().optional(),
+        assetId: z.uuid().optional(),
         linked: boolQ.optional(),
         duplicates: boolQ.optional(),
         orientation: z.enum(['landscape', 'portrait', 'square', 'unknown']).optional(),
@@ -556,10 +557,16 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       for (const base of urls) {
         try {
           const u = `${base.replace(/\/$/, '')}/v1/stream?root=${encodeURIComponent(f.rootId)}&path=${encodeURIComponent(f.displayPath)}&exp=${exp}&sig=${sig}`;
-          upstream = await fetch(u, {
-            headers: range ? { range } : {},
-            signal: AbortSignal.any([ac.signal, AbortSignal.timeout(6000)]),
-          });
+          const connect = new AbortController();
+          const connectTimer = setTimeout(() => connect.abort(), 15_000);
+          try {
+            upstream = await fetch(u, {
+              headers: range ? { range } : {},
+              signal: AbortSignal.any([ac.signal, connect.signal]),
+            });
+          } finally {
+            clearTimeout(connectTimer);
+          }
           if (upstream.status < 500) break;
           lastErr = `HTTP ${upstream.status}`;
           upstream = null;

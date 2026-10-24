@@ -17,9 +17,11 @@ import {
   uploadFacebookVideo,
   uploadInstagramReel,
   uploadYoutubeVideo,
+  youtubeUploadText,
   type UploadBytes,
 } from '@creatoros/connectors';
 import { audit } from './audit';
+import { signMediaToken } from './crypto';
 import { openAgentFile } from './agent-file';
 import { connectorContext, loadCredentials } from './integrations';
 import { AppError, badRequest, conflict, notFound, type Ctx } from './types';
@@ -28,8 +30,6 @@ const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const YT_UPLOAD = 'https://www.googleapis.com/auth/youtube.upload';
 const FB_VIDEO = 'pages_manage_posts';
 const IG_PUBLISH = 'instagram_business_content_publish';
-
-const LOCKED = new Set(['QUEUED', 'UPLOADING', 'PUBLISHED', 'UNCERTAIN']);
 
 export async function linkPublishFile(ctx: Ctx, variantId: string, fileInstanceId: string) {
   const [v] = await ctx.db
@@ -75,7 +75,7 @@ export async function unlinkPublishFile(ctx: Ctx, variantId: string, itemId: str
 export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const [v] = rowsOf<any>(
     await ctx.db.execute(sql`
-      select v.id, v.title_master as title, v.project_id as "projectId", a.title as "assetTitle"
+      select v.id, v.title_master as title, v.project_id as "projectId", v.asset_id as "assetId", a.title as "assetTitle"
       from distribution_variants v join logical_assets a on a.id = v.asset_id
       where v.id = ${variantId} and v.org_id = ${ctx.orgId}`),
   );
@@ -83,7 +83,10 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const items = rowsOf<any>(
     await ctx.db.execute(sql`
       select i.id, i.file_instance_id as "fileInstanceId", f.file_name as "fileName", f.display_path as "displayPath",
-             f.size::float8 as size, d.display_name as "deviceName", d.state as "deviceState"
+             f.size::float8 as size, d.display_name as "deviceName", d.state as "deviceState",
+             nullif(f.tech->>'width', '')::int as width,
+             nullif(f.tech->>'height', '')::int as height,
+             nullif(f.tech->>'durationMs', '')::float8 as "durationMs"
       from publish_items i
       join file_instances f on f.id = i.file_instance_id
       join devices d on d.id = f.device_id
@@ -93,6 +96,7 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const drafts = rowsOf<any>(
     await ctx.db.execute(sql`
       select d.id, d.item_id as "itemId", d.social_account_id as "accountId", d.title, d.caption, d.hashtags, d.privacy,
+             d.content_form as "contentForm",
              d.upload_state as "uploadState", d.error, d.publication_id as "publicationId",
              r.canonical_url as url, r.state as "recordState"
       from publish_drafts d
@@ -148,6 +152,7 @@ export interface PublishRequest {
   caption?: string | null;
   hashtags?: string[];
   privacy?: 'PUBLIC' | 'UNLISTED' | 'PRIVATE' | 'SCHEDULED' | null;
+  contentForm?: 'VIDEO' | 'SHORT' | null;
 }
 
 /**
@@ -182,19 +187,19 @@ export async function requestPublish(
   if (account.platform === 'youtube' && !input.privacy)
     throw badRequest('Choose a privacy setting. Nothing is published as public unless you pick Public.');
   if (account.platform === 'youtube' && !input.title?.trim()) throw badRequest('A YouTube title is required.');
+  if (account.platform === 'youtube' && input.contentForm !== 'VIDEO' && input.contentForm !== 'SHORT')
+    throw badRequest('Choose Video or Short.');
 
   const [existing] = await ctx.db
     .select()
     .from(publishDrafts)
     .where(and(eq(publishDrafts.itemId, item.id), eq(publishDrafts.socialAccountId, input.socialAccountId)));
   if (existing?.requestId === input.requestId) return draftView(existing);
-  if (existing && LOCKED.has(existing.uploadState))
+  if (existing && (existing.uploadState === 'QUEUED' || existing.uploadState === 'UPLOADING' || existing.uploadState === 'PUBLISHED'))
     throw conflict(
       existing.uploadState === 'PUBLISHED'
         ? 'This file is already published to that account.'
-        : existing.uploadState === 'UNCERTAIN'
-          ? 'The last upload may have gone out. Check the platform before trying again.'
-          : 'This upload is already in progress.',
+        : 'This upload is already in progress.',
       undefined,
       'ALREADY_PUBLISHING',
     );
@@ -204,6 +209,7 @@ export async function requestPublish(
     caption: input.caption?.trim() || null,
     hashtags: (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
     privacy: input.privacy ?? null,
+    contentForm: input.contentForm ?? null,
     requestId: input.requestId,
     uploadState: 'QUEUED',
     error: null,
@@ -312,23 +318,44 @@ export async function executePublish(
       const fresh = await refreshGoogleToken(cctx).catch(() => creds);
       token = fresh.accessToken ?? token;
     }
-    const caption = [claimed.caption, ...(claimed.hashtags ?? []).map((h) => `#${h}`) ].filter(Boolean).join('\n');
+    const caption = [claimed.caption, ...(claimed.hashtags ?? []).map((h) => `#${h}`)].filter(Boolean).join('\n');
+    const youtube =
+      account.platform === 'youtube'
+        ? youtubeUploadText({
+            title: claimed.title || 'Untitled',
+            description: claimed.caption ?? '',
+            tags: claimed.hashtags ?? [],
+            form: claimed.contentForm === 'SHORT' ? 'SHORT' : 'VIDEO',
+          })
+        : null;
     let result: { externalId: string; url: string | null };
     if (account.platform === 'instagram') {
+      const base = ctx.env.appBaseUrl.replace(/\/$/, '');
+      if (!base.startsWith('https://'))
+        return fail('FAILED', 'Instagram downloads the video from this site. APP_BASE_URL must be the public https address.');
+      const exp = Date.now() + 30 * 60_000;
+      const mediaToken = signMediaToken(ctx.env.agentPairingSecret, {
+        instanceId: item.fileInstanceId,
+        userId: ctx.userId ?? 'publish',
+        exp,
+      });
+      const videoUrl = `${base}/api/v1/files/${item.fileInstanceId}/stream?token=${encodeURIComponent(mediaToken)}`;
+      if (typeof (file.body as ReadableStream).cancel === 'function')
+        await (file.body as ReadableStream).cancel().catch(() => undefined);
       result = await uploadInstagramReel(fetchImpl, {
         version: 'v23.0',
         igUserId: conn.principalHint ?? '',
         accessToken: token,
         caption,
-        file,
+        videoUrl,
       });
     } else if (account.platform === 'youtube') {
       const privacy = claimed.privacy === 'PUBLIC' ? 'public' : claimed.privacy === 'PRIVATE' ? 'private' : 'unlisted';
       result = await uploadYoutubeVideo(fetchImpl, {
         accessToken: token,
-        title: claimed.title || 'Untitled',
-        description: caption,
-        tags: claimed.hashtags ?? [],
+        title: youtube!.title,
+        description: youtube!.description,
+        tags: youtube!.tags,
         privacy,
         file,
       });
@@ -353,7 +380,7 @@ export async function executePublish(
         provider: account.platform as 'youtube',
         externalPostId: result.externalId,
         canonicalUrl: result.url,
-        title: claimed.title,
+        title: claimed.title?.trim() || claimed.caption?.trim().split('\n')[0]?.slice(0, 300) || null,
         caption: claimed.caption,
         hashtags: claimed.hashtags ?? [],
         privacy: (claimed.privacy as 'PUBLIC') || 'PUBLIC',

@@ -314,6 +314,8 @@ export const logicalAssets = pgTable(
       onDelete: 'set null',
     }),
     source: text('source').notNull().default('manual'),
+    deviceId: uuid('device_id').references(() => devices.id, { onDelete: 'set null' }),
+    folderKey: text('folder_key'),
     isArchived: boolean('is_archived').notNull().default(false),
     isDemo: boolean('is_demo').notNull().default(false),
     createdAt: createdAt(),
@@ -323,6 +325,9 @@ export const logicalAssets = pgTable(
     index('logical_assets_org_kind_idx').on(t.orgId, t.kind),
     index('logical_assets_project_idx').on(t.projectId),
     index('logical_assets_brand_idx').on(t.brandId),
+    uniqueIndex('logical_assets_folder_uq')
+      .on(t.orgId, t.deviceId, t.folderKey, t.kind)
+      .where(sql`${t.source} = 'folder' and ${t.deviceId} is not null and ${t.folderKey} is not null`),
   ],
 );
 

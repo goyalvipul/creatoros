@@ -16,6 +16,7 @@ export interface LibraryQuery {
   rootId?: string;
   deviceId?: string;
   tagId?: string;
+  assetId?: string;
   linked?: boolean;
   duplicates?: boolean;
   orientation?: string; // landscape | portrait | square | unknown
@@ -182,6 +183,12 @@ export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
     where.push(
       sql`exists(select 1 from file_tag_links t where t.file_instance_id = f.id and t.tag_id = ${q.tagId})`,
     );
+  if (q.assetId)
+    where.push(sql`exists(
+      select 1 from asset_file_links l
+      join asset_versions v on v.id = l.asset_version_id
+      where l.file_instance_id = f.id and v.asset_id = ${q.assetId} and v.org_id = ${ctx.orgId}
+    )`);
   if (q.linked === true)
     where.push(sql`exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
   if (q.linked === false)

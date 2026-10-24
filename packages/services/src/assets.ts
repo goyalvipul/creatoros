@@ -19,6 +19,93 @@ import { badRequest, conflict, notFound, type Ctx } from './types';
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const esc = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
+const folderFiles = (orgId: string) => sql`
+  select f.org_id, f.id as file_id, f.device_id, f.file_type, f.mtime,
+         regexp_replace(parent_path, '^.*/', '') as folder_name,
+         lower(parent_path) as folder_key,
+         coalesce(nullif(btrim(d.display_name), ''), 'machine') as machine
+  from (
+    select f.*, regexp_replace(replace(f.display_path, chr(92), '/'), '/[^/]+$', '') as parent_path
+    from file_instances f
+    where f.org_id = ${orgId}
+      and f.archived_at is null
+      and f.file_type in ('VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT', 'PROJECT')
+      and replace(f.display_path, chr(92), '/') like '%/%'
+  ) f
+  join devices d on d.id = f.device_id
+  where parent_path <> '' and regexp_replace(parent_path, '^.*/', '') <> ''
+`;
+
+/** One asset per folder, machine and file kind. The title is folder_machine. Original files are not moved. */
+export async function syncFolderAssets(db: Executor, orgId: string) {
+  const files = folderFiles(orgId);
+  await db.execute(sql`
+    insert into logical_assets (org_id, kind, title, source, device_id, folder_key)
+    select org_id, file_type::text::asset_kind, left(folder_name || '_' || machine, 200), 'folder', device_id, folder_key
+    from (
+      select distinct on (org_id, device_id, folder_key, file_type)
+             org_id, device_id, folder_key, file_type, folder_name, machine
+      from (${files}) s
+      order by org_id, device_id, folder_key, file_type, mtime desc nulls last
+    ) s
+    on conflict (org_id, device_id, folder_key, kind) where source = 'folder' and device_id is not null and folder_key is not null
+    do update set title = excluded.title, updated_at = now()
+  `);
+  await db.execute(sql`
+    insert into asset_versions (org_id, asset_id, label, number, is_master)
+    select a.org_id, a.id, 'v1', 1, true
+    from logical_assets a
+    where a.org_id = ${orgId} and a.source = 'folder'
+      and not exists (select 1 from asset_versions v where v.asset_id = a.id)
+  `);
+  await db.execute(sql`
+    insert into asset_file_links (org_id, asset_version_id, file_instance_id, link_reason)
+    select s.org_id, v.id, s.file_id, 'folder'
+    from (${folderFiles(orgId)}) s
+    join logical_assets a
+      on a.org_id = s.org_id and a.device_id = s.device_id and a.folder_key = s.folder_key
+     and a.kind::text = s.file_type::text and a.source = 'folder'
+    join asset_versions v on v.asset_id = a.id and v.number = 1
+    on conflict (asset_version_id, file_instance_id) do nothing
+  `);
+  await db.execute(sql`
+    delete from asset_file_links l
+    using asset_versions v, logical_assets a, file_instances f
+    where l.link_reason = 'folder'
+      and l.asset_version_id = v.id
+      and v.asset_id = a.id
+      and a.source = 'folder'
+      and a.org_id = ${orgId}
+      and l.file_instance_id = f.id
+      and (
+        f.archived_at is not null
+        or f.file_type::text not in ('VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT', 'PROJECT')
+        or a.device_id is distinct from f.device_id
+        or a.kind::text is distinct from f.file_type::text
+        or a.folder_key is distinct from lower(regexp_replace(replace(f.display_path, chr(92), '/'), '/[^/]+$', ''))
+      )
+  `);
+  await db.execute(sql`
+    delete from logical_assets a
+    where a.org_id = ${orgId} and a.source = 'folder'
+      and not exists (
+        select 1 from asset_versions v
+        join asset_file_links l on l.asset_version_id = v.id
+        where v.asset_id = a.id
+      )
+  `);
+}
+
+export async function listAssetMachines(ctx: Ctx) {
+  return rowsOf<{ id: string; name: string }>(
+    await ctx.db.execute(sql`
+      select id, display_name as name from devices
+      where org_id = ${ctx.orgId} and revoked_at is null
+      order by display_name
+    `),
+  );
+}
+
 export interface AssetInput {
   title: string;
   kind?: (typeof logicalAssets.$inferInsert)['kind'];
@@ -125,6 +212,7 @@ export async function listAssets(
   q: {
     q?: string;
     kind?: string;
+    deviceId?: string;
     projectId?: string;
     brandId?: string;
     includeArchived?: boolean;
@@ -137,21 +225,29 @@ export async function listAssets(
   if (!q.includeArchived) where.push(sql`a.is_archived = false`);
   if (q.q?.trim()) where.push(sql`a.title ilike ${'%' + esc(q.q.trim()) + '%'}`);
   if (q.kind) where.push(sql`a.kind = ${q.kind}::asset_kind`);
+  if (q.deviceId) where.push(sql`a.device_id = ${q.deviceId}`);
   if (q.projectId) where.push(sql`a.project_id = ${q.projectId}`);
   if (q.brandId) where.push(sql`a.brand_id = ${q.brandId}`);
   if (q.cursor) {
     const [t, id] = Buffer.from(q.cursor, 'base64url').toString('utf8').split('|');
     if (!t || !id) throw badRequest('Invalid cursor');
-    where.push(sql`(a.created_at, a.id) < (${t}::timestamptz, ${id}::uuid)`);
+    where.push(sql`(
+      coalesce((select max(f.mtime) from asset_file_links l join asset_versions v on v.id = l.asset_version_id join file_instances f on f.id = l.file_instance_id where v.asset_id = a.id), '1970-01-01'::timestamptz),
+      a.id
+    ) < (${t}::timestamptz, ${id}::uuid)`);
   }
   const rows = rowsOf<any>(
     await ctx.db.execute(sql`
       select a.id, a.title, a.kind, a.creative_state as "creativeState", a.brand_id as "brandId", a.project_id as "projectId",
              a.selected_version_id as "selectedVersionId", a.created_at as "createdAt",
+             a.device_id as "deviceId", d.display_name as "deviceName",
+             (select max(f.mtime) from asset_file_links l join asset_versions v on v.id = l.asset_version_id join file_instances f on f.id = l.file_instance_id where v.asset_id = a.id) as "lastModified",
              (select count(*)::int from asset_versions v where v.asset_id = a.id) as "versionCount",
              (select count(*)::int from asset_versions v join asset_file_links l on l.asset_version_id = v.id where v.asset_id = a.id) as "fileCount"
-      from logical_assets a where ${sql.join(where, sql` and `)}
-      order by a.created_at desc, a.id desc limit ${limit + 1}`),
+      from logical_assets a
+      left join devices d on d.id = a.device_id
+      where ${sql.join(where, sql` and `)}
+      order by "lastModified" desc nulls last, a.id desc limit ${limit + 1}`),
   );
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
@@ -159,7 +255,7 @@ export async function listAssets(
     items: page,
     nextCursor:
       rows.length > limit && last
-        ? Buffer.from(`${new Date(last.createdAt).toISOString()}|${last.id}`).toString('base64url')
+        ? Buffer.from(`${new Date(last.lastModified ?? last.createdAt).toISOString()}|${last.id}`).toString('base64url')
         : null,
   };
 }

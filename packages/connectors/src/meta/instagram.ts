@@ -260,9 +260,7 @@ export class InstagramLoginConnector implements Connector<NormalizedPost, IgMedi
       blockers.push(
         `Not granted: ${missing.join(', ')}. Reconnect and approve them. Outside your own test users, Meta App Review (Advanced Access) and Business Verification are required for these permissions.`,
       );
-    blockers.push(
-      'Direct messages can only be answered inside Meta’s 24 hour window after the customer’s last message; CreatorOS never sends automatically.',
-    );
+    blockers.push('CreatorOS never sends a reply until you press Send.');
     return {
       provider: 'instagram',
       state: connected ? 'ACTIVE' : 'NOT_CONFIGURED',

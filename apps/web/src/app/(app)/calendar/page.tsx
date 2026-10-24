@@ -7,6 +7,15 @@ import { Async, Badge, Button, Card, EmptyState, PageHeader, StateBadge } from '
 import { useApi } from '@/lib/api';
 import { parseDate, title as titleCase } from '@/lib/format';
 
+function postLabel(item: { title?: string | null; caption?: string | null; fileName?: string | null }) {
+  const title = item.title?.trim();
+  if (title) return title;
+  const caption = item.caption?.trim().split('\n')[0];
+  if (caption) return caption;
+  if (item.fileName) return item.fileName;
+  return 'Untitled';
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const key = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
@@ -127,7 +136,7 @@ export default function CalendarPage() {
                   <ul className="space-y-2">
                     {sel.map((x) => (
                       <li key={x.id} className="rounded-lg border border-border p-2 text-sm">
-                        <div className="font-medium">{x.title ?? 'Untitled'}</div>
+                        <div className="font-medium">{postLabel(x)}</div>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <Badge>{titleCase(x.platform)}</Badge>
                           <span className="text-xs text-muted">{x.handle}</span>

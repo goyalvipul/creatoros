@@ -13,6 +13,7 @@ import {
   CardTitle,
   Dialog,
   EmptyState,
+  ErrorNote,
   Field,
   FormDialog,
   Input,
@@ -207,12 +208,7 @@ export default function PublishingPage() {
           {(rows) => (
             <ul className="space-y-2">
               {rows.map((r) => (
-                <li key={r.id} className="rounded-xl border border-border bg-panel p-3 text-sm">
-                  <div className="font-medium">{r.title ?? r.canonicalUrl ?? 'Untitled post'}</div>
-                  <div className="text-xs text-muted">
-                    {titleCase(r.platform)} {r.handle} · {r.publishedAt ? when(r.publishedAt) : ''}
-                  </div>
-                </li>
+                <MatchRow key={r.id} row={r} plans={matrix.data?.rows ?? []} />
               ))}
             </ul>
           )}
@@ -228,6 +224,66 @@ export default function PublishingPage() {
       />
       <ExistingDialog open={existing} onClose={() => setExisting(false)} />
     </>
+  );
+}
+
+function MatchRow({ row, plans }: { row: any; plans: { id: string; title: string }[] }) {
+  const [variantId, setVariantId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const platform = titleCase(String(row.platform ?? 'platform'));
+  const link = async () => {
+    if (!variantId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/publications/${row.id}/link-variant`, { variantId });
+      await refresh('/publications/unmatched', '/publishing/matrix');
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className="rounded-xl border border-border bg-panel p-3 text-sm">
+      <div className="font-medium">{row.title ?? 'Untitled post'}</div>
+      <div className="text-xs text-muted">
+        {platform} {row.handle} · {row.publishedAt ? when(row.publishedAt) : ''}
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        {row.fileInstanceId ? (
+          <Link href={`/library?file=${row.fileInstanceId}`} className="text-accent hover:underline">
+            {row.fileName ? `Library file · ${row.fileName}` : 'Open library file'}
+          </Link>
+        ) : null}
+        {row.url ? (
+          <a href={row.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+            Open on {platform}
+          </a>
+        ) : null}
+        {!row.fileInstanceId && !row.url ? <span className="text-muted">No video link was stored for this post.</span> : null}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Select
+          aria-label={`Plan for ${row.title ?? 'this post'}`}
+          className="min-w-48 flex-1"
+          value={variantId}
+          onChange={(e) => setVariantId(e.target.value)}
+        >
+          <option value="">{plans.length ? 'Choose a plan' : 'No plans for this brand'}</option>
+          {plans.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.title}
+            </option>
+          ))}
+        </Select>
+        <Button variant="primary" disabled={!variantId} busy={busy} onClick={() => void link()}>
+          Link to plan
+        </Button>
+      </div>
+      {error ? <ErrorNote error={error} /> : null}
+    </li>
   );
 }
 

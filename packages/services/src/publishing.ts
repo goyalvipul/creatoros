@@ -586,9 +586,12 @@ export async function calendar(ctx: Ctx, from: Date, to: Date, tz?: string) {
   const zone = tz ?? (await orgTimezone(ctx.db, ctx.orgId));
   const rows = rowsOf<any>(
     await ctx.db.execute(sql`
-      select r.id, r.title, r.state, r.state_provenance as provenance, r.planned_at as "plannedAt", r.published_at as "publishedAt", r.canonical_url as url,
-             sa.platform, sa.handle, r.variant_id as "variantId", r.privacy
-      from publication_records r join social_accounts sa on sa.id = r.social_account_id
+      select r.id, r.title, r.caption, r.state, r.state_provenance as provenance, r.planned_at as "plannedAt", r.published_at as "publishedAt", r.canonical_url as url,
+             sa.platform, sa.handle, r.variant_id as "variantId", r.privacy,
+             f.file_name as "fileName"
+      from publication_records r
+      join social_accounts sa on sa.id = r.social_account_id
+      left join file_instances f on f.id = r.file_instance_id
       where r.org_id = ${ctx.orgId} and r.state <> 'REMOVED'
         and coalesce(r.published_at, r.planned_at) >= ${from.toISOString()}::timestamptz and coalesce(r.published_at, r.planned_at) < ${to.toISOString()}::timestamptz
       order by coalesce(r.published_at, r.planned_at)`),
@@ -808,9 +811,11 @@ export async function listUnmatchedPublications(ctx: Ctx) {
   return rowsOf<any>(
     await ctx.db.execute(sql`
       select r.id, r.title, r.canonical_url as url, r.published_at as "publishedAt", sa.platform, sa.handle,
+        r.file_instance_id as "fileInstanceId", f.file_name as "fileName",
         (select coalesce(jsonb_agg(jsonb_build_object('assetId', s.candidate_asset_id, 'title', a.title, 'confidence', s.confidence, 'reasons', s.reasons) order by s.confidence desc), '[]'::jsonb)
          from asset_match_suggestions s join logical_assets a on a.id = s.candidate_asset_id where s.source_type = 'publication' and s.source_id = r.id and s.outcome = 'PENDING') as suggestions
       from publication_records r join social_accounts sa on sa.id = r.social_account_id
+      left join file_instances f on f.id = r.file_instance_id
       where r.org_id = ${ctx.orgId} and r.unmatched_import and r.variant_id is null and r.state <> 'REMOVED' order by r.published_at desc nulls last limit 200`),
   );
 }

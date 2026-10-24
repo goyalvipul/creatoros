@@ -26,7 +26,7 @@ import {
   sendInstagramDm,
   type ConnectorContext,
 } from '@creatoros/connectors';
-import { dmWindowOpen, isOptOut, triageReply } from '@creatoros/domain';
+import { isOptOut, triageReply } from '@creatoros/domain';
 import { audit } from './audit';
 import { connectorContext } from './integrations';
 import { ingestMessage } from './crm';
@@ -715,12 +715,7 @@ export function sendEligibility(
         ? `This account has not granted the ${thread.kind === 'COMMENT' ? 'comments' : 'messages'} permission. Reconnect and approve it.`
         : 'This account needs to be reconnected.',
     );
-  let windowOpen: boolean | null = null;
-  if (thread.kind !== 'COMMENT') {
-    windowOpen = dmWindowOpen(thread.lastInboundAt, now);
-    if (!windowOpen) reasons.push('The 24 hour reply window for this conversation has closed.');
-  }
-  return { canSend: reasons.length === 0, reasons, windowOpen };
+  return { canSend: reasons.length === 0, reasons, windowOpen: null };
 }
 
 export async function getSocialThread(ctx: Ctx, id: string) {

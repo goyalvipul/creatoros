@@ -21,7 +21,6 @@ import {
 import { parseInstagramWebhookEntry, type ConnectorContext } from '@creatoros/connectors';
 import {
   WORKFLOW_MODE,
-  dmWindowOpen,
   evaluateCondition,
   renderTemplate,
   sensitiveTopics,
@@ -456,8 +455,6 @@ export async function executeWorkflow(
       if (thread.optedOut) return 'sender opted out of automated messages';
       if (thread.lastOutboundAt && thread.lastOutboundAt > ev.receivedAt)
         return 'you already replied to this conversation';
-      if (ev.kind === 'DM' && !dmWindowOpen(thread.lastInboundAt, new Date()))
-        return 'the 24 hour reply window is closed';
     } else if (!sim) return 'conversation missing';
     return null;
   };

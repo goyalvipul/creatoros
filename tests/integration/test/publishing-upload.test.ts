@@ -11,6 +11,7 @@ import {
   createVariant,
   encryptJson,
   linkPublishFile,
+  listLibrary,
   publishingMatrix,
   requestPublish,
 } from '@creatoros/services';
@@ -94,7 +95,9 @@ describe('publishing upload', () => {
       })
       .returning();
 
-    const asset = await createAsset(ctx, { title: 'Song', kind: 'VIDEO' });
+    const asset = await createAsset(ctx, { title: 'Song', kind: 'VIDEO', fileInstanceId: clip!.id });
+    const inAsset = await listLibrary(ctx, { assetId: asset.id, kind: 'VIDEO' });
+    expect(inAsset.items.map((i) => i.fileName)).toEqual(['clip.mp4']);
     const variant = await createVariant(ctx, {
       assetId: asset.id,
       titleMaster: 'Master',

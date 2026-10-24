@@ -182,6 +182,7 @@ export const publishDrafts = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     privacy: text('privacy'),
+    contentForm: text('content_form'),
     requestId: text('request_id'),
     uploadState: text('upload_state').notNull().default('DRAFT'),
     publicationId: uuid('publication_id').references(() => publicationRecords.id, { onDelete: 'set null' }),

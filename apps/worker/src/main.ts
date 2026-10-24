@@ -1,6 +1,7 @@
+import { Socket } from 'node:net';
 import { Queue, Worker, type Job } from 'bullmq';
 import { Redis } from 'ioredis';
-import { createDb } from '@creatoros/db';
+import { createDb, sql } from '@creatoros/db';
 import { loadConfig } from '@creatoros/services';
 import { JOB_TABLE, jobBackup, jobPublish, jobRestoreTest, jobSync, type JobName, type WorkerDeps } from './jobs';
 
@@ -22,6 +23,26 @@ const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }
   { name: 'restore-test', pattern: '45 3 * * 0' },
 ];
 
+/**
+ * A peer closing a socket emits `error` on it. With no listener, Node exits. That was killing the worker about
+ * once a minute and leaving a publish stuck on UPLOADING, so the button spun forever.
+ */
+function ignoreDeadSocket(log: WorkerDeps['log']) {
+  const emit = Socket.prototype.emit;
+  Socket.prototype.emit = function (this: Socket, event: string | symbol, ...args: unknown[]) {
+    if (event === 'error' && this.listenerCount('error') === 0) {
+      const err = args[0] as NodeJS.ErrnoException | undefined;
+      log?.('error', 'socket closed during a write', {
+        code: err?.code,
+        err: err?.message,
+        remote: `${this.remoteAddress ?? ''}:${this.remotePort ?? ''}`,
+      });
+      if (err?.code === 'EPIPE' || err?.code === 'ECONNRESET' || err?.code === 'ECONNABORTED') return true;
+    }
+    return emit.apply(this, [event, ...args] as never);
+  };
+}
+
 async function main() {
   const config = loadConfig();
   const handle = createDb(config.databaseUrl, { max: 6, applicationName: 'creatoros-worker' });
@@ -30,6 +51,15 @@ async function main() {
       JSON.stringify({ level, msg, ...extra, at: new Date().toISOString() }),
     );
   const deps: WorkerDeps = { db: handle.db, env: config.env, log };
+  ignoreDeadSocket(log);
+  // The previous process died mid-upload. Nothing is sending those files now, so the owner can press Try again.
+  await handle.db.execute(sql`
+    update publish_drafts
+    set upload_state = 'FAILED',
+        error = 'The upload stopped before it finished. Press Try again.',
+        updated_at = now()
+    where upload_state = 'UPLOADING'
+  `);
 
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
   connection.on('error', (e) => log('error', 'redis error', { err: String(e) }));

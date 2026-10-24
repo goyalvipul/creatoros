@@ -26,6 +26,7 @@ import {
   type Observation,
   type PathOs,
 } from '@creatoros/domain';
+import { syncFolderAssets } from './assets';
 import { audit, emit } from './audit';
 import type { AuthedAgent } from './devices';
 import { forbidden, type ServiceEnv } from './types';
@@ -510,6 +511,8 @@ export async function processIngest(
         .set({ finishedAt: now, status: 'COMPLETED', completeSuccess: false })
         .where(eq(scanRuns.runId, batch.runId));
     }
+
+    if (batch.phase === 'END' && !isAlias) await syncFolderAssets(tx, root.orgId);
 
     for (const d of discovered.slice(0, 200))
       await emit(tx, root.orgId, 'media.file.discovered', {

@@ -94,6 +94,7 @@ export const ASSET_KIND = [
   'AUDIO',
   'IMAGE',
   'DOCUMENT',
+  'PROJECT',
   'LYRICS',
   'SCRIPT',
   'THUMBNAIL',

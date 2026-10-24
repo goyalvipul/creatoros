@@ -48,7 +48,9 @@ import {
   ingestWorkflowManifest,
   linkFile,
   linkPublicationToVariant,
+  listAssetMachines,
   listAssets,
+  syncFolderAssets,
   listCatalog,
   listDuplicateCandidates,
   listExactDuplicateGroups,
@@ -626,6 +628,7 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         kind: z.enum(ASSET_KIND).optional(),
         projectId: uuid.optional(),
         brandId: uuid.optional(),
+        deviceId: uuid.optional(),
         includeArchived: z
           .enum(['true', 'false'])
           .transform((v) => v === 'true')
@@ -635,9 +638,19 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       }),
     },
     async ({ ctx, query }) => {
+      await syncFolderAssets(ctx.db, ctx.orgId);
       const r = await listAssets(ctx, query);
       return withMeta(r.items, { nextCursor: r.nextCursor });
     },
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/assets/machines',
+      tag: 'Library',
+      summary: 'Machines that can filter folder assets',
+    },
+    ({ ctx }) => listAssetMachines(ctx),
   );
   route(
     {
@@ -950,6 +963,7 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         caption: z.string().max(5000).nullable().optional(),
         hashtags: z.array(z.string().max(100)).max(30).optional(),
         privacy: z.enum(PRIVACY).nullable().optional(),
+        contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
       }),
     },
     ({ ctx, body }) => requestPublish(ctx, body, { enqueue: deps.enqueue }),

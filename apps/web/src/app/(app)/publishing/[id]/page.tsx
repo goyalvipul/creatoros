@@ -27,6 +27,20 @@ const PRIVACY = [
   { id: 'PRIVATE', label: 'Private' },
 ];
 
+function shortNote(item: { width?: number | null; height?: number | null; durationMs?: number | null }) {
+  const w = Number(item.width);
+  const h = Number(item.height);
+  const ms = Number(item.durationMs);
+  const size = w > 0 && h > 0 ? `${w}×${h}` : '';
+  const length = ms > 0 ? `${Math.round(ms / 1000)}s` : '';
+  const measured = [size, length].filter(Boolean).join(', ');
+  const fits = w > 0 && h > 0 && h >= w && ms > 0 && ms <= 180_000;
+  if (fits) return 'This file is vertical and 3 minutes or shorter, so YouTube can list it as a Short.';
+  if (measured)
+    return `This file is ${measured}. YouTube only lists a Short when the picture is vertical or square and the video is 3 minutes or shorter. A wide file still posts as a normal video.`;
+  return 'YouTube only lists a Short when the picture is vertical or square and the video is 3 minutes or shorter. A wide file still posts as a normal video.';
+}
+
 export default function PublishTitlePage() {
   const { id } = useParams<{ id: string }>();
   const page = useApi<any>(id ? `/variants/${id}/publish` : null, { refreshInterval: 4000 });
@@ -58,7 +72,7 @@ export default function PublishTitlePage() {
             </div>
             {data.items.length === 0 ? (
               <EmptyState title="No videos attached" action={<Button onClick={() => setLinkOpen(true)}>Link a file</Button>}>
-                Search the library for a video on one of your machines.
+                The list is the videos already in {data.assetTitle}.
               </EmptyState>
             ) : (
               <ul className="grid gap-3">
@@ -116,7 +130,7 @@ export default function PublishTitlePage() {
                                 disabled={!account.canPublish || locked(draft?.uploadState)}
                                 onClick={() => setForm({ item, account, draft })}
                               >
-                                {draft?.uploadState === 'PUBLISHED' ? 'Published' : 'Publish'}
+                                {draft?.uploadState === 'PUBLISHED' ? 'Published' : draft?.error ? 'Try again' : 'Publish'}
                               </Button>
                             </li>
                           );
@@ -135,9 +149,11 @@ export default function PublishTitlePage() {
           </>
         )}
       </Async>
-      {linkOpen && id && (
+      {linkOpen && id && page.data?.assetId && (
         <LinkDialog
           variantId={id}
+          assetId={page.data.assetId}
+          assetTitle={page.data.assetTitle}
           onClose={() => setLinkOpen(false)}
         />
       )}
@@ -155,7 +171,7 @@ export default function PublishTitlePage() {
 }
 
 function locked(state?: string) {
-  return state === 'QUEUED' || state === 'UPLOADING' || state === 'PUBLISHED' || state === 'UNCERTAIN';
+  return state === 'QUEUED' || state === 'UPLOADING' || state === 'PUBLISHED';
 }
 
 function label(state: string) {
@@ -173,12 +189,25 @@ function tone(state: string): 'ok' | 'bad' | 'warn' | 'neutral' {
   return 'neutral';
 }
 
-function LinkDialog({ variantId, onClose }: { variantId: string; onClose: () => void }) {
+function LinkDialog({
+  variantId,
+  assetId,
+  assetTitle,
+  onClose,
+}: {
+  variantId: string;
+  assetId: string;
+  assetTitle?: string;
+  onClose: () => void;
+}) {
   const [q, setQ] = useState('');
-  const files = useApi<{ items: any[] }>('/library', { query: { kind: 'VIDEO', q, limit: 20 } });
+  const files = useApi<{ items: any[] }>('/library', {
+    query: { kind: 'VIDEO', assetId, q, limit: 200 },
+  });
   return (
     <FormDialog open onClose={onClose} title="Link a video" submitLabel="Close" onSubmit={async () => {}}>
-      <Field label="Search the library">
+      <p className="text-sm text-muted">Videos in {assetTitle || 'this asset'}.</p>
+      <Field label="Search this asset">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="File name or path" />
       </Field>
       <ul className="max-h-64 space-y-1 overflow-auto">
@@ -201,7 +230,7 @@ function LinkDialog({ variantId, onClose }: { variantId: string; onClose: () => 
           </li>
         ))}
         {files.data && files.data.items.length === 0 && (
-          <li className="text-sm text-muted">No videos match that search.</li>
+          <li className="text-sm text-muted">No videos in this asset match that search.</li>
         )}
       </ul>
     </FormDialog>
@@ -225,6 +254,7 @@ function PublishDialog({
   const [caption, setCaption] = useState(draft?.caption ?? '');
   const [tags, setTags] = useState((draft?.hashtags ?? []).join(', '));
   const [privacy, setPrivacy] = useState(draft?.privacy ?? '');
+  const [contentForm, setContentForm] = useState(draft?.contentForm ?? '');
   const platform = account.platform as string;
   return (
     <FormDialog
@@ -245,6 +275,7 @@ function PublishDialog({
           caption: caption.trim() || null,
           hashtags,
           privacy: privacy || null,
+          contentForm: contentForm || null,
         });
         await refresh(`/variants/${variantId}/publish`, '/publishing/matrix');
       }}
@@ -263,6 +294,21 @@ function PublishDialog({
           <Field label="Tags">
             <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song, mehak" />
           </Field>
+          <p className="text-xs text-muted">Tags are sent as YouTube tags. The description is only the text above.</p>
+          <Field label="Type">
+            <Select required value={contentForm} onChange={(e) => setContentForm(e.target.value)}>
+              <option value="">Choose…</option>
+              <option value="VIDEO">Video</option>
+              <option value="SHORT">Short</option>
+            </Select>
+          </Field>
+          <p className="text-xs text-muted">
+            {contentForm === 'SHORT'
+              ? `${shortNote(item)} Choosing Short adds #Shorts to the title. The file is not cropped.`
+              : contentForm === 'VIDEO'
+                ? 'Posts as a normal video.'
+                : 'Choose Video or Short. YouTube lists a Short when the file is vertical or square and at most 3 minutes.'}
+          </p>
           <Field label="Privacy">
             <Select required value={privacy} onChange={(e) => setPrivacy(e.target.value)}>
               <option value="">Choose…</option>

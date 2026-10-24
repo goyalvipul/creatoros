@@ -583,7 +583,7 @@ function FacebookCard({
       </div>
       <p className="mt-1 text-sm text-muted">
         Read and reply to Messenger messages and comments on your Page posts. Nothing is sent until you press
-        send on a reply. Messenger replies are only possible within 24 hours of the person's last message.
+        send on a reply.
       </p>
       {pages.length === 0 && caps.blockers?.length > 0 && (
         <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-muted">

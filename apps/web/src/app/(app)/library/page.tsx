@@ -537,11 +537,11 @@ function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; on
           <Notice tone="warn" title="This deletes the file from the PC">
             <code className="break-all text-xs">{path}</code>
           </Notice>
-          <Field label={`Type ${file.fileName} to confirm`}>
-            <Input aria-label="Type the file name to confirm delete" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          <Field label="Type delete to confirm">
+            <Input aria-label="Type delete to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} />
           </Field>
           <div className="flex gap-2">
-            <Button type="submit" variant="danger" disabled={typed !== file.fileName}>
+            <Button type="submit" variant="danger" disabled={typed.trim().toLowerCase() !== 'delete'}>
               Delete from this PC
             </Button>
             <Button type="button" onClick={() => setMode(null)}>

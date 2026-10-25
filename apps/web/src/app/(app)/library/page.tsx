@@ -3,7 +3,7 @@
 import clsx from 'clsx';
 import { COUNT_DEFINITIONS } from '@creatoros/domain';
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Copy, FileVideo, Film, FileAudio, FileImage, File as FileIcon, Plus, Search } from 'lucide-react';
 import { useMe } from '@/components/shell';
 import {
@@ -34,7 +34,7 @@ import {
 } from '@/components/ui';
 import { del, post, put, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
-import { ASSET_KINDS, useBrands, useRoots } from '@/lib/options';
+import { ASSET_KINDS, VARIANT_TYPES, useBrands, useRoots } from '@/lib/options';
 
 const KINDS = ['VIDEO', 'AUDIO', 'IMAGE', 'DOCUMENT', 'PROJECT', 'OTHER'];
 const AVAIL = [
@@ -65,7 +65,9 @@ export default function LibraryPage() {
 
 function Library() {
   const sp = useSearchParams();
-  const [tab, setTab] = useState<'files' | 'duplicates' | 'assets'>('files');
+  const [tab, setTab] = useState<'files' | 'duplicates' | 'assets'>(
+    sp.get('file') || sp.get('linked') ? 'files' : 'assets',
+  );
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [availability, setAvailability] = useState('');
@@ -135,9 +137,9 @@ function Library() {
 
       <Tabs
         tabs={[
+          { id: 'assets', label: 'Assets' },
           { id: 'files', label: 'Files' },
           { id: 'duplicates', label: 'Duplicates' },
-          { id: 'assets', label: 'Assets' },
         ]}
         value={tab}
         onChange={setTab}
@@ -166,7 +168,11 @@ function Library() {
             >
               <Options values={AVAIL} none="Any availability" />
             </Select>
-            <Select aria-label="Orientation" value={orientation} onChange={(e) => reset(setOrientation)(e.target.value)}>
+            <Select
+              aria-label="Orientation"
+              value={orientation}
+              onChange={(e) => reset(setOrientation)(e.target.value)}
+            >
               <option value="">All orientations</option>
               <option value="landscape">Normal 16:9</option>
               <option value="portrait">Shorts 9:16</option>
@@ -212,7 +218,7 @@ function Library() {
         </>
       )}
       {tab === 'duplicates' && <Duplicates onOpen={setOpenFile} />}
-      {tab === 'assets' && <Assets />}
+      {tab === 'assets' && <Assets onOpen={setOpenFile} />}
       {openFile && <FileDetail id={openFile} onClose={() => setOpenFile(null)} />}
     </>
   );
@@ -225,6 +231,7 @@ function FilePage({
   last,
   onOpen,
   onMore,
+  onAttach,
 }: {
   filters: Record<string, unknown>;
   cursor?: string;
@@ -232,6 +239,7 @@ function FilePage({
   last: boolean;
   onOpen: (id: string) => void;
   onMore: (c: string) => void;
+  onAttach?: (file: any) => void;
 }) {
   const res = useApi<{ items: any[]; nextCursor: string | null }>('/library', {
     query: { ...filters, cursor, limit: 50 },
@@ -287,7 +295,12 @@ function FilePage({
                         <span className="flex gap-1 flex-wrap mt-1">
                           {f.orientation && f.orientation !== 'UNKNOWN' && (
                             <Badge tone="info" className="text-xs">
-                              {f.width}×{f.height} {f.orientation === 'LANDSCAPE' ? '16:9' : f.orientation === 'PORTRAIT' ? '9:16' : '1:1'}
+                              {f.width}×{f.height}{' '}
+                              {f.orientation === 'LANDSCAPE'
+                                ? '16:9'
+                                : f.orientation === 'PORTRAIT'
+                                  ? '9:16'
+                                  : '1:1'}
                             </Badge>
                           )}
                           {platforms.map((p) => (
@@ -319,6 +332,18 @@ function FilePage({
                       <span className="flex shrink-0 flex-col items-end gap-1">
                         <StateBadge state={f.effectiveAvailability} />
                         {f.otherCopies > 0 && <Badge tone="info">{f.otherCopies + 1} copies</Badge>}
+                        {onAttach && f.fileType === 'VIDEO' && (
+                          <button
+                            type="button"
+                            className="rounded border border-border px-2 py-1 text-xs hover:border-accent"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAttach(f);
+                            }}
+                          >
+                            Add to title
+                          </button>
+                        )}
                       </span>
                     </button>
                   </li>
@@ -334,6 +359,198 @@ function FilePage({
         </>
       )}
     </Async>
+  );
+}
+
+function parentPath(p: string) {
+  const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
+  return i <= 0 ? '' : p.slice(0, i);
+}
+
+function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; onChanged: () => void }) {
+  const me = useMe();
+  const toast = useToast();
+  const owner = me.data?.user?.role === 'OWNER';
+  const pending = file.pendingOp as
+    | { id: string; kind: string; status: string; fromPath: string; toPath: string | null; error: string | null }
+    | null
+    | undefined;
+  const waiting = pending?.status === 'PENDING' || pending?.status === 'RUNNING';
+  const [mode, setMode] = useState<'rename' | 'move' | 'delete' | null>(null);
+  const [name, setName] = useState(file.fileName ?? '');
+  const [folder, setFolder] = useState(parentPath(file.copyPaths?.local || file.displayPath || ''));
+  const [typed, setTyped] = useState('');
+  const folders = useApi<{ folders: string[] }>(mode === 'move' ? `/files/${fileId}/folders` : null);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(() => {
+      void refresh(`/files/${fileId}`, '/library');
+    }, 4000);
+    return () => clearInterval(t);
+  }, [waiting, fileId]);
+  if (!owner) return null;
+  if (file.effectiveAvailability === 'CONFIRMED_MISSING') {
+    return (
+      <Card>
+        <CardTitle>On this PC</CardTitle>
+        <p className="text-sm text-muted">
+          This file is no longer on {file.deviceName}. Posts that already went out stay.
+        </p>
+      </Card>
+    );
+  }
+  const path = file.copyPaths?.local || file.displayPath;
+  const submit = async (body: { kind: 'RENAME'; name: string } | { kind: 'MOVE'; folder: string } | { kind: 'DELETE' }) => {
+    await post(`/files/${fileId}/operations`, body);
+    setMode(null);
+    setTyped('');
+    onChanged();
+  };
+  return (
+    <Card>
+      <CardTitle>On this PC</CardTitle>
+      <p className="text-sm text-muted">
+        {file.deviceName} keeps the original. A move stays on the same drive, in a folder this PC is already
+        indexing. Delete removes the file from that disk. It does not go to the Recycle Bin. Posts that already
+        went out stay.
+      </p>
+      {waiting && (
+        <Notice tone="info" title={pending?.status === 'RUNNING' ? 'This PC is changing the file' : 'Waiting for this PC'}>
+          {pending?.kind === 'DELETE' ? 'Delete' : pending?.kind === 'MOVE' ? 'Move' : 'Rename'} is queued
+          {pending?.toPath ? ` to ${pending.toPath}` : ''}. It runs when {file.deviceName} is on and its agent is the
+          updated one.
+          {pending?.status === 'PENDING' && (
+            <div className="mt-2">
+              <ActionButton
+                size="sm"
+                onAction={async () => {
+                  await post(`/files/${fileId}/operations/cancel`, {});
+                  onChanged();
+                }}
+                success="Cancelled"
+              >
+                Cancel
+              </ActionButton>
+            </div>
+          )}
+        </Notice>
+      )}
+      {pending?.status === 'FAILED' && (
+        <Notice tone="warn" title="The PC did not change the file">
+          {pending.error || 'Try again once the file is not in use.'}
+        </Notice>
+      )}
+      {!waiting && mode === null && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => { setName(file.fileName ?? ''); setMode('rename'); }}>
+            Rename
+          </Button>
+          <Button size="sm" onClick={() => { setFolder(parentPath(path || '')); setMode('move'); }}>
+            Move
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => { setTyped(''); setMode('delete'); }}>
+            Delete
+          </Button>
+        </div>
+      )}
+      {mode === 'rename' && (
+        <form
+          className="mt-3 space-y-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await submit({ kind: 'RENAME', name });
+              toast.ok('Rename queued on this PC');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          <Field label="New file name">
+            <Input aria-label="New file name" value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <p className="text-xs text-muted">
+            {parentPath(path || '')}
+            {path?.includes('\\') ? '\\' : '/'}
+            {name || '…'}
+          </p>
+          <div className="flex gap-2">
+            <Button type="submit" variant="primary" disabled={!name.trim() || name.trim() === file.fileName}>
+              Rename on this PC
+            </Button>
+            <Button type="button" onClick={() => setMode(null)}>
+              Back
+            </Button>
+          </div>
+        </form>
+      )}
+      {mode === 'move' && (
+        <form
+          className="mt-3 space-y-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await submit({ kind: 'MOVE', folder });
+              toast.ok('Move queued on this PC');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          <Field label="Folder on this PC">
+            <Input
+              aria-label="Destination folder"
+              list="move-folders"
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+            />
+            <datalist id="move-folders">
+              {(folders.data?.folders ?? []).map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
+          </Field>
+          <p className="text-xs text-muted">The file name stays {file.fileName}. Pick a folder that already exists.</p>
+          <div className="flex gap-2">
+            <Button type="submit" variant="primary" disabled={!folder.trim()}>
+              Move on this PC
+            </Button>
+            <Button type="button" onClick={() => setMode(null)}>
+              Back
+            </Button>
+          </div>
+        </form>
+      )}
+      {mode === 'delete' && (
+        <form
+          className="mt-3 space-y-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            try {
+              await submit({ kind: 'DELETE' });
+              toast.ok('Delete queued on this PC');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          <Notice tone="warn" title="This deletes the file from the PC">
+            <code className="break-all text-xs">{path}</code>
+          </Notice>
+          <Field label={`Type ${file.fileName} to confirm`}>
+            <Input aria-label="Type the file name to confirm delete" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="submit" variant="danger" disabled={typed !== file.fileName}>
+              Delete from this PC
+            </Button>
+            <Button type="button" onClick={() => setMode(null)}>
+              Back
+            </Button>
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 
@@ -411,10 +628,12 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 )}
               </ul>
               <p className="mt-2 text-xs text-muted">
-                Paste the path into Explorer or your editing tool. Creator OS never moves, renames or deletes
-                this file.
+                Paste the path into Explorer or your editing tool. Rename, move, and delete run on this PC,
+                inside a folder it already indexes. The file stays put until that PC is on.
               </p>
             </Card>
+
+            <FileOnDisk file={file} fileId={id} onChanged={reload} />
 
             <Card>
               <CardTitle>Details</CardTitle>
@@ -760,7 +979,7 @@ const ASSET_CATS = [
   { id: 'PROJECT', label: 'Project' },
 ] as const;
 
-function Assets() {
+function Assets({ onOpen }: { onOpen: (id: string) => void }) {
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<(typeof ASSET_CATS)[number]['id']>('VIDEO');
   const [deviceId, setDeviceId] = useState('');
@@ -768,11 +987,25 @@ function Assets() {
   const assets = useApi<any[]>('/assets', {
     query: { q: q || undefined, kind, deviceId: deviceId || undefined, limit: 200 },
   });
-  const [open, setOpen] = useState<string | null>(null);
+  const [view, setView] = useState<any | null>(null);
+  const [versions, setVersions] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const brands = useBrands();
   const [f, setF] = useState({ title: '', kind: 'VIDEO', brandId: '' });
   const cat = ASSET_CATS.find((c) => c.id === kind)?.label ?? 'Assets';
+  if (view) {
+    return (
+      <>
+        <AssetFiles
+          asset={view}
+          onBack={() => setView(null)}
+          onOpen={onOpen}
+          onVersions={() => setVersions(view.id)}
+        />
+        {versions && <AssetDetail id={versions} onClose={() => setVersions(null)} />}
+      </>
+    );
+  }
   return (
     <>
       <Tabs tabs={[...ASSET_CATS]} value={kind} onChange={setKind} />
@@ -812,7 +1045,7 @@ function Assets() {
                 <Td>
                   <button
                     className="text-left font-medium text-accent hover:underline"
-                    onClick={() => setOpen(a.id)}
+                    onClick={() => setView(a)}
                   >
                     {a.title}
                   </button>
@@ -825,7 +1058,6 @@ function Assets() {
           </Table>
         )}
       </Async>
-      {open && <AssetDetail id={open} onClose={() => setOpen(null)} />}
       <FormDialog
         open={adding}
         onClose={() => setAdding(false)}
@@ -859,6 +1091,150 @@ function Assets() {
         </div>
       </FormDialog>
     </>
+  );
+}
+
+function AssetFiles({
+  asset,
+  onBack,
+  onOpen,
+  onVersions,
+}: {
+  asset: { id: string; title: string; kind?: string; deviceName?: string; fileCount?: number };
+  onBack: () => void;
+  onOpen: (id: string) => void;
+  onVersions: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const [attach, setAttach] = useState<any | null>(null);
+  const filters = {
+    assetId: asset.id,
+    kind: asset.kind || undefined,
+    q: q.trim() || undefined,
+  };
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Button onClick={onBack}>← Assets</Button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-lg font-semibold">{asset.title}</h2>
+          <p className="text-xs text-muted">
+            {asset.deviceName ? `${asset.deviceName} · ` : ''}
+            {asset.fileCount ?? 0} files. Click a file for the same details as the Files tab.
+          </p>
+        </div>
+        <Button onClick={onVersions}>Versions</Button>
+      </div>
+      <div className="relative mb-4 max-w-md">
+        <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted" />
+        <Input
+          aria-label="Search files in this asset"
+          placeholder="Search name or path"
+          className="w-full pl-8"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setCursors([undefined]);
+          }}
+        />
+      </div>
+      {cursors.map((cursor, i) => (
+        <FilePage
+          key={`${i}-${asset.id}-${q}`}
+          filters={filters}
+          cursor={cursor}
+          first={i === 0}
+          last={i === cursors.length - 1}
+          onOpen={onOpen}
+          onAttach={setAttach}
+          onMore={(next) => setCursors((rows) => (rows.length === i + 1 ? [...rows, next] : rows))}
+        />
+      ))}
+      {attach && (
+        <AttachToTitle
+          file={attach}
+          assetId={asset.id}
+          assetTitle={asset.title}
+          onClose={() => setAttach(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function AttachToTitle({
+  file,
+  assetId,
+  assetTitle,
+  onClose,
+}: {
+  file: { id: string; fileName: string };
+  assetId: string;
+  assetTitle: string;
+  onClose: () => void;
+}) {
+  const variants = useApi<any[]>('/variants', { query: { assetId } });
+  const [variantId, setVariantId] = useState('');
+  const [titleMaster, setTitleMaster] = useState(String(file.fileName ?? '').replace(/\.[^.]+$/, ''));
+  const [type, setType] = useState('MASTER');
+  const rows = variants.data ?? [];
+  const creating = rows.length === 0 || variantId === '';
+  return (
+    <FormDialog
+      open
+      onClose={onClose}
+      title={`Add ${file.fileName} to a title`}
+      submitLabel={creating ? 'Create and attach' : 'Attach'}
+      onSubmit={async () => {
+        let id = variantId;
+        if (creating) {
+          const name = titleMaster.trim();
+          if (!name) throw new Error('Enter a title.');
+          const created = await post<{ id: string }>('/variants', {
+            assetId,
+            titleMaster: name,
+            type,
+          });
+          id = created.id;
+        }
+        await post(`/variants/${id}/files`, { fileInstanceId: file.id });
+        await refresh('/publishing', '/variants', `/variants/${id}/publish`);
+      }}
+    >
+      <p className="text-sm text-muted">
+        Titles for {assetTitle}. Attaching does not post anything. The title shows on Publishing.
+      </p>
+      {rows.length > 0 && (
+        <Field label="Title">
+          <Select value={variantId} onChange={(e) => setVariantId(e.target.value)}>
+            <option value="">New title</option>
+            {rows.map((variant) => (
+              <option key={variant.id} value={variant.id}>
+                {variant.titleMaster || variant.title_master}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+      {creating && (
+        <>
+          <Field label="New title">
+            <Input required value={titleMaster} onChange={(e) => setTitleMaster(e.target.value)} />
+          </Field>
+          <Field label="Type">
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              <Options values={VARIANT_TYPES} />
+            </Select>
+          </Field>
+        </>
+      )}
+      {variants.data && rows.length === 0 && (
+        <p className="text-sm text-muted">
+          This asset has no publishing title yet. This creates the first one.
+        </p>
+      )}
+    </FormDialog>
   );
 }
 

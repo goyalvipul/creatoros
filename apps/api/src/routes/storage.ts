@@ -21,12 +21,16 @@ import {
   forbidden,
   getAgentConfig,
   getDeviceSigningKey,
+  cancelFileOperation,
+  claimFileOperations,
+  finishFileOperation,
   getFileDetail,
   getHashRequests,
   getPreviewRequests,
   libraryCounts,
   listDevices,
   listLibrary,
+  listMoveFolders,
   listPairingCodes,
   listRoots,
   listScanRuns,
@@ -36,6 +40,7 @@ import {
   processIngest,
   readPreview,
   rejectSuggestion,
+  requestFileOperation,
   requestScan,
   revokeDevice,
   rotateAgentToken,
@@ -140,6 +145,28 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
   agentRoute(
     { method: 'GET', url: '/agents/preview-requests', summary: 'Files the server wants thumbnails for' },
     async ({ agent }) => db.transaction((tx) => getPreviewRequests(tx, agent.deviceId, 100)),
+  );
+  agentRoute(
+    {
+      method: 'GET',
+      url: '/agents/file-operations',
+      summary: 'Confirmed rename, move, or delete for this PC',
+    },
+    ({ agent }) => claimFileOperations(db, agent),
+  );
+  agentRoute(
+    {
+      method: 'POST',
+      url: '/agents/file-operations/result',
+      summary: 'Report a confirmed file change',
+      body: z.object({
+        id: z.uuid(),
+        ok: z.boolean(),
+        error: z.string().max(500).optional(),
+        toPath: z.string().max(4096).optional(),
+      }),
+    },
+    ({ agent, body }) => finishFileOperation(db, agent, body),
   );
   agentRoute(
     { method: 'POST', url: '/agents/token/rotate', summary: 'Rotate the device token' },
@@ -353,6 +380,7 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
         deviceId: z.uuid().optional(),
         tagId: z.uuid().optional(),
         assetId: z.uuid().optional(),
+        sameFolder: boolQ.optional(),
         linked: boolQ.optional(),
         duplicates: boolQ.optional(),
         orientation: z.enum(['landscape', 'portrait', 'square', 'unknown']).optional(),
@@ -397,6 +425,43 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       params: idParam,
     },
     ({ ctx, params }) => getFileDetail(ctx, params.id),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/files/:id/folders',
+      tag: 'Library',
+      summary: 'Folders on the same PC this file can move to',
+      params: idParam,
+    },
+    ({ ctx, params }) => listMoveFolders(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/files/:id/operations',
+      tag: 'Library',
+      summary: 'Queue a rename, move, or delete on the PC that holds this file',
+      role: 'OWNER',
+      params: idParam,
+      body: z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('RENAME'), name: z.string().trim().min(1).max(240) }),
+        z.object({ kind: z.literal('MOVE'), folder: z.string().trim().min(1).max(4000) }),
+        z.object({ kind: z.literal('DELETE') }),
+      ]),
+    },
+    ({ ctx, params, body }) => requestFileOperation(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/files/:id/operations/cancel',
+      tag: 'Library',
+      summary: 'Cancel a file change that the PC has not started',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => cancelFileOperation(ctx, params.id),
   );
   route(
     {

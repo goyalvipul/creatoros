@@ -70,6 +70,9 @@ func (e *enrichRun) flush(end bool) error {
 func (a *Agent) enrichLoop(ctx context.Context) {
 	var lastPoll time.Time
 	for {
+		if !a.authBad.Load() {
+			a.pollFileOps(ctx)
+		}
 		busy := false
 		if !a.authBad.Load() && a.spool.Depth() < 2000 {
 			if a.Now().Sub(lastPoll) > 60*time.Second {

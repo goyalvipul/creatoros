@@ -202,11 +202,13 @@ function LinkDialog({
 }) {
   const [q, setQ] = useState('');
   const files = useApi<{ items: any[] }>('/library', {
-    query: { kind: 'VIDEO', assetId, q, limit: 200 },
+    query: { kind: 'VIDEO', assetId, sameFolder: true, q, limit: 200 },
   });
   return (
     <FormDialog open onClose={onClose} title="Link a video" submitLabel="Close" onSubmit={async () => {}}>
-      <p className="text-sm text-muted">Videos in {assetTitle || 'this asset'}.</p>
+      <p className="text-sm text-muted">
+        Every video in the same folder on this machine as {assetTitle || 'this asset'}.
+      </p>
       <Field label="Search this asset">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="File name or path" />
       </Field>

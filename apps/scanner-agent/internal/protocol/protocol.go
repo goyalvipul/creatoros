@@ -152,3 +152,19 @@ type PreviewRequest struct {
 	Path       string `json:"path"`
 }
 
+// FileOp is one owner-confirmed rename, move, or delete. Size is the indexed byte size.
+type FileOp struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	FromPath string `json:"fromPath"`
+	ToPath   string `json:"toPath,omitempty"`
+	Size     int64  `json:"size"`
+}
+
+type FileOpResult struct {
+	ID     string `json:"id"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	ToPath string `json:"toPath,omitempty"`
+}
+

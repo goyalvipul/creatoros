@@ -35,17 +35,25 @@ export function invoiceBalance(
   return { paid, due: Math.max(0, invoiceAmountMinor - paid) };
 }
 
+export type InvoiceStatus =
+  'DRAFT' | 'ISSUED' | 'SENT' | 'CONFIRMED' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOID';
+
+/**
+ * Issued and partially paid invoices become Overdue once the due date has passed.
+ * Sent, Confirmed, Paid and Void stay as chosen until the money is fully received, which records Paid.
+ */
 export function deriveInvoiceStatus(args: {
   status: string;
   amountMinor: number;
   paidMinor: number;
   dueAt: Date | string | null;
   now?: Date;
-}): 'DRAFT' | 'ISSUED' | 'PARTIALLY_PAID' | 'PAID' | 'OVERDUE' | 'VOID' {
+}): InvoiceStatus {
   if (args.status === 'VOID') return 'VOID';
   if (args.status === 'DRAFT') return 'DRAFT';
   if (args.paidMinor >= args.amountMinor && args.amountMinor > 0) return 'PAID';
-  const overdue = args.dueAt && new Date(args.dueAt).getTime() < (args.now ?? new Date()).getTime();
+  if (args.status === 'CONFIRMED' || args.status === 'SENT' || args.status === 'PAID') return args.status;
+  const overdue = args.dueAt != null && new Date(args.dueAt).getTime() < (args.now ?? new Date()).getTime();
   if (overdue) return 'OVERDUE';
   if (args.paidMinor > 0) return 'PARTIALLY_PAID';
   return 'ISSUED';

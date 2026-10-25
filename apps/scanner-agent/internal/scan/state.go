@@ -74,6 +74,25 @@ func (s *State) Get(p string) (*Entry, bool) {
 	return e, ok
 }
 
+// Relocate keeps what the agent remembers when a confirmed rename or move changes the path.
+func (s *State) Relocate(from, to string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.Files[from]
+	if !ok {
+		return
+	}
+	s.Files[to] = e
+	delete(s.Files, from)
+}
+
+// Forget drops a path after a confirmed delete.
+func (s *State) Forget(p string) {
+	s.mu.Lock()
+	delete(s.Files, p)
+	s.mu.Unlock()
+}
+
 func (s *State) Put(p string, e *Entry) {
 	s.mu.Lock()
 	s.Files[p] = e

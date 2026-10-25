@@ -9,15 +9,26 @@ import { useApi } from '@/lib/api';
 import { when } from '@/lib/format';
 
 const COUNT_LINKS: Record<string, { label: string; href: string; tone?: 'warn' | 'bad' }> = {
-  needReply: { label: 'Need a reply', href: '/collaborations', tone: 'warn' },
-  possibleCollabs: { label: 'Possible collaborations to review', href: '/collaborations' },
-  overdueInvoices: { label: 'Overdue invoices', href: '/collaborations?tab=invoices', tone: 'bad' },
-  dueToday: { label: 'Due today', href: '/today' },
+  needReply: {
+    label: 'Need a reply',
+    href: '/collaborations?tab=inbox&state=NEED_REPLY&linked=deal',
+    tone: 'warn',
+  },
+  possibleCollabs: {
+    label: 'Possible collaborations to review',
+    href: '/collaborations?tab=inbox&triage=POSSIBLE&category=COLLABORATION&opportunity=none',
+  },
+  overdueInvoices: {
+    label: 'Overdue invoices',
+    href: '/collaborations?tab=invoices&status=OVERDUE',
+    tone: 'bad',
+  },
+  dueToday: { label: 'Due today', href: '/today?due=today' },
   openActions: { label: 'Open actions', href: '/today' },
   scheduledToday: { label: 'Scheduled today', href: '/calendar' },
   devicesOffline: { label: 'Devices offline', href: '/storage', tone: 'warn' },
   unlinkedMedia: { label: 'Files not linked to an asset', href: '/library?linked=false' },
-  unmatchedPublications: { label: 'Posts to match', href: '/publishing' },
+  unmatchedPublications: { label: 'Posts to match', href: '/publishing?tab=unmatched' },
 };
 
 export default function HomePage() {
@@ -56,31 +67,41 @@ export default function HomePage() {
                 </EmptyState>
               ) : (
                 <ol className="space-y-2">
-                  {b.top.slice(0, 3).map((t: any, i: number) => (
-                    <li key={t.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
-                      <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 text-sm font-semibold text-accent">
-                        {i + 1}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium">{t.title}</div>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {t.reasons?.map((r: string) => (
-                            <Badge key={r}>{r}</Badge>
-                          ))}
-                          {t.dueAt && <Badge tone="info">{when(t.dueAt, tz, false)}</Badge>}
+                  {b.top.slice(0, 3).map((t: any, i: number) => {
+                    const href = t.deepLink ? String(t.deepLink) : '';
+                    const open = Boolean(href) && canOpen(role, href.split('?')[0] ?? '/');
+                    const body = (
+                      <>
+                        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent/15 text-sm font-semibold text-accent">
+                          {i + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium">{t.title}</div>
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {t.reasons?.map((r: string) => (
+                              <Badge key={r}>{r}</Badge>
+                            ))}
+                            {t.dueAt && <Badge tone="info">{when(t.dueAt, tz, false)}</Badge>}
+                          </div>
                         </div>
-                      </div>
-                      {t.deepLink && canOpen(role, String(t.deepLink).split('?')[0]) && (
+                        {open && <ArrowRight className="size-4 shrink-0 text-accent" aria-hidden />}
+                      </>
+                    );
+                    return open ? (
+                      <li key={t.id}>
                         <Link
-                          href={t.deepLink}
-                          className="shrink-0 text-sm text-accent"
-                          aria-label={`Open ${t.title}`}
+                          href={href}
+                          className="flex items-start gap-3 rounded-lg border border-border p-3 hover:border-accent/60"
                         >
-                          <ArrowRight className="size-4" />
+                          {body}
                         </Link>
-                      )}
-                    </li>
-                  ))}
+                      </li>
+                    ) : (
+                      <li key={t.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
+                        {body}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
             </Card>

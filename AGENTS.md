@@ -6,7 +6,7 @@ Creator OS is a pnpm monorepo (TypeScript ESM, strict) plus a Go scanner agent. 
 
 ## Non-negotiable rules
 
-1. Never modify, move or delete a user's original media. The agent is read-only.
+1. Indexing never modifies, moves, or deletes original media. Rename, move, and delete happen only after the owner confirms that one file. The agent runs that one change on the same PC, inside a folder it already indexes.
 2. Nothing is sent, posted or paid without owner confirmation.
 3. No fake data. Unconfigured integrations report `NOT_CONFIGURED` / `BLOCKED_EXTERNAL` with the next step. Demo data is labelled DEMO and removable.
 4. Never publish Postgres or Redis ports beyond loopback. No default password. Secrets go in `.env`, never in code, logs, chat or git.

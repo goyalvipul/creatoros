@@ -30,7 +30,8 @@ import {
 } from '@/components/ui';
 import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { SuggestionCard } from './invoice-suggestions';
-import { ago, money, title as titleCase, toMinor, when } from '@/lib/format';
+import { ago, dateInput, money, title as titleCase, toMinor, when } from '@/lib/format';
+import { InvoiceStatusSelect } from './invoice-controls';
 import { PRIORITIES } from '@/lib/options';
 
 type Tab = 'inbox' | 'pipeline' | 'invoices' | 'partners';
@@ -237,17 +238,34 @@ const FOLDERS: { id: Folder; label: string }[] = [
 ];
 
 function Inbox() {
-  const [folder, setFolder] = useState<Folder>('inbox');
+  const sp = useSearchParams();
+  const [folder, setFolder] = useState<Folder | ''>(sp.get('linked') === 'deal' ? '' : 'inbox');
   const [account, setAccount] = useState('');
-  const [state, setState] = useState('');
+  const [state, setState] = useState(sp.get('state') ?? '');
+  const [triage, setTriage] = useState(sp.get('triage') ?? '');
+  const [category, setCategory] = useState(sp.get('category') ?? '');
+  const [linked, setLinked] = useState(sp.get('linked') === 'deal' ? 'deal' : '');
+  const [opportunity, setOpportunity] = useState(sp.get('opportunity') === 'none' ? 'none' : '');
   const [q, setQ] = useState('');
+  const clearHomeFilter = () => {
+    setTriage('');
+    setCategory('');
+    setLinked('');
+    setOpportunity('');
+    setState('');
+    setFolder('inbox');
+  };
   const accounts = useApi<any>('/mail/accounts');
   const threads = useApi<any[]>('/threads', {
     query: {
       scope: 'mail',
-      folder,
+      folder: folder || undefined,
       connectionId: account || undefined,
       state: state || undefined,
+      triage: triage || undefined,
+      category: category || undefined,
+      linked: linked || undefined,
+      opportunity: opportunity || undefined,
       q: q.trim() || undefined,
       limit: 100,
     },
@@ -284,6 +302,26 @@ function Inbox() {
           onChange={(e) => setQ(e.target.value)}
         />
       </div>
+      {(triage === 'POSSIBLE' || linked === 'deal') && (
+        <div className="mb-3">
+          <Notice
+            tone="info"
+            title={linked === 'deal' ? 'Threads that need a reply' : 'Possible collaborations'}
+          >
+            {linked === 'deal'
+              ? 'These are the threads counted on Home. They stay listed after they become a deal, so this is not limited to the Inbox folder.'
+              : 'These are the email messages counted on Home. Instagram messages in that count are under Socials.'}{' '}
+            {triage === 'POSSIBLE' && (
+              <Link className="text-accent hover:underline" href="/socials/inbox">
+                Open Socials
+              </Link>
+            )}{' '}
+            <button className="text-accent hover:underline" onClick={clearHomeFilter}>
+              Show all mail
+            </button>
+          </Notice>
+        </div>
+      )}
       <div role="tablist" aria-label="Mail folders" className="mb-4 flex flex-wrap gap-1.5">
         {FOLDERS.map((f) => (
           <Button
@@ -512,11 +550,16 @@ function FoundInEmail() {
   );
 }
 
-function InvoiceActions({ inv }: { inv: any }) {
+function InvoiceActions({ inv, onSplit }: { inv: any; onSplit: () => void }) {
   const router = useRouter();
   const locked = inv.status === 'VOID';
   return (
     <div className="flex justify-end gap-1.5">
+      {!locked && (
+        <Button size="sm" onClick={onSplit}>
+          Split
+        </Button>
+      )}
       {!locked && (
         <Button size="sm" onClick={() => router.push(`/collaborations/invoices/${inv.id}`)}>
           Edit
@@ -542,8 +585,17 @@ function InvoiceActions({ inv }: { inv: any }) {
 
 function Invoices() {
   const router = useRouter();
+  const sp = useSearchParams();
   const fin = useApi<any>('/finance/summary');
-  const [status, setStatus] = useState('');
+  const [splitting, setSplitting] = useState<any | null>(null);
+  const initialStatus = sp.get('status') ?? '';
+  const [status, setStatus] = useState(
+    ['DRAFT', 'ISSUED', 'SENT', 'CONFIRMED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID'].includes(
+      initialStatus,
+    )
+      ? initialStatus
+      : '',
+  );
   const inv = useApi<any[]>('/invoices', { query: { status: status || undefined } });
   return (
     <div className="space-y-5">
@@ -590,11 +642,15 @@ function Invoices() {
       <div className="flex flex-wrap gap-2">
         <Select aria-label="Invoice status" value={status} onChange={(e) => setStatus(e.target.value)}>
           <Options
-            values={['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID']}
+            values={['DRAFT', 'ISSUED', 'SENT', 'CONFIRMED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID']}
             none="Any status"
           />
         </Select>
-        <Button variant="primary" className="ml-auto" onClick={() => router.push('/collaborations/invoices/new')}>
+        <Button
+          variant="primary"
+          className="ml-auto"
+          onClick={() => router.push('/collaborations/invoices/new')}
+        >
           <Plus className="size-4" /> New invoice
         </Button>
       </div>
@@ -621,7 +677,11 @@ function Invoices() {
           >
             {rows.map((i) => (
               <tr key={i.id}>
-                <Td className="font-medium">{i.invoiceNo}</Td>
+                <Td className="font-medium">
+                  <Link className="hover:underline" href={`/collaborations/invoices/${i.id}`}>
+                    {i.invoiceNo}
+                  </Link>
+                </Td>
                 <Td>
                   {i.dealId ? (
                     <Link className="text-accent hover:underline" href={`/collaborations/deals/${i.dealId}`}>
@@ -653,17 +713,78 @@ function Invoices() {
                 <Td>{money(i.paidMinor, i.currency)}</Td>
                 <Td>{i.dueAt ? when(i.dueAt, undefined, false) : '—'}</Td>
                 <Td>
-                  <StateBadge state={i.status} />
+                  <InvoiceStatusSelect invoice={i} />
                 </Td>
                 <Td>
-                  <InvoiceActions inv={i} />
+                  <InvoiceActions inv={i} onSplit={() => setSplitting(i)} />
                 </Td>
               </tr>
             ))}
           </Table>
         )}
       </Async>
+      {splitting && <SplitDialog inv={splitting} onClose={() => setSplitting(null)} />}
     </div>
+  );
+}
+
+function SplitDialog({ inv, onClose }: { inv: any; onClose: () => void }) {
+  const amount = (Number(inv.amountMinor) / 100).toFixed(2);
+  const due = inv.dueAt ? dateInput(inv.dueAt) : '';
+  const [parts, setParts] = useState([
+    { amount, due },
+    { amount: '', due },
+  ]);
+  const setPart = (index: number, patch: Partial<{ amount: string; due: string }>) =>
+    setParts((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  return (
+    <FormDialog
+      open
+      wide
+      title={`Split ${inv.invoiceNo}`}
+      submitLabel="Split"
+      onClose={onClose}
+      onSubmit={async () => {
+        const body = parts.map((part) => {
+          const amountMinor = toMinor(part.amount);
+          if (amountMinor == null || amountMinor <= 0)
+            throw new Error('Each amount must be greater than zero.');
+          return { amountMinor, dueAt: part.due || null };
+        });
+        await post(`/invoices/${inv.id}/split`, { parts: body });
+        await refresh('/invoices', '/finance', '/deals', '/briefing');
+      }}
+    >
+      <p className="text-sm text-muted">
+        The first row keeps {inv.invoiceNo}. Each other row becomes a new invoice with the next number. Deal,
+        currency and billing details stay the same. Set the amount on each row; saving does not split the old
+        amount in half for you.
+      </p>
+      {parts.map((part, index) => (
+        <div key={index} className="grid gap-2 sm:grid-cols-2">
+          <Field label={index === 0 ? 'This invoice amount' : `New invoice ${index} amount`}>
+            <Input
+              inputMode="decimal"
+              value={part.amount}
+              onChange={(e) => setPart(index, { amount: e.target.value })}
+            />
+          </Field>
+          <Field label={index === 0 ? 'This invoice due date' : `New invoice ${index} due date`}>
+            <Input type="date" value={part.due} onChange={(e) => setPart(index, { due: e.target.value })} />
+          </Field>
+        </div>
+      ))}
+      {parts.length < 6 && (
+        <Button type="button" onClick={() => setParts((rows) => [...rows, { amount: '', due }])}>
+          <Plus className="size-4" /> Add another
+        </Button>
+      )}
+      {parts.length > 2 && (
+        <Button type="button" onClick={() => setParts((rows) => rows.slice(0, -1))}>
+          Remove last
+        </Button>
+      )}
+    </FormDialog>
   );
 }
 

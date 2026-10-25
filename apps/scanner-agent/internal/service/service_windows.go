@@ -81,7 +81,7 @@ func Install(o InstallOptions) error {
 	}
 	s, err := m.CreateService(Name, o.Exe, mgr.Config{
 		DisplayName:      "Creator OS Scanner Agent",
-		Description:      "Indexes creator media folders (read-only) and serves signed streams to Creator OS.",
+		Description:      "Indexes creator media folders and serves signed streams to Creator OS. Rename, move, and delete run only after the owner confirms that one file.",
 		StartType:        mgr.StartAutomatic,
 		DelayedAutoStart: true,
 		ServiceStartName: o.Account,

@@ -28,6 +28,7 @@ import {
 import { ApiError, post, refresh, useApi } from '@/lib/api';
 import { money, title as titleCase, toMinor, when } from '@/lib/format';
 import { DEAL_STAGES, PAYMENT_METHODS } from '@/lib/options';
+import { InvoiceStatusSelect } from '../../invoice-controls';
 
 const DELIVERABLE_STATUSES = [
   'PLANNED',
@@ -233,7 +234,7 @@ export default function DealPage() {
                         <Td>{money(i.paidTotalMinor, i.currency)}</Td>
                         <Td>{i.dueAt ? when(i.dueAt, tz, false) : '—'}</Td>
                         <Td>
-                          <StateBadge state={i.status} />
+                          <InvoiceStatusSelect invoice={i} />
                         </Td>
                         <Td>
                           <div className="flex flex-wrap gap-1">

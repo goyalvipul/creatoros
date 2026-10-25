@@ -17,6 +17,8 @@ export interface LibraryQuery {
   deviceId?: string;
   tagId?: string;
   assetId?: string;
+  /** With assetId, also list other files in the same folder on the same machine. */
+  sameFolder?: boolean;
   linked?: boolean;
   duplicates?: boolean;
   orientation?: string; // landscape | portrait | square | unknown
@@ -184,11 +186,33 @@ export async function listLibrary(ctx: Ctx, q: LibraryQuery) {
       sql`exists(select 1 from file_tag_links t where t.file_instance_id = f.id and t.tag_id = ${q.tagId})`,
     );
   if (q.assetId)
-    where.push(sql`exists(
-      select 1 from asset_file_links l
-      join asset_versions v on v.id = l.asset_version_id
-      where l.file_instance_id = f.id and v.asset_id = ${q.assetId} and v.org_id = ${ctx.orgId}
-    )`);
+    where.push(
+      q.sameFolder
+        ? sql`(
+            exists(
+              select 1 from asset_file_links l
+              join asset_versions v on v.id = l.asset_version_id
+              where l.file_instance_id = f.id and v.asset_id = ${q.assetId} and v.org_id = ${ctx.orgId}
+            )
+            or exists(
+              select 1
+              from asset_file_links l
+              join asset_versions v on v.id = l.asset_version_id
+              join file_instances s on s.id = l.file_instance_id
+              where v.asset_id = ${q.assetId} and v.org_id = ${ctx.orgId}
+                and s.archived_at is null
+                and s.device_id = f.device_id
+                and s.file_type = f.file_type
+                and lower(regexp_replace(replace(s.display_path, chr(92), '/'), '/[^/]+$', ''))
+                  = lower(regexp_replace(replace(f.display_path, chr(92), '/'), '/[^/]+$', ''))
+            )
+          )`
+        : sql`exists(
+            select 1 from asset_file_links l
+            join asset_versions v on v.id = l.asset_version_id
+            where l.file_instance_id = f.id and v.asset_id = ${q.assetId} and v.org_id = ${ctx.orgId}
+          )`,
+    );
   if (q.linked === true)
     where.push(sql`exists(select 1 from asset_file_links l where l.file_instance_id = f.id)`);
   if (q.linked === false)
@@ -298,7 +322,17 @@ export async function getFileDetail(ctx: Ctx, id: string) {
       sql`select t.id, t.name, t.color from file_tag_links l join media_tags t on t.id = l.tag_id where l.file_instance_id = ${id}`,
     ),
   );
-  return { ...file, copies, assets: links, tags };
+  const pendingOp = rowsOf<any>(
+    await ctx.db.execute(sql`
+      select id, kind, status, from_path as "fromPath", to_path as "toPath", error
+      from file_operations
+      where org_id = ${ctx.orgId} and file_instance_id = ${id}
+      order by created_at desc
+      limit 1`),
+  )[0];
+  const openOp =
+    pendingOp && pendingOp.status !== 'SUCCEEDED' && pendingOp.status !== 'CANCELLED' ? pendingOp : null;
+  return { ...file, copies, assets: links, tags, pendingOp: openOp };
 }
 
 // ---------------------------------------------------------------- previews

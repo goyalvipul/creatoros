@@ -25,6 +25,7 @@ import {
   DEAL_STAGE,
   classifyMessage,
   deriveInvoiceStatus,
+  INVOICE_STATUS_CHOICES,
   type DealStage,
 } from '@creatoros/domain';
 import { audit, emit } from './audit';
@@ -244,6 +245,10 @@ export async function listThreads(
     state?: string;
     triage?: string;
     category?: string;
+    /** deal = already tied to a deal or an opportunity (the Home “need a reply” set). */
+    linked?: 'deal';
+    /** none = no opportunity yet (the Home “possible collaborations” set). */
+    opportunity?: 'none';
     q?: string;
     dealId?: string;
     limit?: number;
@@ -265,6 +270,8 @@ export async function listThreads(
     where.push(
       sql`exists (select 1 from messages m join inbound_classifications c on c.message_id = m.id where m.thread_id = t.id and c.category = ${q.category})`,
     );
+  if (q.linked === 'deal') where.push(sql`(t.deal_id is not null or t.opportunity_id is not null)`);
+  if (q.opportunity === 'none') where.push(sql`t.opportunity_id is null`);
   if (q.q?.trim())
     where.push(
       sql`(t.subject ilike ${'%' + esc(q.q.trim()) + '%'} or exists (select 1 from messages m where m.thread_id = t.id and (m.from_email ilike ${'%' + esc(q.q.trim()) + '%'} or m.body_preview ilike ${'%' + esc(q.q.trim()) + '%'})))`,
@@ -960,7 +967,8 @@ function priceLines(lines: InvoiceLineInput[]) {
   const rows = lines.map((line, ordinal) => {
     const description = line.description.trim();
     if (!description) throw badRequest('Each line needs a description.');
-    if (!Number.isFinite(line.quantity) || line.quantity <= 0) throw badRequest('Quantity must be greater than zero.');
+    if (!Number.isFinite(line.quantity) || line.quantity <= 0)
+      throw badRequest('Quantity must be greater than zero.');
     if (!Number.isInteger(line.unitPriceMinor) || line.unitPriceMinor < 0)
       throw badRequest('Unit price must be zero or more.');
     if (!Number.isFinite(line.taxPercent) || line.taxPercent < 0 || line.taxPercent > 100)
@@ -1099,6 +1107,168 @@ export async function issueInvoice(ctx: Ctx, id: string, dueAt?: Date | null) {
     .where(eq(invoices.id, id))
     .returning();
   return after!;
+}
+
+/** The owner picks a status. Issued still becomes Overdue here when the due date has already passed. */
+export async function setInvoiceStatus(ctx: Ctx, id: string, choice: string) {
+  const picked = INVOICE_STATUS_CHOICES.find((status) => status === choice);
+  if (!picked) throw badRequest('Choose Issued, Confirmed, Paid, Sent, Overdue or Void.');
+  return ctx.db.transaction(async (tx) => {
+    const [i] = await tx
+      .select()
+      .from(invoices)
+      .where(and(eq(invoices.id, id), eq(invoices.orgId, ctx.orgId)))
+      .for('update');
+    if (!i) throw notFound('Invoice');
+    if (picked === 'VOID' && i.paidTotalMinor > 0)
+      throw conflict('An invoice with payments cannot be voided.', undefined, 'HAS_PAYMENTS');
+    const pastDue = i.dueAt != null && i.dueAt.getTime() < Date.now() && i.paidTotalMinor < i.amountMinor;
+    const status = picked === 'ISSUED' && pastDue ? 'OVERDUE' : picked;
+    const [after] = await tx
+      .update(invoices)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(invoices.id, id))
+      .returning();
+    await audit(
+      { ...ctx, db: tx },
+      'invoice.status',
+      { type: 'invoice', id },
+      { status: i.status },
+      { status },
+    );
+    if (status === 'OVERDUE' && i.status !== 'OVERDUE')
+      await emit(tx, ctx.orgId, 'invoice.overdue', { invoiceId: id, dealId: i.dealId });
+    return after!;
+  });
+}
+
+function linesMatchingAmount(
+  lines: {
+    description: string;
+    quantity: string | number;
+    unitPriceMinor: number;
+    taxPercent: string | number;
+  }[],
+  amountMinor: number,
+): InvoiceLineInput[] | null {
+  if (!lines.length) return null;
+  const input: InvoiceLineInput[] = lines.map((line) => ({
+    description: line.description,
+    quantity: Number(line.quantity),
+    unitPriceMinor: Math.round(Number(line.unitPriceMinor)),
+    taxPercent: Number(line.taxPercent),
+  }));
+  try {
+    if (priceLines(input).amountMinor === amountMinor) return input;
+  } catch {
+    // A line that cannot be priced is replaced by one line for the chosen amount.
+  }
+  const description =
+    (input.length === 1
+      ? input[0]!.description
+      : input
+          .map((line) => line.description)
+          .filter(Boolean)
+          .join('; ')
+    ).slice(0, 2000) || 'Invoice';
+  return [{ description, quantity: 1, unitPriceMinor: amountMinor, taxPercent: 0 }];
+}
+
+/**
+ * The first part keeps this invoice number. Each later part is a new invoice: same deal, currency and billing
+ * details, with the amount and due date given here and the next invoice number.
+ */
+export async function splitInvoice(
+  ctx: Ctx,
+  id: string,
+  parts: { amountMinor: number; dueAt?: Date | string | null }[],
+) {
+  if (parts.length < 2) throw badRequest('Enter the amount and due date for the new invoice.');
+  if (parts.length > 6) throw badRequest('Split into at most six invoices.');
+  for (const part of parts) {
+    if (!Number.isInteger(part.amountMinor) || part.amountMinor <= 0)
+      throw badRequest('Each amount must be greater than zero.');
+  }
+  return ctx.db.transaction(async (tx) => {
+    const [i] = await tx
+      .select()
+      .from(invoices)
+      .where(and(eq(invoices.id, id), eq(invoices.orgId, ctx.orgId)))
+      .for('update');
+    if (!i) throw notFound('Invoice');
+    if (i.status === 'VOID') throw conflict('A void invoice cannot be split.', undefined, 'INVOICE_VOID');
+    if (parts[0]!.amountMinor < i.paidTotalMinor)
+      throw conflict(
+        'The amount kept on this invoice cannot be lower than what was already received.',
+        undefined,
+        'BELOW_PAID',
+      );
+    const stored = await tx
+      .select()
+      .from(invoiceLines)
+      .where(eq(invoiceLines.invoiceId, id))
+      .orderBy(asc(invoiceLines.ordinal));
+    const applyLines = async (invoiceId: string, amountMinor: number) => {
+      const fitted = linesMatchingAmount(stored, amountMinor);
+      if (fitted) await replaceInvoiceLines(tx, invoiceId, fitted);
+    };
+    const dueOf = (value: Date | string | null | undefined) =>
+      value === undefined ? i.dueAt : value ? new Date(value) : null;
+    const firstDue = dueOf(parts[0]!.dueAt);
+    const firstStatus = deriveInvoiceStatus({
+      status: i.status,
+      amountMinor: parts[0]!.amountMinor,
+      paidMinor: i.paidTotalMinor,
+      dueAt: firstDue,
+    });
+    await applyLines(i.id, parts[0]!.amountMinor);
+    const [kept] = await tx
+      .update(invoices)
+      .set({
+        amountMinor: parts[0]!.amountMinor,
+        dueAt: firstDue,
+        status: firstStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(invoices.id, i.id))
+      .returning();
+    const created = [];
+    for (const part of parts.slice(1)) {
+      const dueAt = dueOf(part.dueAt);
+      const invoiceNo = await nextInvoiceNo(tx, ctx.orgId, (i.issuedAt ?? new Date()).getUTCFullYear());
+      const status = deriveInvoiceStatus({
+        status: 'ISSUED',
+        amountMinor: part.amountMinor,
+        paidMinor: 0,
+        dueAt,
+      });
+      const [row] = await tx
+        .insert(invoices)
+        .values({
+          orgId: ctx.orgId,
+          dealId: i.dealId,
+          invoiceNo,
+          issuedAt: i.issuedAt,
+          dueAt,
+          currency: i.currency,
+          amountMinor: part.amountMinor,
+          status,
+          notes: i.notes,
+          billFrom: i.billFrom,
+          billTo: i.billTo,
+          bankDetails: i.bankDetails,
+          isDemo: i.isDemo,
+        })
+        .returning();
+      await applyLines(row!.id, part.amountMinor);
+      created.push(row!);
+    }
+    await audit({ ...ctx, db: tx }, 'invoice.split', { type: 'invoice', id }, undefined, {
+      kept: kept!.invoiceNo,
+      created: created.map((row) => row.invoiceNo),
+    });
+    return { invoice: kept!, created };
+  });
 }
 
 export async function voidInvoice(ctx: Ctx, id: string) {
@@ -1369,7 +1539,7 @@ export async function financeSummary(ctx: Ctx, range: { from?: Date; to?: Date }
     sql`select p.currency, sum(p.amount_minor)::float8 as n from payments p where p.org_id = ${ctx.orgId} and p.received_at >= ${from.toISOString()}::timestamptz and p.received_at < ${to.toISOString()}::timestamptz group by 1`,
   );
   const outstanding = await q(
-    sql`select currency, sum(amount_minor - paid_total_minor)::float8 as n from invoices where org_id = ${ctx.orgId} and status in ('ISSUED','PARTIALLY_PAID','OVERDUE') group by 1`,
+    sql`select currency, sum(amount_minor - paid_total_minor)::float8 as n from invoices where org_id = ${ctx.orgId} and status in ('ISSUED','SENT','CONFIRMED','PARTIALLY_PAID','OVERDUE') group by 1`,
   );
   const overdue = await q(
     sql`select currency, sum(amount_minor - paid_total_minor)::float8 as n from invoices where org_id = ${ctx.orgId} and status = 'OVERDUE' group by 1`,

@@ -46,6 +46,8 @@ import {
   scanEmailInvoices,
   deepScanEmail,
   updateInvoice,
+  setInvoiceStatus,
+  splitInvoice,
   updateThreadLocal,
   disconnect,
   dismissAction,
@@ -120,15 +122,11 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   const ov = () => deps.overrides ?? {};
 
   // Workspace OS signs the raw body. The reply is `{ externalId }` with no API envelope, which is what it stores.
-  app.post(
-    '/integrations/workspace-os/webhook',
-    { bodyLimit: 256 * 1024 },
-    async (req, reply) => {
-      const raw = typeof req.rawBody === 'string' ? req.rawBody : '';
-      const out = await receiveWorkspaceWebhook(db, env, raw, req.headers, deps.now?.().getTime());
-      return reply.status(out.status).send(out.body);
-    },
-  );
+  app.post('/integrations/workspace-os/webhook', { bodyLimit: 256 * 1024 }, async (req, reply) => {
+    const raw = typeof req.rawBody === 'string' ? req.rawBody : '';
+    const out = await receiveWorkspaceWebhook(db, env, raw, req.headers, deps.now?.().getTime());
+    return reply.status(out.status).send(out.body);
+  });
 
   // ================================================================ inbox / collaborations
   route(
@@ -141,6 +139,8 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         state: z.enum(ACTIONABLE_STATE).optional(),
         triage: z.string().max(20).optional(),
         category: z.string().max(40).optional(),
+        linked: z.enum(['deal']).optional(),
+        opportunity: z.enum(['none']).optional(),
         q: z.string().max(200).optional(),
         dealId: uuid.optional(),
         limit: z.coerce.number().int().max(300).optional(),
@@ -664,6 +664,41 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       params: idParam,
     },
     ({ ctx, params }) => deleteInvoice(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/invoices/:id/status',
+      tag: 'Collaborations',
+      summary: 'Set an invoice status. Issued becomes Overdue when the due date has passed.',
+      params: idParam,
+      body: z.object({
+        status: z.enum(['ISSUED', 'CONFIRMED', 'PAID', 'SENT', 'OVERDUE', 'VOID']),
+      }),
+    },
+    ({ ctx, params, body }) => setInvoiceStatus(ctx, params.id, body.status),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/invoices/:id/split',
+      tag: 'Collaborations',
+      summary: 'Split an invoice. The first part keeps the number; later parts are new invoices.',
+      params: idParam,
+      status: 201,
+      body: z.object({
+        parts: z
+          .array(
+            z.object({
+              amountMinor: z.number().int().positive(),
+              dueAt: date.nullable().optional(),
+            }),
+          )
+          .min(2)
+          .max(6),
+      }),
+    },
+    ({ ctx, params, body }) => splitInvoice(ctx, params.id, body.parts),
   );
   route(
     {

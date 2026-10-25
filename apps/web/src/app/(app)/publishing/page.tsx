@@ -3,7 +3,8 @@
 import clsx from 'clsx';
 import { Plus, X } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
 import { useMe } from '@/components/shell';
 import {
   ActionButton,
@@ -22,6 +23,7 @@ import {
   PageHeader,
   Provenance,
   Select,
+  Spinner,
   StateBadge,
   Tabs,
 } from '@/components/ui';
@@ -43,7 +45,23 @@ const cellTone: Record<string, string> = {
 const localStamp = (v: string) => (v.length === 16 ? `${v}:00` : v);
 
 export default function PublishingPage() {
-  const [tab, setTab] = useState<'matrix' | 'unmatched'>('matrix');
+  return (
+    <Suspense fallback={<Spinner />}>
+      <Publishing />
+    </Suspense>
+  );
+}
+
+function Publishing() {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const [tab, setTabState] = useState<'matrix' | 'unmatched'>(
+    sp.get('tab') === 'unmatched' ? 'unmatched' : 'matrix',
+  );
+  const setTab = (next: 'matrix' | 'unmatched') => {
+    setTabState(next);
+    router.replace(next === 'unmatched' ? '/publishing?tab=unmatched' : '/publishing');
+  };
   const [brandId, setBrandId] = useState('');
   const catalog = useApi<any[]>('/catalog');
   const matrix = useApi<any>('/publishing/matrix', { query: brandId ? { brandId } : {} });
@@ -132,7 +150,10 @@ export default function PublishingPage() {
                     {m.rows.map((r: any) => (
                       <tr key={r.id}>
                         <td className="px-3 py-2">
-                          <Link href={`/publishing/${r.id}`} className="font-medium text-accent hover:underline">
+                          <Link
+                            href={`/publishing/${r.id}`}
+                            className="font-medium text-accent hover:underline"
+                          >
                             {r.title}
                           </Link>
                           <div className="text-xs text-muted">
@@ -262,7 +283,9 @@ function MatchRow({ row, plans }: { row: any; plans: { id: string; title: string
             Open on {platform}
           </a>
         ) : null}
-        {!row.fileInstanceId && !row.url ? <span className="text-muted">No video link was stored for this post.</span> : null}
+        {!row.fileInstanceId && !row.url ? (
+          <span className="text-muted">No video link was stored for this post.</span>
+        ) : null}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Select

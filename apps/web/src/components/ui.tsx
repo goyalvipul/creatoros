@@ -354,6 +354,8 @@ const STATE_TONES: Record<string, keyof typeof tones> = {
   PLANNED: 'info',
   SCHEDULED: 'info',
   ISSUED: 'info',
+  SENT: 'info',
+  CONFIRMED: 'ok',
   NEW: 'info',
   DRAFT: 'neutral',
   IN_PRODUCTION: 'info',

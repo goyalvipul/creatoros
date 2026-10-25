@@ -3,7 +3,8 @@
 import clsx from 'clsx';
 import Link from 'next/link';
 import { Check, Clock, Pin, PinOff, Plus, RotateCcw, X } from 'lucide-react';
-import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 import { useMe } from '@/components/shell';
 import {
   ActionButton,
@@ -19,6 +20,7 @@ import {
   Options,
   PageHeader,
   Select,
+  Spinner,
   Tabs,
   Textarea,
 } from '@/components/ui';
@@ -41,7 +43,27 @@ function snoozeUntil(kind: 'later' | 'tomorrow' | 'week') {
   return d.toISOString();
 }
 
+function localDay(iso: string, tz?: string) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz || 'America/Vancouver',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
 export default function TodayPage() {
+  return (
+    <Suspense fallback={<Spinner />}>
+      <Today />
+    </Suspense>
+  );
+}
+
+function Today() {
+  const sp = useSearchParams();
+  const focus = sp.get('action');
+  const dueToday = sp.get('due') === 'today';
   const me = useMe();
   const tz = me.data?.organization?.timezone;
   const [tab, setTab] = useState<'OPEN' | 'SNOOZED' | 'DONE'>('OPEN');
@@ -60,6 +82,10 @@ export default function TodayPage() {
   const [f, setF] = useState({ title: '', description: '', dueAt: '', priority: 'NORMAL' });
   const res = tab === 'OPEN' ? open : tab === 'SNOOZED' ? snoozed : done;
   const reload = () => refresh('/actions', '/briefing');
+  useEffect(() => {
+    if (!focus) return;
+    document.getElementById(`action-${focus}`)?.scrollIntoView({ block: 'center' });
+  }, [focus, open.data, snoozed.data, done.data]);
 
   return (
     <>
@@ -100,6 +126,14 @@ export default function TodayPage() {
             value={tab}
             onChange={setTab}
           />
+          {dueToday && tab === 'OPEN' && (
+            <p className="mt-3 text-xs text-muted">
+              Showing actions due today.{' '}
+              <Link className="text-accent hover:underline" href="/today">
+                Show every open action
+              </Link>
+            </p>
+          )}
           <div className="mt-3">
             <Async
               res={res}
@@ -109,120 +143,138 @@ export default function TodayPage() {
                 </EmptyState>
               }
             >
-              {(rows) => (
-                <ul className="space-y-2">
-                  {rows.map((a) => {
-                    const overdue = a.dueAt && parseDate(a.dueAt) < new Date() && a.state === 'OPEN';
-                    return (
-                      <li
-                        key={a.id}
-                        className={clsx(
-                          'rounded-xl border bg-panel p-3',
-                          overdue ? 'border-bad/50' : 'border-border',
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {a.pinned && <Pin className="size-3.5 text-accent" aria-label="Pinned" />}
-                              <span className="font-medium">
-                                {a.deepLink ? (
-                                  <Link className="hover:underline" href={a.deepLink}>
-                                    {a.title}
-                                  </Link>
-                                ) : (
-                                  a.title
-                                )}
-                              </span>
-                              <Badge tone={priTone[a.priority as keyof typeof priTone]}>
-                                {a.priority.toLowerCase()}
-                              </Badge>
-                              {overdue && <Badge tone="bad">overdue</Badge>}
-                            </div>
-                            {a.description && <p className="mt-1 text-sm text-muted">{a.description}</p>}
-                            <p className="mt-1 text-xs text-muted">
-                              {a.reason}
-                              {a.dueAt && <> · due {when(a.dueAt, tz)}</>}
-                              {a.snoozedUntil && a.state === 'SNOOZED' && (
-                                <> · back {when(a.snoozedUntil, tz)}</>
-                              )}
-                              {a.completedAt && <> · done {ago(a.completedAt)}</>}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                            {a.state === 'OPEN' ? (
-                              <>
-                                <ActionButton
-                                  size="sm"
-                                  variant="primary"
-                                  aria-label={`Complete ${a.title}`}
-                                  onAction={async () => {
-                                    await post(`/actions/${a.id}/complete`, {});
-                                    await reload();
-                                  }}
-                                  success="Marked done"
-                                >
-                                  <Check className="size-4" />
-                                </ActionButton>
-                                <ActionButton
-                                  size="sm"
-                                  aria-label={`Pin ${a.title}`}
-                                  onAction={async () => {
-                                    await post(`/actions/${a.id}/pin`, { pinned: !a.pinned });
-                                    await reload();
-                                  }}
-                                >
-                                  {a.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-                                </ActionButton>
-                                <Snooze id={a.id} onDone={reload} />
-                                {todoReady &&
-                                  (linkedActions.has(a.id) ? (
-                                    <Badge tone="info">
-                                      In Todo · {String(linkedActions.get(a.id).syncState).toLowerCase()}
-                                    </Badge>
+              {(rows) => {
+                const todayKey = localDay(new Date().toISOString(), tz);
+                const shown =
+                  dueToday && tab === 'OPEN'
+                    ? rows.filter((a) => a.dueAt && localDay(a.dueAt, tz) === todayKey)
+                    : rows;
+                if (shown.length === 0) {
+                  return (
+                    <EmptyState title={dueToday && tab === 'OPEN' ? 'Nothing due today' : 'Nothing here'}>
+                      {dueToday && tab === 'OPEN'
+                        ? 'No open action falls on today in your time zone.'
+                        : 'No items.'}
+                    </EmptyState>
+                  );
+                }
+                return (
+                  <ul className="space-y-2">
+                    {shown.map((a) => {
+                      const overdue = a.dueAt && parseDate(a.dueAt) < new Date() && a.state === 'OPEN';
+                      return (
+                        <li
+                          id={`action-${a.id}`}
+                          key={a.id}
+                          className={clsx(
+                            'rounded-xl border bg-panel p-3',
+                            overdue ? 'border-bad/50' : 'border-border',
+                            focus === a.id && 'ring-2 ring-accent',
+                          )}
+                        >
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {a.pinned && <Pin className="size-3.5 text-accent" aria-label="Pinned" />}
+                                <span className="font-medium">
+                                  {a.deepLink && !String(a.deepLink).startsWith('/today') ? (
+                                    <Link className="hover:underline" href={a.deepLink}>
+                                      {a.title}
+                                    </Link>
                                   ) : (
-                                    <ActionButton
-                                      size="sm"
-                                      aria-label={`Send ${a.title} to Todo`}
-                                      onAction={async () => {
-                                        await post(`/actions/${a.id}/todo`, {});
-                                        await refresh('/todo');
-                                      }}
-                                      success="Queued for Todo"
-                                    >
-                                      Send to Todo
-                                    </ActionButton>
-                                  ))}
+                                    a.title
+                                  )}
+                                </span>
+                                <Badge tone={priTone[a.priority as keyof typeof priTone]}>
+                                  {a.priority.toLowerCase()}
+                                </Badge>
+                                {overdue && <Badge tone="bad">overdue</Badge>}
+                              </div>
+                              {a.description && <p className="mt-1 text-sm text-muted">{a.description}</p>}
+                              <p className="mt-1 text-xs text-muted">
+                                {a.reason}
+                                {a.dueAt && <> · due {when(a.dueAt, tz)}</>}
+                                {a.snoozedUntil && a.state === 'SNOOZED' && (
+                                  <> · back {when(a.snoozedUntil, tz)}</>
+                                )}
+                                {a.completedAt && <> · done {ago(a.completedAt)}</>}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                              {a.state === 'OPEN' ? (
+                                <>
+                                  <ActionButton
+                                    size="sm"
+                                    variant="primary"
+                                    aria-label={`Complete ${a.title}`}
+                                    onAction={async () => {
+                                      await post(`/actions/${a.id}/complete`, {});
+                                      await reload();
+                                    }}
+                                    success="Marked done"
+                                  >
+                                    <Check className="size-4" />
+                                  </ActionButton>
+                                  <ActionButton
+                                    size="sm"
+                                    aria-label={`Pin ${a.title}`}
+                                    onAction={async () => {
+                                      await post(`/actions/${a.id}/pin`, { pinned: !a.pinned });
+                                      await reload();
+                                    }}
+                                  >
+                                    {a.pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+                                  </ActionButton>
+                                  <Snooze id={a.id} onDone={reload} />
+                                  {todoReady &&
+                                    (linkedActions.has(a.id) ? (
+                                      <Badge tone="info">
+                                        In Todo · {String(linkedActions.get(a.id).syncState).toLowerCase()}
+                                      </Badge>
+                                    ) : (
+                                      <ActionButton
+                                        size="sm"
+                                        aria-label={`Send ${a.title} to Todo`}
+                                        onAction={async () => {
+                                          await post(`/actions/${a.id}/todo`, {});
+                                          await refresh('/todo');
+                                        }}
+                                        success="Queued for Todo"
+                                      >
+                                        Send to Todo
+                                      </ActionButton>
+                                    ))}
+                                  <ActionButton
+                                    size="sm"
+                                    aria-label={`Dismiss ${a.title}`}
+                                    confirm={`Dismiss “${a.title}”? It won't come back unless the underlying data changes.`}
+                                    onAction={async () => {
+                                      await post(`/actions/${a.id}/dismiss`, {});
+                                      await reload();
+                                    }}
+                                  >
+                                    <X className="size-4" />
+                                  </ActionButton>
+                                </>
+                              ) : (
                                 <ActionButton
                                   size="sm"
-                                  aria-label={`Dismiss ${a.title}`}
-                                  confirm={`Dismiss “${a.title}”? It won't come back unless the underlying data changes.`}
                                   onAction={async () => {
-                                    await post(`/actions/${a.id}/dismiss`, {});
+                                    await post(`/actions/${a.id}/reopen`, {});
                                     await reload();
                                   }}
                                 >
-                                  <X className="size-4" />
+                                  <RotateCcw className="size-4" /> Reopen
                                 </ActionButton>
-                              </>
-                            ) : (
-                              <ActionButton
-                                size="sm"
-                                onAction={async () => {
-                                  await post(`/actions/${a.id}/reopen`, {});
-                                  await reload();
-                                }}
-                              >
-                                <RotateCcw className="size-4" /> Reopen
-                              </ActionButton>
-                            )}
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              }}
             </Async>
           </div>
         </div>

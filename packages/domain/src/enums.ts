@@ -75,6 +75,12 @@ export const FILE_AVAILABILITY = [
 ] as const;
 export type FileAvailability = (typeof FILE_AVAILABILITY)[number];
 
+/** Owner-confirmed change to one original file. Indexing never uses these. */
+export const FILE_OPERATION_KIND = ['RENAME', 'MOVE', 'DELETE'] as const;
+export type FileOperationKind = (typeof FILE_OPERATION_KIND)[number];
+export const FILE_OPERATION_STATUS = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
+export type FileOperationStatus = (typeof FILE_OPERATION_STATUS)[number];
+
 export const PROBE_STATE = ['PENDING', 'STILL_WRITING', 'PROBING', 'INDEXED', 'PROBE_FAILED'] as const;
 export type ProbeState = (typeof PROBE_STATE)[number];
 
@@ -242,7 +248,18 @@ export const MESSAGE_SOURCE = [
   'YOUTUBE',
   'OTHER',
 ] as const;
-export const INVOICE_STATUS = ['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'OVERDUE', 'VOID'] as const;
+export const INVOICE_STATUS = [
+  'DRAFT',
+  'ISSUED',
+  'SENT',
+  'CONFIRMED',
+  'PARTIALLY_PAID',
+  'PAID',
+  'OVERDUE',
+  'VOID',
+] as const;
+/** Statuses the owner can pick. Issued is the default. Overdue is also applied when an issued invoice passes its due date. */
+export const INVOICE_STATUS_CHOICES = ['ISSUED', 'CONFIRMED', 'PAID', 'SENT', 'OVERDUE', 'VOID'] as const;
 export const PAYMENT_METHOD = ['BANK_TRANSFER', 'PAYPAL', 'STRIPE', 'WISE', 'CASH', 'OTHER'] as const;
 export const EXPENSE_CATEGORY = [
   'SOFTWARE',

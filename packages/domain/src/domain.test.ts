@@ -12,6 +12,7 @@ import {
   inQuietHours,
   invoiceBalance,
   isInsideRoot,
+  planFileOperation,
   isPublished,
   isValidTimeZone,
   isVerifiedPublished,
@@ -72,6 +73,14 @@ describe('money', () => {
     );
     expect(deriveInvoiceStatus({ ...base, status: 'ISSUED', paidMinor: 0, dueAt: '2026-12-01' })).toBe(
       'ISSUED',
+    );
+    expect(deriveInvoiceStatus({ ...base, status: 'CONFIRMED', paidMinor: 0, dueAt: '2026-10-01' })).toBe(
+      'CONFIRMED',
+    );
+    expect(deriveInvoiceStatus({ ...base, status: 'SENT', paidMinor: 0, dueAt: '2026-10-01' })).toBe('SENT');
+    expect(deriveInvoiceStatus({ ...base, status: 'PAID', paidMinor: 0, dueAt: '2026-10-01' })).toBe('PAID');
+    expect(deriveInvoiceStatus({ ...base, status: 'SENT', paidMinor: 10000, dueAt: '2026-12-01' })).toBe(
+      'PAID',
     );
   });
 
@@ -355,5 +364,60 @@ describe('templates and agent contract', () => {
     };
     expect(ingestBatchSchema.safeParse({ ...base, observations: Array(1001).fill(o) }).success).toBe(false);
     expect(ingestBatchSchema.safeParse({ ...base, observations: [o] }).success).toBe(true);
+  });
+});
+
+describe('file operations', () => {
+  const roots = [
+    {
+      id: 'root',
+      displayPath: 'D:\\ComfyUI\\output',
+      canonicalPath: 'd:\\comfyui\\output',
+    },
+  ];
+  const from = 'D:\\ComfyUI\\output\\Upscale\\clip.mp4';
+
+  it('renames inside the same folder and refuses a path trick', () => {
+    const planned = planFileOperation({
+      kind: 'RENAME',
+      displayPath: from,
+      os: 'windows',
+      roots,
+      name: 'ayi ayi.mp4',
+    });
+    expect(planned.toPath).toBe('D:\\ComfyUI\\output\\Upscale\\ayi ayi.mp4');
+    expect(planned.rootId).toBe('root');
+    expect(() =>
+      planFileOperation({ kind: 'RENAME', displayPath: from, os: 'windows', roots, name: '..\\secret.mp4' }),
+    ).toThrow(/cannot contain/);
+    expect(() =>
+      planFileOperation({ kind: 'RENAME', displayPath: from, os: 'windows', roots, name: 'clip.mp4' }),
+    ).toThrow(/already the file name/);
+  });
+
+  it('moves to another indexed folder and refuses one outside it', () => {
+    const planned = planFileOperation({
+      kind: 'MOVE',
+      displayPath: from,
+      os: 'windows',
+      roots,
+      folder: 'D:/ComfyUI/output/Final',
+    });
+    expect(planned.toPath).toBe('D:\\ComfyUI\\output\\Final\\clip.mp4');
+    expect(() =>
+      planFileOperation({
+        kind: 'MOVE',
+        displayPath: from,
+        os: 'windows',
+        roots,
+        folder: 'E:\\Other\\Final',
+      }),
+    ).toThrow(/not inside/);
+  });
+
+  it('delete keeps the original path and has no destination', () => {
+    const planned = planFileOperation({ kind: 'DELETE', displayPath: from, os: 'windows', roots });
+    expect(planned.fromPath).toBe(from);
+    expect(planned.toPath).toBeNull();
   });
 });

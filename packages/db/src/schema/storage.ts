@@ -22,6 +22,8 @@ import {
   duplicateState,
   fileAvailability,
   fileKind,
+  fileOperationKind,
+  fileOperationStatus,
   hashMode,
   previewStatus,
   probeState,
@@ -294,6 +296,37 @@ export const fileInstances = pgTable(
     index('file_instances_root_seen_idx').on(t.rootId, t.lastSeenAt),
     index('file_instances_file_id_idx').on(t.rootId, t.fileId),
     index('file_instances_org_name_idx').on(t.orgId, t.fileName),
+  ],
+);
+
+/** One confirmed rename, move, or delete. The agent on that PC is the only thing that touches the disk. */
+export const fileOperations = pgTable(
+  'file_operations',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id),
+    fileInstanceId: uuid('file_instance_id')
+      .notNull()
+      .references(() => fileInstances.id),
+    kind: fileOperationKind('kind').notNull(),
+    fromPath: text('from_path').notNull(),
+    toPath: text('to_path'),
+    sizeBytes: int8('size_bytes').notNull().default(0),
+    status: fileOperationStatus('status').notNull().default('PENDING'),
+    error: text('error'),
+    requestedBy: uuid('requested_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    startedAt: ts('started_at'),
+    finishedAt: ts('finished_at'),
+  },
+  (t) => [
+    uniqueIndex('file_operations_open_uq')
+      .on(t.fileInstanceId)
+      .where(sql`${t.status} in ('PENDING', 'RUNNING')`),
+    index('file_operations_device_status_idx').on(t.deviceId, t.status),
   ],
 );
 

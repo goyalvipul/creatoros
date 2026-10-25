@@ -179,7 +179,7 @@ export async function runActionsEngine(
         reason: `Inbound message unanswered for ${Math.floor((now.getTime() - lastIn.getTime()) / HOUR)}h`,
         dueAt: new Date(lastIn.getTime() + h * HOUR),
         priority: t.dealId ? 'HIGH' : 'NORMAL',
-        deepLink: `/collaborations?thread=${t.id}`,
+        deepLink: `/collaborations/threads/${t.id}`,
       });
     }
   }
@@ -202,7 +202,7 @@ export async function runActionsEngine(
         reason: due < now ? `Reply SLA of ${t.sla}h has passed` : `Reply SLA of ${t.sla}h expires soon`,
         dueAt: due,
         priority: due < now ? 'URGENT' : 'HIGH',
-        deepLink: `/collaborations?thread=${t.id}`,
+        deepLink: `/collaborations/threads/${t.id}`,
       });
     }
   }
@@ -223,7 +223,7 @@ export async function runActionsEngine(
         reason: `No reply for ${d}+ days after your last message`,
         dueAt: new Date(new Date(t.lastOutboundAt).getTime() + d * DAY),
         priority: 'NORMAL',
-        deepLink: `/collaborations?thread=${t.id}`,
+        deepLink: `/collaborations/threads/${t.id}`,
       });
     }
   }
@@ -251,7 +251,7 @@ export async function runActionsEngine(
             : `Due in ${Math.max(0, Math.ceil(left))} day(s)`,
         dueAt: new Date(x.dueAt),
         priority: left < 0 ? 'URGENT' : left <= 1 ? 'HIGH' : 'NORMAL',
-        deepLink: `/collaborations?deal=${x.dealId}`,
+        deepLink: `/collaborations/deals/${x.dealId}`,
       });
     }
   }
@@ -271,7 +271,7 @@ export async function runActionsEngine(
         reason: `Submitted ${Math.floor((now.getTime() - new Date(x.submittedAt).getTime()) / DAY)} days ago with no recorded approval`,
         dueAt: new Date(new Date(x.submittedAt).getTime() + d * DAY),
         priority: 'NORMAL',
-        deepLink: `/collaborations?deal=${x.dealId}`,
+        deepLink: `/collaborations/deals/${x.dealId}`,
       });
     }
   }
@@ -290,7 +290,7 @@ export async function runActionsEngine(
         reason: `Published ${d}+ days ago, report not marked sent`,
         dueAt: new Date(new Date(x.at).getTime() + d * DAY),
         priority: 'NORMAL',
-        deepLink: `/collaborations?deal=${x.id}`,
+        deepLink: `/collaborations/deals/${x.id}`,
       });
     }
   }
@@ -299,7 +299,7 @@ export async function runActionsEngine(
     for (const i of rowsOf<any>(
       await db.execute(sql`
       select i.id, i.invoice_no as "no", i.due_at as "dueAt", i.deal_id as "dealId", (i.amount_minor - i.paid_total_minor)::float8 as due, i.currency
-      from invoices i where i.org_id = ${orgId} and i.status in ('ISSUED','PARTIALLY_PAID','OVERDUE') and i.due_at is not null and i.paid_total_minor < i.amount_minor
+      from invoices i where i.org_id = ${orgId} and i.status in ('ISSUED','SENT','CONFIRMED','PARTIALLY_PAID','OVERDUE') and i.due_at is not null and i.paid_total_minor < i.amount_minor
         and i.due_at <= ${iso}::timestamptz + make_interval(days => ${d})`),
     )) {
       const late = new Date(i.dueAt) < now;
@@ -312,7 +312,7 @@ export async function runActionsEngine(
         reason: late ? 'Invoice is overdue' : 'Invoice due within a few days',
         dueAt: new Date(i.dueAt),
         priority: late ? 'URGENT' : 'HIGH',
-        deepLink: `/collaborations?deal=${i.dealId ?? ''}`,
+        deepLink: `/collaborations/invoices/${i.id}`,
       });
     }
   }
@@ -331,7 +331,7 @@ export async function runActionsEngine(
         reason: 'Awaiting payment for a commission/affiliate deal',
         dueAt: new Date(new Date(x.at).getTime() + d * DAY),
         priority: 'NORMAL',
-        deepLink: `/collaborations?deal=${x.id}`,
+        deepLink: `/collaborations/deals/${x.id}`,
       });
     }
   }
@@ -350,14 +350,14 @@ export async function runActionsEngine(
         reason: 'Campaign closed and paid',
         dueAt: new Date(new Date(x.at).getTime() + d * DAY),
         priority: 'LOW',
-        deepLink: `/collaborations?deal=${x.id}`,
+        deepLink: `/collaborations/deals/${x.id}`,
       });
     }
   }
   // publishing: planned time passed without a published record, or posts due within a day that are not ready
   for (const p of rowsOf<any>(
     await db.execute(sql`
-    select r.id, coalesce(r.title, 'post') as title, r.planned_at as "plannedAt", r.state, sa.platform from publication_records r join social_accounts sa on sa.id = r.social_account_id
+    select r.id, r.variant_id as "variantId", coalesce(r.title, 'post') as title, r.planned_at as "plannedAt", r.state, sa.platform from publication_records r join social_accounts sa on sa.id = r.social_account_id
     where r.org_id = ${orgId} and r.planned_at is not null and r.state in ('PLANNED','READY','SCHEDULED') and r.planned_at <= ${iso}::timestamptz + interval '24 hours'`),
   )) {
     const late = new Date(p.plannedAt) < now;
@@ -376,7 +376,7 @@ export async function runActionsEngine(
           : `Planned within 24h but still ${p.state}`,
       dueAt: new Date(p.plannedAt),
       priority: late ? 'HIGH' : 'NORMAL',
-      deepLink: `/publishing?pub=${p.id}`,
+      deepLink: p.variantId ? `/publishing/${p.variantId}` : `/publishing?tab=unmatched`,
     });
   }
 
@@ -417,6 +417,7 @@ export async function runActionsEngine(
             reason: a.reason,
             dueAt: a.dueAt ?? null,
             priority: a.priority ?? 'NORMAL',
+            deepLink: a.deepLink ?? null,
             updatedAt: new Date(),
           })
           .where(eq(internalActions.id, existing.id));
@@ -482,6 +483,31 @@ export async function runActionsEngine(
 
 // --------------------------------------------------------------- briefing
 
+/** Page that holds the record this action was raised from. */
+export function actionSourcePath(a: {
+  id: string;
+  sourceType?: string | null;
+  sourceId?: string | null;
+  deepLink?: string | null;
+}): string {
+  const id = a.sourceId ?? undefined;
+  if (a.sourceType === 'thread' && id) return `/collaborations/threads/${id}`;
+  if (a.sourceType === 'invoice' && id) return `/collaborations/invoices/${id}`;
+  if (a.sourceType === 'deal' && id) return `/collaborations/deals/${id}`;
+  if (a.sourceType === 'deliverable') {
+    const deal =
+      a.deepLink?.match(/\/deals\/([0-9a-f-]{36})/i)?.[1] ?? a.deepLink?.match(/deal=([0-9a-f-]{36})/i)?.[1];
+    if (deal) return `/collaborations/deals/${deal}`;
+  }
+  if (
+    a.sourceType === 'publication' &&
+    (a.deepLink?.startsWith('/publishing/') || a.deepLink === '/publishing?tab=unmatched')
+  )
+    return a.deepLink;
+  if (a.sourceType === 'publication') return '/publishing?tab=unmatched';
+  return `/today?action=${a.id}`;
+}
+
 /** "What matters now": top 3 with reasons plus live counters. Fully deterministic, no AI. */
 export async function briefing(ctx: Ctx, now = new Date()) {
   const tz =
@@ -523,8 +549,11 @@ export async function briefing(ctx: Ctx, now = new Date()) {
     dueAt: c.dueAt,
     score: c.score,
     reasons: c.reasons,
-    deepLink:
-      actions.find((a) => a.id === c.id)?.deepLink ?? (c.kind === 'project' ? `/production/${c.id}` : null),
+    deepLink: (() => {
+      const action = actions.find((a) => a.id === c.id);
+      if (action) return actionSourcePath(action);
+      return c.kind === 'project' ? `/production/${c.id}` : null;
+    })(),
   }));
 
   const n = async (q: ReturnType<typeof sql>) => rowsOf<{ n: number }>(await ctx.db.execute(q))[0]?.n ?? 0;

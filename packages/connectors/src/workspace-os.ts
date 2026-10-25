@@ -146,7 +146,7 @@ export async function listWorkspaceTasks(
     query: { limit: '200', ...(cursor ? { cursor } : {}) },
   });
   if (status >= 400) fail(status, body);
-  const list = body?.tasks ?? body?.data?.tasks ?? (Array.isArray(body) ? body : []);
+  const list = body?.items ?? body?.tasks ?? body?.data?.items ?? body?.data?.tasks ?? (Array.isArray(body) ? body : []);
   return {
     tasks: (list as unknown[]).map(asTask).filter((t): t is WorkspaceTask => Boolean(t)),
     nextCursor: body?.nextCursor ?? body?.data?.nextCursor ?? null,

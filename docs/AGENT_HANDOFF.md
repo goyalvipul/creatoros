@@ -6,13 +6,13 @@ Deeper detail, when you need it: `AGENTS.md` (short rules), `docs/PRODUCT_SPEC.m
 
 **Keep this file current.** If you change a screen, an API, a migration, a command, or what is actually running, update the matching section here in the same change. Do not leave the next agent reading yesterday's behavior.
 
-Last updated: 2026-10-19, on the Ubuntu host `guardobox`, working tree not yet committed.
+Last updated: 2026-10-24, on the Ubuntu host `guardobox`, working tree not yet committed.
 
 ## 1. What this product is
 
 Creator OS is a private, self-hosted app for one owner. The owner runs a virtual singer, **Mehak**, and will add more brands later. The daily question is: what have I created, on which machine, where has each version been posted, which message or payment needs a reply, and what should I do next.
 
-It must stay useful with zero third-party credentials. Nothing is posted, emailed, or paid until the owner presses the button for that one action. Original media files are never moved, renamed, or deleted. The scanner agent is read-only.
+It must stay useful with zero third-party credentials. Nothing is posted, emailed, or paid until the owner presses the button for that one action. Indexing never moves, renames, or deletes original media. Those three happen only when the owner confirms that one file in the library, and only on the PC that holds it.
 
 Today it is a single owner. Every owned row is scoped by `org_id`. Roles are VIEWER < EDITOR < OWNER.
 
@@ -34,7 +34,7 @@ Brands, channels, and accounts are created on **Channels**. Production projects 
 
 ## 2. Rules that do not bend
 
-1. Never modify, move, or delete the owner's original media. The scanner is read-only.
+1. Indexing never modifies, moves, or deletes original media. Rename, move, and delete run only after the owner confirms that one file, on the PC that holds it, inside a folder that PC already indexes.
 2. Nothing is sent, posted, or paid without an explicit owner action on that item.
 3. No fake data. An unconfigured integration reports `NOT_CONFIGURED` or `BLOCKED_EXTERNAL` and the next human step. Demo rows are labelled DEMO and can be removed.
 4. Postgres and Redis are not published beyond loopback. No default password. Secrets live only in `.env`, never in code, logs, chat, or git.
@@ -48,7 +48,7 @@ Brands, channels, and accounts are created on **Channels**. Production projects 
 apps/api            Fastify REST under /api/v1. Routes: src/routes/{core,content,storage,work,socials}.ts
 apps/worker         BullMQ. Scheduled jobs in src/jobs.ts. On-demand jobs (sync, backup, publish) in src/main.ts
 apps/web            Next.js App Router PWA. Screens in src/app/(app)/*
-apps/scanner-agent  Go, read-only. Windows service or Linux systemd
+apps/scanner-agent  Go. Windows service or Linux systemd. Scans are read-only. Confirmed rename, move, and delete are the only writes.
 packages/domain     Enums, Zod, pure rules
 packages/db         Drizzle schema in src/schema/*, SQL migrations in drizzle/*.sql plus drizzle/meta/_journal.json
 packages/services   All business logic. The API, the worker, and tests call this. Do not put rules only in a route.
@@ -66,33 +66,33 @@ UI components used everywhere: `PageHeader`, `Select`, `Button`, `ActionButton` 
 
 ### Screens
 
-| Path | What it is |
-| --- | --- |
-| `/` | Home / daily briefing |
-| `/today` | Inbox and today |
-| `/content` | Ideas |
-| `/production`, `/production/[id]` | Projects, scenes, checklists |
-| `/library` | Files across machines. Filters, upload marks, Extra tag |
-| `/publishing` | Plan matrix: titles × accounts for the selected brand |
-| `/publishing/[variantId]` | One title: link videos, publish each file to one account |
-| `/calendar` | Publications, deadlines, commitments |
-| `/collaborations`, `/collaborations/threads/[id]`, `/collaborations/deals/[id]` | CRM, email, invoices |
-| `/collaborations/invoices/new`, `/collaborations/invoices/[id]` | Invoice document: from, to, lines, bank details |
-| `/socials/*` | Comments, inbox, leads, scheduled. Not the email inbox |
-| `/channels` | Brands → channels → social accounts |
-| `/storage` | Devices, scan roots, pairing |
-| `/integrations` | OAuth and opt-in scopes |
-| `/analytics`, `/workflows`, `/settings` | Reports, automations, health, demo data |
+| Path                                                                            | What it is                                               |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `/`                                                                             | Home / daily briefing                                    |
+| `/today`                                                                        | Inbox and today                                          |
+| `/content`                                                                      | Ideas                                                    |
+| `/production`, `/production/[id]`                                               | Projects, scenes, checklists                             |
+| `/library`                                                                      | Files across machines. Filters, upload marks, Extra tag  |
+| `/publishing`                                                                   | Plan matrix: titles × accounts for the selected brand    |
+| `/publishing/[variantId]`                                                       | One title: link videos, publish each file to one account |
+| `/calendar`                                                                     | Publications, deadlines, commitments                     |
+| `/collaborations`, `/collaborations/threads/[id]`, `/collaborations/deals/[id]` | CRM, email, invoices                                     |
+| `/collaborations/invoices/new`, `/collaborations/invoices/[id]`                 | Invoice document: from, to, lines, bank details          |
+| `/socials/*`                                                                    | Comments, inbox, leads, scheduled. Not the email inbox   |
+| `/channels`                                                                     | Brands → channels → social accounts                      |
+| `/storage`                                                                      | Devices, scan roots, pairing                             |
+| `/integrations`                                                                 | OAuth and opt-in scopes                                  |
+| `/analytics`, `/workflows`, `/settings`                                         | Reports, automations, health, demo data                  |
 
 ### Route files
 
-| File | Owns |
-| --- | --- |
-| `apps/api/src/routes/core.ts` | Auth, health, settings, search |
-| `apps/api/src/routes/content.ts` | Brands, projects, assets, publishing, publications |
+| File                             | Owns                                                |
+| -------------------------------- | --------------------------------------------------- |
+| `apps/api/src/routes/core.ts`    | Auth, health, settings, search                      |
+| `apps/api/src/routes/content.ts` | Brands, projects, assets, publishing, publications  |
 | `apps/api/src/routes/storage.ts` | Devices, roots, library, file stream, library marks |
-| `apps/api/src/routes/work.ts` | Integrations OAuth, mail, CRM, backups, jobs |
-| `apps/api/src/routes/socials.ts` | Social inbox, comments, workflows |
+| `apps/api/src/routes/work.ts`    | Integrations OAuth, mail, CRM, backups, jobs        |
+| `apps/api/src/routes/socials.ts` | Social inbox, comments, workflows                   |
 
 ### Migrations
 
@@ -122,7 +122,7 @@ These behaviors are in the working tree. They are on the running site only after
 - The plan dropdown is **brands** from Channels (`GET /catalog`), not creative projects. `GET /publishing/matrix?brandId=` limits both the account columns (via `channels.brand_id`) and the title rows.
 - A title created while a brand is selected stores `distribution_variants.brand_id`. Older titles were backfilled from the asset's brand or the project's brand. A title with no brand shows only under **All brands**.
 - Each row has an **×** on the right. `DELETE /variants/:id` removes the plan row. The file is not deleted. A publication that already went out stays (`variant_id` is set null).
-- Opening a title goes to `/publishing/[variantId]`. **Link a file** lists videos already attached to that title's asset (`GET /library?kind=VIDEO&assetId=`), so a folder asset only offers the files in that folder. Unlink does not delete the file or a post already sent.
+- Opening a title goes to `/publishing/[variantId]`. **Link a file** lists every video in the same folder on the same machine as that title's asset (`GET /library?kind=VIDEO&assetId=&sameFolder=true`). A folder asset already holds those files. A title whose asset only has one of them still offers the rest of that folder. Unlink does not delete the file or a post already sent.
 - **To match** lists posts imported from a connected account that are not attached to a plan. Each row opens the library file when one is stored (`/library?file=`), and opens the platform URL otherwise. **Link to plan** calls `POST /publications/:id/link-variant`. The plan list follows the brand filter.
 - **Publish** is per file and per account. Same `requestId` does not upload twice. Worker job name `publish`, queue `requests`, `attempts: 1`. The draft row is claimed from `QUEUED`. States: `QUEUED`, `UPLOADING`, `PUBLISHED`, `FAILED`, `UNCERTAIN`. Uncertain means bytes may have arrived; do not auto-retry.
 - The worker streams the file from the online Windows agent with the same signed URL as `/files/:id/stream` (`packages/services/src/agent-file.ts`). If that PC is off, the draft becomes `FAILED` and is not marked published.
@@ -145,6 +145,8 @@ These behaviors are in the working tree. They are on the running site only after
 ### Library
 
 - List rows include tags (`packages/services/src/library.ts`). The page uses those for YouTube / Instagram / TikTok marks and the Extra tag (`PUT /library/marks`). A missing `tags` array must be treated as empty. Calling `.some` on it crashed the whole Library page.
+- Library opens on Assets, then Files, then Duplicates. Opening an asset lists that folder’s files with the same row actions and file detail as the Files tab (`GET /library?assetId=`). **Add to title** on a video attaches it to a publishing title for that asset, or creates the title first (`POST /variants`, then `POST /variants/:id/files`). Nothing is posted. Versions still unlinks a file from the asset without touching the original.
+- File detail → **On this PC** can rename, move, or delete that one original. Move stays on the same drive and inside a folder that PC already indexes. Delete removes the file from the disk (not the Recycle Bin) and hides it from the library; posts already sent stay. The change is queued (`file_operations`, migration `0017_file_operations`) until the agent on that PC polls `GET /agents/file-operations` and reports `POST /agents/file-operations/result`. The agent binary on each Windows PC has to be replaced and the service restarted before this runs. `docker compose` does not update those PCs. Unlink still does not touch the file.
 - Library → Assets builds one asset per folder, machine and file kind. The title is `folder_machine` (`devices.display_name`, so the 12GB and 24GB PCs stay separate). Folder is the parent directory of the file. Kinds are Videos, Images, Audio, Document, Project. The list is newest file modification first and can be filtered by machine (`GET /assets/machines`, `GET /assets?deviceId=`). Identity is `logical_assets.folder_key` + `device_id` + `kind`, source `folder`. Migration `0014_folder_assets`. Opening the tab or finishing a scan runs `syncFolderAssets`. Original files are not moved.
 
 ### Mail, invoices, socials (already in earlier commits)
@@ -152,12 +154,14 @@ These behaviors are in the working tree. They are on the running site only after
 - Collaborations inbox is email and pasted threads. Social threads stay in Socials.
 - Editors and viewers do not see Publishing, Calendar, Collaborations, Socials, Workflows, Analytics, Channels, Storage & Devices, Integrations or Settings. The nav hides them and those API paths require OWNER. They still have Home, Content and Production. Editors also have Inbox & Today and Library. Viewers do not.
 - Settings → Team: an owner can permanently delete another person (`DELETE /members/:id`). That removes their sign-in. Files, posts and deals stay. You cannot delete yourself, and the last active owner stays.
-- Workspace OS publishes tasks into Today. Integrations → Todo app stores the address, the `creatoros` access token and the `wos_whsec_` signing secret. The webhook is `POST /api/v1/integrations/workspace-os/webhook` (raw body HMAC, 5 minute skew, deduped by `X-WOS-Event-Id`). Completing a received task is patched back. A missed webhook is filled by listing `/api/v1/integrations/creatoros/tasks` on the fast sync. Details: `docs/TODO_ADAPTER_CONTRACT.md`.
+- Workspace OS publishes tasks into Today. Integrations → Todo app stores the address, the `creatoros` access token and the `wos_whsec_` signing secret. The webhook is `POST /api/v1/integrations/workspace-os/webhook` (raw body HMAC, 5 minute skew, deduped by `X-WOS-Event-Id`). Completing a received task is patched back. A missed webhook is filled by listing `/api/v1/integrations/creatoros/tasks` (`items`, also accepted as `tasks`) on the fast sync. Details: `docs/TODO_ADAPTER_CONTRACT.md`. The running site shows this only after `docker compose up -d --build`.
 - `GET /socials/platforms` fills the social tabs. Stored Instagram diagnostics are attached only when an Instagram connection exists. Do not run that probe on the first account in the list: a Facebook or YouTube connection makes the probe throw `Social account not found` and every tab fails.
 - A social reply is not blocked by a 24 hour window. Send stays available. Nothing is sent until the owner presses Send. `sendEligibility` in `packages/services/src/social.ts`.
 - Gmail: starred sync, invoice search, full message text, per-message reply, live CAD totals. Sending mail needs **Enable sending** (`gmail.send`).
 - YouTube comments need **Enable comments** (`youtube.force-ssl`).
 - Invoice amounts in CAD use a stored FX rate (Frankfurter, then open.er-api). If both fail, the last rate is kept. Nothing is invented.
+- Home highlights open the record they were counted from. A thread opens `/collaborations/threads/[id]`, an invoice opens `/collaborations/invoices/[id]`, a deal or deliverable opens `/collaborations/deals/[id]`, a planned post opens `/publishing/[variantId]`, and a task you typed or that arrived from Workspace OS opens that row on Today (`/today?action=`). The count tiles use the same filter as the number: Need a reply is `state=NEED_REPLY&linked=deal` (those threads are often already in the Pipeline folder, so the folder is not forced to Inbox), Possible collaborations is triage `POSSIBLE` plus category `COLLABORATION` with no opportunity yet, Overdue invoices is the invoices tab on `OVERDUE`, Posts to match opens Publishing on To match, Due today filters Today to that local day. Instagram messages inside the possible-collaborations count stay in Socials. `actionSourcePath` in `packages/services/src/actions.ts` builds the link at read time, and a refresh of an open action also rewrites `deep_link`.
+- An invoice status is chosen on the Invoices table (`POST /invoices/:id/status`): Issued, Confirmed, Paid, Sent, Overdue, Void. A new invoice is Issued. An Issued invoice whose due date has passed becomes Overdue on that save and on the existing worker pass. Confirmed, Sent, Paid and Void stay as chosen. Paid is the label; money still shows from recorded payments. Void is refused when a payment exists. **Split** (`POST /invoices/:id/split`) keeps the first amount and due date on the same invoice number and creates one or more invoices for the other amounts and due dates. Deal, currency and billing details are copied. New numbers come from `INV-year-####`. Migration `0016_invoice_status` adds `SENT` and `CONFIRMED`.
 - An invoice document is a page: `/collaborations/invoices/new` and `/collaborations/invoices/[id]`. From, to, dates, number, currency, lines (description, quantity, unit price, tax percent) and bank details are editable. Line amount, subtotal, tax and amount due are calculated; amount due is stored as `invoices.amount_minor`. Lines live in `invoice_lines`. Creating without lines (email suggestions, tests) still sends `amountMinor` only. Migration `0013_invoice_document`. Code: `packages/services/src/crm.ts` (`createInvoice`, `updateInvoice`, `getInvoice`), `apps/api/src/routes/work.ts`, `apps/web/src/app/(app)/collaborations/invoice-editor.tsx`.
 
 ## 6. Commands
@@ -196,20 +200,20 @@ Web, API, and worker should have been created just now. Migrate should say it ex
 
 ### Day to day
 
-| You want | Command |
-| --- | --- |
-| Status | `docker compose ps` |
-| Follow one log | `docker compose logs -f api` (or `worker`, `web`, `caddy`, `migrate`) |
-| Stop / start the same containers | `docker compose stop` / `docker compose start` |
-| Restart without new code | `docker compose restart` |
-| Apply a `.env` change (not `API_INTERNAL_URL`) | `docker compose up -d` |
-| `API_INTERNAL_URL` changed | `docker compose up -d --build web` |
-| Change still invisible | `docker compose up -d --force-recreate` |
-| Health | `curl -sS http://127.0.0.1:8080/api/v1/health/ready` |
-| Support bundle, no secrets | `pnpm diagnostics` |
-| Backup / restore | `pnpm backup` / `pnpm restore` |
-| Prove restarts keep data | `pnpm restart-test` |
-| Tailscale HTTPS | `pnpm tailscale enable` |
+| You want                                       | Command                                                               |
+| ---------------------------------------------- | --------------------------------------------------------------------- |
+| Status                                         | `docker compose ps`                                                   |
+| Follow one log                                 | `docker compose logs -f api` (or `worker`, `web`, `caddy`, `migrate`) |
+| Stop / start the same containers               | `docker compose stop` / `docker compose start`                        |
+| Restart without new code                       | `docker compose restart`                                              |
+| Apply a `.env` change (not `API_INTERNAL_URL`) | `docker compose up -d`                                                |
+| `API_INTERNAL_URL` changed                     | `docker compose up -d --build web`                                    |
+| Change still invisible                         | `docker compose up -d --force-recreate`                               |
+| Health                                         | `curl -sS http://127.0.0.1:8080/api/v1/health/ready`                  |
+| Support bundle, no secrets                     | `pnpm diagnostics`                                                    |
+| Backup / restore                               | `pnpm backup` / `pnpm restore`                                        |
+| Prove restarts keep data                       | `pnpm restart-test`                                                   |
+| Tailscale HTTPS                                | `pnpm tailscale enable`                                               |
 
 Do not change `POSTGRES_PASSWORD` after the first start. Changing `ENCRYPTION_KEY` makes stored OAuth tokens unreadable; reconnect integrations after that.
 

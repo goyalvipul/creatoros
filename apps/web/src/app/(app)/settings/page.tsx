@@ -695,7 +695,8 @@ function Backups() {
       <Notice tone="info" title="What is backed up">
         The database dump contains all your records but not your media files (those stay on your PCs) and not
         your encryption key. Keep <code>ENCRYPTION_KEY</code> from <code>.env</code> in a password manager, or
-        stored integration credentials cannot be restored.
+        stored integration credentials cannot be restored. An automatic backup runs once a day at 3:15am Pacific.
+        Back up now still makes one immediately.
       </Notice>
       <div className="flex">
         <ActionButton
@@ -723,7 +724,7 @@ function Backups() {
         res={list}
         empty={
           <EmptyState title="No backups yet">
-            Press “Back up now”. A scheduled backup also runs every night.
+            Press “Back up now”. An automatic backup also runs once a day at 3:15am Pacific.
           </EmptyState>
         }
       >

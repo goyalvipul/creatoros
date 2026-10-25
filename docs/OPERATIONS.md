@@ -93,7 +93,7 @@ Notes:
 
 ## Backup and restore
 
-The worker writes a nightly backup (03:15) and runs a weekly restore test into a scratch database (Sunday 03:45), which also compares nine
+The worker writes one backup a day at 03:15 America/Vancouver and runs a weekly restore test into a scratch database (Sunday 03:45 Pacific), which also compares nine
 relationship counts (assets in projects, publications per variant, deliverables per deal, invoices per deal, payments per invoice, ...) between the
 live database and the restored copy.
 
@@ -107,6 +107,15 @@ pnpm restore backups/creatoros-<ts>.dump --yes     # DESTRUCTIVE: safety backup 
 - **`ENCRYPTION_KEY` is not in the backup.** Keep a copy in your password manager, or restored Gmail/YouTube tokens and 2FA secrets will be unreadable.
 - Copy `backups/` to another disk or cloud storage regularly. A backup on the same disk does not protect against disk failure.
 - Test your backups: _Settings → Backups → Run restore test_ restores into a throwaway database and verifies relationships. It never touches live data.
+- A second automatic backup is skipped if one already succeeded in the last 20 hours. **Back up now** is not skipped.
+- Scheduled files are inside the Docker volume at `/data/backups` (the Location column in Settings). Copy one out before `pnpm restore`:
+
+  ```bash
+  docker compose cp worker:/data/backups/creatoros-<timestamp>.dump ./backups/
+  docker compose cp worker:/data/backups/creatoros-<timestamp>.dump.manifest.json ./backups/
+  pnpm restore ./backups/creatoros-<timestamp>.dump          # checks the file, changes nothing
+  pnpm restore ./backups/creatoros-<timestamp>.dump --yes    # replaces the live database; takes a safety copy first
+  ```
 
 ## Restart and failure test (T31, T34)
 

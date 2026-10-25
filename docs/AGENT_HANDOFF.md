@@ -47,7 +47,7 @@ Brands, channels, and accounts are created on **Channels**. Production projects 
 ```
 apps/api            Fastify REST under /api/v1. Routes: src/routes/{core,content,storage,work,socials}.ts
 apps/worker         BullMQ. Scheduled jobs in src/jobs.ts. On-demand jobs (sync, backup, publish) in src/main.ts
-apps/web            Next.js App Router PWA. Screens in src/app/(app)/*
+apps/web            Next.js App Router PWA. Screens in src/app/(app)/*. The installed phone app draws under the status bar (`viewport-fit: cover`). The top bar has a `safe-top` spacer (`env(safe-area-inset-top)`); the bottom nav uses `safe-bottom`.
 apps/scanner-agent  Go. Windows service or Linux systemd. Scans are read-only. Confirmed rename, move, and delete are the only writes.
 packages/domain     Enums, Zod, pure rules
 packages/db         Drizzle schema in src/schema/*, SQL migrations in drizzle/*.sql plus drizzle/meta/_journal.json
@@ -211,7 +211,7 @@ Web, API, and worker should have been created just now. Migrate should say it ex
 | Change still invisible                         | `docker compose up -d --force-recreate`                               |
 | Health                                         | `curl -sS http://127.0.0.1:8080/api/v1/health/ready`                  |
 | Support bundle, no secrets                     | `pnpm diagnostics`                                                    |
-| Backup / restore                               | `pnpm backup` / `pnpm restore`                                        |
+| Backup / restore                               | Automatic backup is once a day, 03:15 America/Vancouver. `pnpm restore ./backups/<file>.dump` checks; add `--yes` to replace the live database. Scheduled dumps are in the `worker` container at `/data/backups` (`docker compose cp`). |
 | Prove restarts keep data                       | `pnpm restart-test`                                                   |
 | Tailscale HTTPS                                | `pnpm tailscale enable`                                               |
 

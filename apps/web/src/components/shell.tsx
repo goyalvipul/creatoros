@@ -222,7 +222,9 @@ export function Shell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="min-w-0">
-        <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-panel/90 px-3 py-2 backdrop-blur md:px-6">
+        <header className="sticky top-0 z-30 border-b border-border bg-panel/95 backdrop-blur">
+          <div className="safe-top md:hidden" />
+          <div className="flex items-center gap-2 px-3 py-2 md:px-6">
           <Link
             href="/"
             className="mr-1 grid size-8 place-items-center rounded-lg bg-accent text-[10px] font-extrabold text-accentfg md:hidden"
@@ -253,6 +255,7 @@ export function Shell({ children }: { children: ReactNode }) {
             >
               <LogOut className="size-4" />
             </Button>
+          </div>
           </div>
         </header>
 

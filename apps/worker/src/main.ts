@@ -19,8 +19,8 @@ const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }
   { name: 'sync-fast', every: 5 * 60_000 },
   { name: 'sync-slow', every: 30 * 60_000 },
   { name: 'maintenance', every: 60 * 60_000 },
-  { name: 'backup', pattern: '15 3 * * *' },
-  { name: 'restore-test', pattern: '45 3 * * 0' },
+  { name: 'backup', pattern: '15 3 * * *', tz: 'America/Vancouver' },
+  { name: 'restore-test', pattern: '45 3 * * 0', tz: 'America/Vancouver' },
 ];
 
 /**
@@ -69,7 +69,7 @@ async function main() {
   for (const s of SCHEDULE) {
     await jobsQ.upsertJobScheduler(
       `sched:${s.name}`,
-      s.pattern ? { pattern: s.pattern } : { every: s.every! },
+      s.pattern ? { pattern: s.pattern, ...(s.tz ? { tz: s.tz } : {}) } : { every: s.every! },
       { name: s.name, opts: { removeOnComplete: 20, removeOnFail: 100, attempts: 1 } },
     );
   }

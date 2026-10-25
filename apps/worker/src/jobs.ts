@@ -131,8 +131,22 @@ export async function jobSync(d: WorkerDeps, scope: 'fast' | 'slow' | 'all' = 'a
   return { connections: picked.length, ...r, todo };
 }
 
-/** Nightly: scheduled backup, verify, prune. Weekly restore test is `jobRestoreTest`. */
+/** Once a day at 03:15 America/Vancouver. A second scheduled run the same day is skipped. */
 export async function jobBackup(d: WorkerDeps, kind: 'manual' | 'scheduled' = 'scheduled') {
+  if (kind === 'scheduled') {
+    const recent = (
+      await d.db.execute(sql`
+        select 1 as n from backup_runs
+        where kind = 'scheduled'
+          and state in ('SUCCEEDED', 'VERIFIED', 'RESTORED_TEST')
+          and started_at > now() - interval '20 hours'
+        limit 1`)
+    ) as { rows: { n: number }[] };
+    if (recent.rows.length) {
+      log(d, 'info', 'scheduled backup skipped; one already succeeded in the last 20 hours');
+      return { skipped: true };
+    }
+  }
   const b = await createBackup(d.db, d.env, { kind, runner: d.runner });
   const v = await verifyBackup(d.db, d.env, b.file, { runner: d.runner, backupRunId: b.id });
   const pruned = await pruneBackups(d.env);

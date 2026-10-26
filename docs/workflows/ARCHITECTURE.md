@@ -12,7 +12,7 @@ Code: pure rules in `packages/domain/src/workflow.ts` (+ `workflow-templates.ts`
 
 ## Conditions (all must pass)
 
-`keyword_any`, `keyword_none`, `regex` (rejected unless judged safe: no nested quantifiers, length bounded), `has_media`, `is_new_conversation`, `within_hours` (time zone aware), `sender_in`, `category_is` (rule-based classifier, with min confidence).
+`keyword_any` (contains, or whole word when `exact` is true), `keyword_none`, `text_equals` (the whole message, ignoring case and surrounding spaces), `emoji` (`any`, `none`, or `includes` a chosen list), `regex` (rejected unless judged safe: no nested quantifiers, length bounded), `has_media`, `is_new_conversation`, `within_hours` (time zone aware), `sender_in`, `category_is` (rule-based classifier, with min confidence).
 
 ## Actions
 
@@ -35,7 +35,7 @@ Dry run (`POST /workflows/:id/simulate`) never sends or writes outbound rows. Au
 
 ## Templates
 
-Eight starters in `workflow-templates.ts`. Import creates an inactive draft with no accounts. The automatic one still needs test, opt-in and activation.
+Starters in `workflow-templates.ts`, including streaming links, sound permission, bookings, press, merch, credits, emoji comments, an exact campaign word, a first-DM welcome and shoutouts. Import creates an inactive draft with no accounts. The automatic one still needs test, opt-in and activation. The list page can also create a blank draft.
 
 ## Operations
 
@@ -43,4 +43,4 @@ Worker job `social-events` runs every 10 s; failures leave rows retryable. Pause
 
 ## Not built
 
-Visual drag-and-drop canvas (JSON editor instead), delay/schedule nodes, AI draft/classify nodes, brand voice profiles beyond account tone/signature fields, YouTube/Facebook/Threads/TikTok triggers, retention jobs for execution history.
+Delay/schedule nodes, branching, AI draft/classify nodes, brand voice profiles beyond account tone/signature fields, YouTube/Facebook/Threads/TikTok triggers, retention jobs for execution history. The editor is an ordered canvas (drag, or Move up / Move down) because steps run in a straight line.

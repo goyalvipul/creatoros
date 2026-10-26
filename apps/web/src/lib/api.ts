@@ -1,6 +1,7 @@
 'use client';
 
 import useSWR, { mutate as globalMutate, type SWRConfiguration } from 'swr';
+import { enqueue, queueable } from './outbox';
 
 export type Row = Record<string, any>;
 
@@ -53,20 +54,37 @@ export interface CallOpts {
   silent401?: boolean;
 }
 
+function rememberOffline(method: string, path: string, body: unknown): never {
+  if (!queueable(method, path)) {
+    throw new ApiError(0, 'NETWORK', 'Cannot reach the server. Check that Creator OS is running and you are online.');
+  }
+  try {
+    const localId = enqueue(method as 'POST' | 'PATCH' | 'PUT', path, body);
+    throw new ApiError(0, 'OFFLINE_QUEUED', 'Saved on this phone. It will sync when you are back online.', { localId });
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(0, 'NETWORK', e instanceof Error ? e.message : 'Cannot reach the server.');
+  }
+}
+
 export async function api<T = any>(path: string, opts: CallOpts = {}): Promise<T> {
   const method = opts.method ?? 'GET';
   const headers: Record<string, string> = { 'x-requested-with': 'creatoros', accept: 'application/json' };
   if (opts.body !== undefined) headers['content-type'] = 'application/json';
   if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
+  const queuePath = `${path}${qs(opts.query)}`;
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  if (offline && method !== 'GET' && method !== 'DELETE') rememberOffline(method, queuePath, opts.body);
   let res: Response;
   try {
-    res = await fetch(`/api/v1${path}${qs(opts.query)}`, {
+    res = await fetch(`/api/v1${queuePath}`, {
       method,
       headers,
       credentials: 'same-origin',
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
+    if (method !== 'GET' && method !== 'DELETE') rememberOffline(method, queuePath, opts.body);
     throw new ApiError(
       0,
       'NETWORK',

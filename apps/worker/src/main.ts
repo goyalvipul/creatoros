@@ -12,6 +12,7 @@ import { JOB_TABLE, jobBackup, jobPublish, jobRestoreTest, jobSync, type JobName
  */
 const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }[] = [
   { name: 'heartbeat', every: 30_000 },
+  { name: 'ltx', every: 15_000 },
   { name: 'events', every: 15_000 },
   { name: 'actions', every: 60_000 },
   { name: 'social-events', every: 10_000 },
@@ -81,7 +82,7 @@ async function main() {
       if (!fn) throw new Error(`Unknown job ${job.name}`);
       const started = Date.now();
       const out = await fn(deps);
-      if (job.name !== 'heartbeat' && job.name !== 'events')
+      if (job.name !== 'heartbeat' && job.name !== 'events' && job.name !== 'ltx')
         log('info', `job ${job.name} done`, {
           ms: Date.now() - started,
           out: JSON.stringify(out).slice(0, 400),
@@ -98,6 +99,10 @@ async function main() {
       if (job.name === 'backup') return jobBackup(deps, 'manual');
       if (job.name === 'restore-test') return jobRestoreTest(deps) as Promise<object>;
       if (job.name === 'publish') return jobPublish(deps, String(job.data.draftId)) as Promise<object>;
+      if (job.name === 'ltx') {
+        const { submitLtxJob } = await import('@creatoros/services');
+        return submitLtxJob(deps.db, deps.env, String(job.data.jobId)) as Promise<object>;
+      }
       if (job.name === 'sync') {
         const { runSync } = await import('@creatoros/services');
         return runSync(handle.db, config.env, String(job.data.connectionId), {

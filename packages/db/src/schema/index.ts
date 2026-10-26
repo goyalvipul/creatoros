@@ -3,6 +3,7 @@ export * from './columns';
 export * from './identity';
 export * from './storage';
 export * from './production';
+export * from './comfy';
 export * from './publishing';
 export * from './crm';
 export * from './system';

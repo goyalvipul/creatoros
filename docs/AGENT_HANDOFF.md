@@ -6,7 +6,7 @@ Deeper detail, when you need it: `AGENTS.md` (short rules), `docs/PRODUCT_SPEC.m
 
 **Keep this file current.** If you change a screen, an API, a migration, a command, or what is actually running, update the matching section here in the same change. Do not leave the next agent reading yesterday's behavior.
 
-Last updated: 2026-10-24, on the Ubuntu host `guardobox`, working tree not yet committed.
+Last updated: 2026-10-25, on the Ubuntu host `guardobox`, working tree not yet committed.
 
 ## 1. What this product is
 
@@ -149,10 +149,19 @@ These behaviors are in the working tree. They are on the running site only after
 - File detail → **On this PC** can rename, move, or delete that one original. Move stays on the same drive and inside a folder that PC already indexes. Delete removes the file from the disk (not the Recycle Bin) and hides it from the library; posts already sent stay. The change is queued (`file_operations`, migration `0017_file_operations`) until the agent on that PC polls `GET /agents/file-operations` and reports `POST /agents/file-operations/result`. The agent binary on each Windows PC has to be replaced and the service restarted before this runs. `docker compose` does not update those PCs. Unlink still does not touch the file.
 - Library → Assets builds one asset per folder, machine and file kind. The title is `folder_machine` (`devices.display_name`, so the 12GB and 24GB PCs stay separate). Folder is the parent directory of the file. Kinds are Videos, Images, Audio, Document, Project. The list is newest file modification first and can be filtered by machine (`GET /assets/machines`, `GET /assets?deviceId=`). Identity is `logical_assets.folder_key` + `device_id` + `kind`, source `folder`. Migration `0014_folder_assets`. Opening the tab or finishing a scan runs `syncFolderAssets`. Original files are not moved.
 
+### ComfyUI / LTX
+
+- Left nav **ComfyUI**, page `/comfy`. Inside it, **LTX** is the working tab. MiniMax H3 is a tab that does not start a job.
+- Generate posts `docs/comfy/LTX_IA2V_Production (API).json` to the selected PC’s `/prompt`. The editor graph is not sent. The job is queued (`generation_jobs`, provider `comfyui-ltx`), the worker uploads the library image and audio, then polls `/history`. The mp4 stays in that PC’s ComfyUI output folder. The page plays it through `/api/v1/comfy/jobs/:id/video`.
+- The first visit with an empty machine list adds the 3090 at `http://100.85.189.23:8188` (preferred) and the 3060 at `http://100.113.189.17:8188`. Both answered from this server. A public address is still refused. **Check** does not render. **Validate** does not call the PC. The 12GB card can be selected; the form warns that this graph was built for 24GB.
+- Defaults from the API file: 576×1024, 30 fps, 30 seconds, start at 48 seconds, LoRA `mehaklora-ltx.safetensors` at 0.88. The worker polls every 15 seconds (`ltx` on the jobs queue) and also takes the `ltx` request as soon as Generate is pressed. The Docker image does not copy `docs/`, so the same API file is also at `packages/services/ltx/`. A missing file shows the form and says Generate cannot start; it does not blank the page. Rebuild `api`, `worker` and `web`.
+- Creates and edits made while the phone is offline (a workflow, an idea, a draft) stay on that phone and sync when the connection returns. The banner says they are on the phone until the server accepts them. Generate, publish, pay, file delete, and turning a workflow on are not queued. The service worker keeps the last opened pages for that fallback and still asks the server first while online. Rebuild `web`.
+
 ### Mail, invoices, socials (already in earlier commits)
 
 - Collaborations inbox is email and pasted threads. Social threads stay in Socials.
-- Editors and viewers do not see Publishing, Calendar, Collaborations, Socials, Workflows, Analytics, Channels, Storage & Devices, Integrations or Settings. The nav hides them and those API paths require OWNER. They still have Home, Content and Production. Editors also have Inbox & Today and Library. Viewers do not.
+- Workflows can be created from scratch or imported from a template. The editor is an ordered canvas: drag a step, or use Move up and Move down. Match options include contains, whole word, the entire message, and emoji. Steps still run in a straight line. A failed condition stops the rest. Nothing is sent unless the workflow is Fully automatic and that account is allowed to send.
+- Editors and viewers do not see Publishing, Calendar, Collaborations, Socials, Workflows, ComfyUI, Analytics, Channels, Storage & Devices, Integrations or Settings. The nav hides them and those API paths require OWNER. They still have Home, Content and Production. Editors also have Inbox & Today and Library. Viewers do not.
 - Settings → Team: an owner can permanently delete another person (`DELETE /members/:id`). That removes their sign-in. Files, posts and deals stay. You cannot delete yourself, and the last active owner stays.
 - Workspace OS publishes tasks into Today. Integrations → Todo app stores the address, the `creatoros` access token and the `wos_whsec_` signing secret. The webhook is `POST /api/v1/integrations/workspace-os/webhook` (raw body HMAC, 5 minute skew, deduped by `X-WOS-Event-Id`). Completing a received task is patched back. A missed webhook is filled by listing `/api/v1/integrations/creatoros/tasks` (`items`, also accepted as `tasks`) on the fast sync. Details: `docs/TODO_ADAPTER_CONTRACT.md`. The running site shows this only after `docker compose up -d --build`.
 - `GET /socials/platforms` fills the social tabs. Stored Instagram diagnostics are attached only when an Instagram connection exists. Do not run that probe on the first account in the list: a Facebook or YouTube connection makes the probe throw `Social account not found` and every tab fails.
@@ -196,7 +205,7 @@ docker compose logs migrate --tail 30
 curl -sS http://127.0.0.1:8080/api/v1/health/ready
 ```
 
-Web, API, and worker should have been created just now. Migrate should say it exited after "migrations applied". Then reload the browser page. The service worker does not cache HTML. A normal reload is enough.
+Web, API, and worker should have been created just now. Migrate should say it exited after "migrations applied". Then reload the browser page. While online the service worker asks the server first, so a reload picks up the new page. It only keeps the last opened pages for when the phone is offline.
 
 ### Day to day
 

@@ -1,0 +1,658 @@
+{
+  "269": {
+    "inputs": {
+      "image": "View recent photos.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "🖼️ Load mehaklora Reference Image — SELECT YOUR IMAGE HERE"
+    }
+  },
+  "276": {
+    "inputs": {
+      "audio": "A man shows up.mp3"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "🎵 Load Audio — wakawaka.mp3"
+    }
+  },
+  "346": {
+    "inputs": {
+      "noise_seed": 933487736679550
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "351": {
+    "inputs": {
+      "noise": [
+        "346",
+        0
+      ],
+      "guider": [
+        "365",
+        0
+      ],
+      "sampler": [
+        "355",
+        0
+      ],
+      "sigmas": [
+        "360",
+        0
+      ],
+      "latent_image": [
+        "443:435",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "352": {
+    "inputs": {
+      "positive": [
+        "359",
+        0
+      ],
+      "negative": [
+        "359",
+        1
+      ],
+      "latent": [
+        "361",
+        1
+      ]
+    },
+    "class_type": "LTXVCropGuides",
+    "_meta": {
+      "title": "LTXVCropGuides"
+    }
+  },
+  "355": {
+    "inputs": {
+      "sampler_name": "euler_ancestral_cfg_pp"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "357": {
+    "inputs": {
+      "samples": [
+        "352",
+        2
+      ],
+      "audio_vae": [
+        "370",
+        0
+      ]
+    },
+    "class_type": "LTXVAudioVAEDecode",
+    "_meta": {
+      "title": "LTXV Audio VAE Decode"
+    }
+  },
+  "358": {
+    "inputs": {
+      "text": [
+        "607",
+        0
+      ],
+      "clip": [
+        "397",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "✏️ Positive Prompt — EDIT: replace [your lyrics here] with song words"
+    }
+  },
+  "359": {
+    "inputs": {
+      "frame_rate": [
+        "441",
+        0
+      ],
+      "positive": [
+        "358",
+        0
+      ],
+      "negative": [
+        "364",
+        0
+      ]
+    },
+    "class_type": "LTXVConditioning",
+    "_meta": {
+      "title": "LTXVConditioning"
+    }
+  },
+  "360": {
+    "inputs": {
+      "sigmas": "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0"
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "ManualSigmas"
+    }
+  },
+  "361": {
+    "inputs": {
+      "av_latent": [
+        "351",
+        0
+      ]
+    },
+    "class_type": "LTXVSeparateAVLatent",
+    "_meta": {
+      "title": "LTXVSeparateAVLatent"
+    }
+  },
+  "364": {
+    "inputs": {
+      "text": "low quality, static, silent, AI, lips morphing, morphed movements, AI skin, teeth morphing, teeth blur, lips blur,\ntext, logos, captions. watermarks, subtitles, captions, zoom in, crash zoom, shaky camera, fast motion, motion blur, low quality, distorted face, extra limbs, deformed hands, ugly, bad anatomy, dark lighting, modern clothing, western clothing, sunglasses, hat, t-shirt, jeans, different person, identity change, multiple people, crowd, ceiling visible, modern interior, sci-fi, jump cut, glitch, flickering, grainy noise, static frozen frame, no motion, overexposed, nuclear glow, flat lighting, blurry background, depth of field bokeh",
+      "clip": [
+        "397",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "365": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "446",
+        0
+      ],
+      "positive": [
+        "359",
+        0
+      ],
+      "negative": [
+        "359",
+        1
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG Guider"
+    }
+  },
+  "366": {
+    "inputs": {
+      "tile_size": 384,
+      "overlap": 64,
+      "temporal_size": 4096,
+      "temporal_overlap": 4,
+      "samples": [
+        "413:412",
+        0
+      ],
+      "vae": [
+        "399",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "VAE Decode (Tiled)"
+    }
+  },
+  "368": {
+    "inputs": {
+      "value": 576
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Width: 960"
+    }
+  },
+  "370": {
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-distilled_audio_vae.safetensors"
+    },
+    "class_type": "LTXVAudioVAELoader",
+    "_meta": {
+      "title": "🔊 Audio VAE — update filename if different"
+    }
+  },
+  "378": {
+    "inputs": {
+      "value": 30
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Duration"
+    }
+  },
+  "379": {
+    "inputs": {
+      "value": 30
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "FPS: 24"
+    }
+  },
+  "382": {
+    "inputs": {
+      "value": 1024
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Height: 540"
+    }
+  },
+  "383": {
+    "inputs": {
+      "start_index": 48,
+      "duration": [
+        "378",
+        0
+      ],
+      "audio": [
+        "276",
+        0
+      ]
+    },
+    "class_type": "TrimAudioDuration",
+    "_meta": {
+      "title": "✂️ Trim Audio (0 → 25s | change start for next clips)"
+    }
+  },
+  "397": {
+    "inputs": {
+      "clip_name1": "gemma-3-12b-it-IQ4_XS.gguf",
+      "clip_name2": "ltx-2.3-22b-distilled_embeddings_connectors.safetensors",
+      "type": "ltxv"
+    },
+    "class_type": "DualCLIPLoaderGGUF",
+    "_meta": {
+      "title": "CLIP  ( Gemma GGUF+ LTX embedding)"
+    }
+  },
+  "399": {
+    "inputs": {
+      "vae_name": "ltx-2.3-22b-distilled_video_vae.safetensors",
+      "device": "main_device",
+      "weight_dtype": "bf16"
+    },
+    "class_type": "VAELoaderKJ",
+    "_meta": {
+      "title": "📦 Video VAE — update filename if different"
+    }
+  },
+  "400": {
+    "inputs": {
+      "frame_rate": [
+        "441",
+        0
+      ],
+      "loop_count": 0,
+      "filename_prefix": "Mehak_MusicVideo_Clip1",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "366",
+        0
+      ],
+      "audio": [
+        "357",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "💾 Save Clip 1"
+    }
+  },
+  "441": {
+    "inputs": {
+      "expression": "a",
+      "values.a": [
+        "379",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "442": {
+    "inputs": {
+      "expression": "a * b",
+      "values.a": [
+        "378",
+        0
+      ],
+      "values.b": [
+        "379",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  },
+  "446": {
+    "inputs": {
+      "lora_name": "mehaklora-ltx.safetensors",
+      "strength_model": 0.88,
+      "model": [
+        "448",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "448": {
+    "inputs": {
+      "unet_name": "ltx-2.3-22b-distilled-1.1-Q5_K_M.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Unet Loader (GGUF)"
+    }
+  },
+  "600": {
+    "inputs": {
+      "text": "mehaklora standing in front of the mic singing proper lip sync, mehaklora with a lot of tattoos on her neck, shoulders and arms singing. mehaklora is smiling while singing and feeling proud sining a strong song. mehaklora have tattoos on her neck and shoulders. \ncamera pans from left to right keeping same distance from mehaklora. \nA single female singer performs only the female lead vocal lines. She lip-syncs precisely when the female lead is heard. During off-screen crowd chants and backing vocals, she stops singing completely, keeps her lips closed, listens and reacts naturally with confident facial expressions and subtle head and body movement. The crowd voices come from off camera. She never mouths or lip-syncs the crowd responses."
+    },
+    "class_type": "Textbox",
+    "_meta": {
+      "title": "Textbox"
+    }
+  },
+  "607": {
+    "inputs": {
+      "input1": [
+        "9994",
+        0
+      ]
+    },
+    "class_type": "Any Multi-Switch [RvTools]",
+    "_meta": {
+      "title": "Any Multi-Switch"
+    }
+  },
+  "608": {
+    "inputs": {
+      "purge_cache": true,
+      "purge_models": true,
+      "anything": [
+        "400",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "_meta": {
+      "title": "LayerUtility: Purge VRAM V2"
+    }
+  },
+  "609": {
+    "inputs": {
+      "resize_type": "target dimensions",
+      "resize_type.width": 1152,
+      "resize_type.height": 2048,
+      "quality": "ULTRA",
+      "images": [
+        "366",
+        0
+      ]
+    },
+    "class_type": "RTXVideoSuperResolution",
+    "_meta": {
+      "title": "RTX Video Super Resolution"
+    }
+  },
+  "610": {
+    "inputs": {
+      "frame_rate": 30,
+      "loop_count": 0,
+      "filename_prefix": "Upscale/RTX_SR",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "609",
+        0
+      ],
+      "audio": [
+        "357",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Save RTX Upscaled"
+    }
+  },
+  "611": {
+    "inputs": {
+      "purge_cache": true,
+      "purge_models": true,
+      "anything": [
+        "610",
+        0
+      ]
+    },
+    "class_type": "LayerUtility: PurgeVRAM V2",
+    "_meta": {
+      "title": "LayerUtility: Purge VRAM V2"
+    }
+  },
+  "9994": {
+    "inputs": {
+      "text": "mehaklora OHWXPERSON young woman vocalist singing passionately into a large condenser microphone, viking tattoos on the face, heavy girl voice, mouth open and moving with the music, jaw and lip sync precise and realistic, head moving slightly with the rhythm, eyes expressive and alive, professional recording studio background, warm stage lighting, smooth natural motion, static locked camera, sharp focus on face and lips throughout. The person is singing, and she says: \"Tsamina mina, eh, eh\nWaka waka, eh, eh\nTsamina mina zangalewa\nThis time for Africa\nListen to your God, this is our motto\nYour time to shine, don't wait in line, y vamos por todo\nPeople are raising their expectations\nGo on and feed them, this is your moment, no hesitation\""
+    },
+    "class_type": "Textbox",
+    "_meta": {
+      "title": "✏️ MANUAL PROMPT — Edit here"
+    }
+  },
+  "413:410": {
+    "inputs": {
+      "resize_type": "scale dimensions",
+      "resize_type.width": [
+        "368",
+        0
+      ],
+      "resize_type.height": [
+        "382",
+        0
+      ],
+      "resize_type.crop": "center",
+      "scale_method": "lanczos",
+      "input": [
+        "269",
+        0
+      ]
+    },
+    "class_type": "ResizeImageMaskNode",
+    "_meta": {
+      "title": "Resize Image/Mask"
+    }
+  },
+  "413:411": {
+    "inputs": {
+      "longer_edge": 1536,
+      "images": [
+        "413:410",
+        0
+      ]
+    },
+    "class_type": "ResizeImagesByLongerEdge",
+    "_meta": {
+      "title": "Resize Images by Longer Edge (DEPRECATED)"
+    }
+  },
+  "413:412": {
+    "inputs": {
+      "strength": 1,
+      "bypass": false,
+      "vae": [
+        "399",
+        0
+      ],
+      "image": [
+        "413:409",
+        0
+      ],
+      "latent": [
+        "361",
+        0
+      ]
+    },
+    "class_type": "LTXVImgToVideoInplace",
+    "_meta": {
+      "title": "LTXVImgToVideoInplace"
+    }
+  },
+  "413:409": {
+    "inputs": {
+      "img_compression": 33,
+      "image": [
+        "413:411",
+        0
+      ]
+    },
+    "class_type": "LTXVPreprocess",
+    "_meta": {
+      "title": "LTXV Preprocess"
+    }
+  },
+  "443:435": {
+    "inputs": {
+      "video_latent": [
+        "443:437",
+        0
+      ],
+      "audio_latent": [
+        "443:438",
+        0
+      ]
+    },
+    "class_type": "LTXVConcatAVLatent",
+    "_meta": {
+      "title": "LTXVConcatAVLatent"
+    }
+  },
+  "443:438": {
+    "inputs": {
+      "samples": [
+        "443:439",
+        0
+      ],
+      "mask": [
+        "443:440",
+        0
+      ]
+    },
+    "class_type": "SetLatentNoiseMask",
+    "_meta": {
+      "title": "Set Latent Noise Mask"
+    }
+  },
+  "443:439": {
+    "inputs": {
+      "audio": [
+        "383",
+        0
+      ],
+      "audio_vae": [
+        "370",
+        0
+      ]
+    },
+    "class_type": "LTXVAudioVAEEncode",
+    "_meta": {
+      "title": "LTXV Audio VAE Encode"
+    }
+  },
+  "443:440": {
+    "inputs": {
+      "value": 0,
+      "width": [
+        "368",
+        0
+      ],
+      "height": [
+        "382",
+        0
+      ]
+    },
+    "class_type": "SolidMask",
+    "_meta": {
+      "title": "Create Solid Mask"
+    }
+  },
+  "443:437": {
+    "inputs": {
+      "strength": 0.7,
+      "bypass": false,
+      "vae": [
+        "399",
+        0
+      ],
+      "image": [
+        "413:409",
+        0
+      ],
+      "latent": [
+        "443:436",
+        0
+      ]
+    },
+    "class_type": "LTXVImgToVideoInplace",
+    "_meta": {
+      "title": "LTXVImgToVideoInplace"
+    }
+  },
+  "443:436": {
+    "inputs": {
+      "width": [
+        "368",
+        0
+      ],
+      "height": [
+        "382",
+        0
+      ],
+      "length": [
+        "442",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLTXVLatentVideo",
+    "_meta": {
+      "title": "EmptyLTXVLatentVideo"
+    }
+  }
+}

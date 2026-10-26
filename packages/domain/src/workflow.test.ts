@@ -37,6 +37,13 @@ describe('workflow conditions', () => {
         .pass,
     ).toBe(true);
     expect(evaluateCondition({ type: 'keyword_none', keywords: ['spam'] }, ev()).pass).toBe(true);
+    expect(evaluateCondition({ type: 'text_equals', phrases: ['SONG'] }, ev({ text: ' song ' })).pass).toBe(true);
+    expect(evaluateCondition({ type: 'text_equals', phrases: ['SONG'] }, ev({ text: 'song please' })).pass).toBe(false);
+    expect(evaluateCondition({ type: 'emoji', mode: 'any' }, ev({ text: 'love this 🔥' })).pass).toBe(true);
+    expect(evaluateCondition({ type: 'emoji', mode: 'any' }, ev({ text: 'love this' })).pass).toBe(false);
+    expect(evaluateCondition({ type: 'emoji', mode: 'none' }, ev({ text: 'love this' })).pass).toBe(true);
+    expect(evaluateCondition({ type: 'emoji', mode: 'includes', emojis: ['❤️', '🔥'] }, ev({ text: '🔥' })).pass).toBe(true);
+    expect(evaluateCondition({ type: 'emoji', mode: 'includes', emojis: ['❤️'] }, ev({ text: '🔥' })).pass).toBe(false);
   });
   it('evaluates hours in the account time zone, including DST and overnight windows', () => {
     // 20:00 UTC in July = 13:00 PDT

@@ -10,6 +10,7 @@ import { contentRoutes } from './routes/content';
 import { storageRoutes } from './routes/storage';
 import { workRoutes } from './routes/work';
 import { socialsRoutes } from './routes/socials';
+import { comfyRoutes } from './routes/comfy';
 import { logSerializers } from './log-redact';
 
 export type { AppDeps } from './http';
@@ -74,6 +75,7 @@ export async function buildApp(
       contentRoutes(v1, deps);
       workRoutes(v1, deps);
       socialsRoutes(v1, deps);
+      comfyRoutes(v1, deps);
     },
     { prefix: '/api/v1' },
   );

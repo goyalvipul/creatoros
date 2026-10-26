@@ -45,6 +45,15 @@ const keywords = z.array(z.string().trim().min(1).max(100)).min(1).max(50);
 export const conditionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('keyword_any'), keywords, exact: z.boolean().optional() }),
   z.object({ type: z.literal('keyword_none'), keywords }),
+  z.object({
+    type: z.literal('text_equals'),
+    phrases: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
+  }),
+  z.object({
+    type: z.literal('emoji'),
+    mode: z.enum(['any', 'none', 'includes']),
+    emojis: z.array(z.string().trim().min(1).max(16)).max(20).optional(),
+  }),
   z.object({ type: z.literal('regex'), pattern: z.string().min(1).max(MAX_REGEX_LENGTH) }),
   z.object({ type: z.literal('has_media'), value: z.boolean() }),
   z.object({ type: z.literal('is_new_conversation'), value: z.boolean() }),
@@ -140,6 +149,8 @@ export function validateDefinition(
     if (ids.has(s.id)) issues.push({ stepId: s.id, message: `Duplicate step id "${s.id}"` });
     ids.add(s.id);
     if (stopped) issues.push({ stepId: s.id, message: 'Step comes after a Stop step and can never run' });
+    if (s.kind === 'condition' && s.condition.type === 'emoji' && s.condition.mode === 'includes' && !s.condition.emojis?.length)
+      issues.push({ stepId: s.id, message: 'Choose at least one emoji' });
     if (s.kind === 'condition' && s.condition.type === 'regex' && !isSafeRegex(s.condition.pattern))
       issues.push({
         stepId: s.id,
@@ -245,6 +256,18 @@ export function evaluateCondition(c: Condition, e: EventForMatch): { pass: boole
       const hit = c.keywords.find((k) => t.includes(norm(k)));
       return { pass: !hit, reason: hit ? `contains excluded "${hit}"` : 'no excluded keyword present' };
     }
+    case 'text_equals': {
+      const t = norm(text.trim());
+      const hit = c.phrases.find((p) => norm(p.trim()) === t);
+      return { pass: Boolean(hit), reason: hit ? `message is exactly "${hit}"` : 'message is not an exact match' };
+    }
+    case 'emoji': {
+      const found = hasEmoji(text);
+      if (c.mode === 'any') return { pass: found, reason: found ? 'message has an emoji' : 'message has no emoji' };
+      if (c.mode === 'none') return { pass: !found, reason: found ? 'message has an emoji' : 'message has no emoji' };
+      const hit = (c.emojis ?? []).find((emoji) => text.includes(emoji));
+      return { pass: Boolean(hit), reason: hit ? `contains ${hit}` : 'none of the chosen emoji' };
+    }
     case 'regex': {
       if (!isSafeRegex(c.pattern)) return { pass: false, reason: 'unsafe pattern refused' };
       return { pass: new RegExp(c.pattern, 'i').test(text), reason: `pattern /${c.pattern}/i` };
@@ -281,6 +304,11 @@ export function evaluateCondition(c: Condition, e: EventForMatch): { pass: boole
       return { pass: ok, reason: `category ${e.category} (${(e.confidence ?? 0).toFixed(2)})` };
     }
   }
+}
+
+const EMOJI = /\p{Extended_Pictographic}/u;
+function hasEmoji(text: string): boolean {
+  return EMOJI.test(text);
 }
 
 function escapeRe(s: string) {

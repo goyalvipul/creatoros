@@ -117,7 +117,7 @@ const PRIVATE_GET =
 
 /** Publishing, calendar, CRM, socials, workflows, analytics, channels, storage, integrations and settings. */
 const OWNER_ONLY =
-  /^\/(publishing|variants|publications|calendar|threads|messages|intake|opportunities|deals|deliverables|organizations|contacts|invoices|fx-rates|finance|mail|socials|workflows|analytics|goals|brands|channels|social-accounts|devices|pairing-codes|roots|scan-runs|physical-shares|integrations|connections|organization|follow-up-rules|audit|demo|auth\/sessions|auth\/totp)(\/|$)/;
+  /^\/(publishing|variants|publications|calendar|threads|messages|intake|opportunities|deals|deliverables|organizations|contacts|invoices|fx-rates|finance|mail|socials|workflows|comfy|analytics|goals|brands|channels|social-accounts|devices|pairing-codes|roots|scan-runs|physical-shares|integrations|connections|organization|follow-up-rules|audit|demo|auth\/sessions|auth\/totp)(\/|$)/;
 
 export function makeRouter(app: FastifyInstance, deps: AppDeps) {
   return function route<P = unknown, Q = unknown, B = unknown>(

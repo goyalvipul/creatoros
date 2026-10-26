@@ -30,12 +30,12 @@ async function main() {
   const requests = new Queue('requests', { connection: redis });
   const enqueue = async (_queue: string, name: string, data: Record<string, unknown>) => {
     try {
-      const publish = name === 'publish';
+      const once = name === 'publish' || name === 'ltx';
       await requests.add(name === 'connection' ? 'sync' : name, data, {
         removeOnComplete: 50,
         removeOnFail: 100,
-        attempts: publish ? 1 : 3,
-        ...(publish ? {} : { backoff: { type: 'exponential' as const, delay: 5000 } }),
+        attempts: once ? 1 : 3,
+        ...(once ? {} : { backoff: { type: 'exponential' as const, delay: 5000 } }),
       });
     } catch {
       throw new AppError(

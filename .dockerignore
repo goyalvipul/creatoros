@@ -11,6 +11,8 @@
 apps/scanner-agent/dist
 *.log
 .cursor
-docs
+docs/**
+!docs/comfy/
+!docs/comfy/**
 tests/e2e/test-results
 tests/e2e/playwright-report

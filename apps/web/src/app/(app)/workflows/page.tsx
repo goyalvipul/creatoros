@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
   ActionButton,
@@ -9,20 +10,28 @@ import {
   Button,
   Card,
   EmptyState,
+  Field,
+  Input,
   Notice,
   PageHeader,
   Stat,
   StateBadge,
 } from '@/components/ui';
-import { post, put, refresh, useApi } from '@/lib/api';
+import { blankWorkflow } from '@/components/workflow-canvas';
+import { ApiError, post, put, refresh, useApi } from '@/lib/api';
+import { pendingWorkflows, useOutbox } from '@/lib/outbox';
 import { ago, title as titleCase } from '@/lib/format';
 
 export default function WorkflowsPage() {
   const list = useApi<any[]>('/workflows');
   const ov = useApi<any>('/workflows/overview');
   const tpl = useApi<any[]>('/workflows/templates');
+  const router = useRouter();
   const [error, setError] = useState('');
+  const [name, setName] = useState('');
   const paused = ov.data?.pauseAllSending;
+  useOutbox();
+  const pending = pendingWorkflows();
   return (
     <div>
       <PageHeader
@@ -63,12 +72,35 @@ export default function WorkflowsPage() {
           </div>
         )}
       </Async>
+      {pending.length > 0 && (
+        <ul className="mb-3 grid gap-3 md:grid-cols-2">
+          {pending.map((w) => (
+            <li key={w.id}>
+              <Card>
+                <div className="flex items-start justify-between gap-2">
+                  <Link href={`/workflows/${w.id}`} className="font-medium hover:underline">
+                    {w.name}
+                  </Link>
+                  <Badge tone="warn">On this phone</Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted">
+                  {titleCase(w.mode)} · not in Creator OS yet. It will sync when you are back online.
+                </p>
+              </Card>
+            </li>
+          ))}
+        </ul>
+      )}
       <Async
         res={list}
         empty={
-          <EmptyState title="No workflows yet">
-            Start from a template below. Templates are imported inactive with no accounts selected.
-          </EmptyState>
+          pending.length > 0 ? (
+            <></>
+          ) : (
+            <EmptyState title="No workflows yet">
+              Create one above, or start from a template. New workflows stay off until you activate them.
+            </EmptyState>
+          )
         }
       >
         {(rows) => (
@@ -96,6 +128,43 @@ export default function WorkflowsPage() {
           </ul>
         )}
       </Async>
+      <h2 className="mb-2 mt-6 font-semibold">Your own workflow</h2>
+      <Card>
+        <p className="mb-2 text-sm text-muted">
+          Starts as a draft that saves a reply and does not send it. You can change every step on the next page.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Name" className="min-w-60 flex-1">
+            <Input aria-label="Workflow name" value={name} placeholder="Fan asks for the song link" onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Button
+            variant="primary"
+            onClick={async () => {
+              try {
+                setError('');
+                const created = await post<{ id: string }>('/workflows', {
+                  name: name.trim() || 'My workflow',
+                  description: '',
+                  mode: 'DRAFT_ONLY',
+                  connectionIds: [],
+                  definition: blankWorkflow(),
+                });
+                await refresh('/workflows');
+                router.push(`/workflows/${created.id}`);
+              } catch (e) {
+                const localId = e instanceof ApiError ? (e.details as { localId?: string } | undefined)?.localId : undefined;
+                if (e instanceof ApiError && e.code === 'OFFLINE_QUEUED' && localId) {
+                  router.push(`/workflows/${localId}`);
+                  return;
+                }
+                setError((e as Error).message);
+              }
+            }}
+          >
+            Create workflow
+          </Button>
+        </div>
+      </Card>
       <h2 className="mb-2 mt-6 font-semibold">Templates</h2>
       <Async res={tpl}>
         {(rows) => (

@@ -3,6 +3,8 @@ import {
   createBackup,
   detectNearDuplicates,
   executePublish,
+  pollRunningLtx,
+  submitQueuedLtx,
   evictPreviews,
   linkPendingGenerationOutputs,
   listConnectionsForSync,
@@ -69,6 +71,12 @@ async function each<T>(d: WorkerDeps, items: T[], name: string, fn: (item: T) =>
     }
   }
   return { ok, failed };
+}
+
+export async function jobLtx(d: WorkerDeps) {
+  const queued = await submitQueuedLtx(d.db, d.env);
+  const running = await pollRunningLtx(d.db, d.env);
+  return { queued: queued.length, ...running };
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {
@@ -247,6 +255,7 @@ export async function jobPublish(d: WorkerDeps, draftId: string) {
 
 export const JOB_TABLE = {
   heartbeat: jobHeartbeat,
+  ltx: jobLtx,
   events: jobEvents,
   actions: jobActions,
   'social-sync': jobSocialSync,

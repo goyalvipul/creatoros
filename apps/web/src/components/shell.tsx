@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, post, refresh, setUnauthorizedHandler, useApi } from '@/lib/api';
+import { clearOutboxErrors, flushOutbox, useOutbox } from '@/lib/outbox';
 import { canOpen, navFor } from './nav';
 import { CommandPalette, QuickAdd } from './palette';
 import { Button, Spinner, useToast } from './ui';
@@ -41,6 +42,34 @@ export function ThemeToggle() {
     >
       {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
     </Button>
+  );
+}
+
+function OfflineSyncBanner() {
+  const box = useOutbox();
+  if (!box.count && !box.note) return null;
+  const waiting = box.count === 1 ? '1 change is saved on this phone.' : `${box.count} changes are saved on this phone.`;
+  return (
+    <div className="border-b border-warn/30 bg-warn/10 px-4 py-2 text-sm">
+      {box.syncing
+        ? 'Saving to Creator OS…'
+        : box.note
+          ? box.note
+          : box.online
+            ? `${waiting} Waiting to sync.`
+            : `${waiting} They will sync when you are back online.`}
+      {box.note ? (
+        <button
+          className="ml-2 font-medium text-accent underline"
+          onClick={() => {
+            clearOutboxErrors();
+            void flushOutbox(true);
+          }}
+        >
+          Try again
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -258,6 +287,8 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
           </div>
         </header>
+
+        <OfflineSyncBanner />
 
         {setupIncomplete && path !== '/setup' && (
           <div className="border-b border-warn/30 bg-warn/10 px-4 py-2 text-sm">

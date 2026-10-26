@@ -132,3 +132,9 @@ Run integration tests: `Remove-Item Env:TEST_DATABASE_URL; . .\infra\scripts\doc
 ## Invoice documents
 
 - New and edit invoices are pages (`/collaborations/invoices/new`, `/collaborations/invoices/[id]`). Fields match a paper invoice: date, due, number, currency, from, to, line items (description, quantity, unit price, tax percent), and bank details at the end. Line amount, subtotal, tax, and amount due are calculated. The stored invoice total is that amount due. An older invoice with no lines opens as one line at its existing amount. Migration `0013_invoice_document`. Not executed here.
+
+## ComfyUI LTX (2026-10-25)
+
+- Implemented: owner page `/comfy` with an LTX tab and a MiniMax H3 tab that does not run. Machines are saved by private URL (`0018_comfy_ltx`). The API prompt is posted to the selected ComfyUI. The editor graph is not. Validate is local. Check reads stats and model names.
+- Evidence: `packages/domain/src/ltx.test.ts` against the API file. Both ComfyUI addresses answered `/system_stats` from this server (3060 12GB, 3090 24GB). A full render was not started from here.
+- 2026-10-25: the ComfyUI page threw when `preset` was null because `.dockerignore` dropped `docs/` and the API file never reached the image. The form now renders without it, and the file is also stored at `packages/services/ltx/`. Offline creates go into a phone queue (`apps/web/src/lib/outbox.ts`) and replay with the same Idempotency-Key. Not browser-verified on a phone.

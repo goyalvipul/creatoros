@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
   ActionButton,
@@ -16,28 +16,42 @@ import {
   StateBadge,
   Textarea,
 } from '@/components/ui';
+import { WorkflowCanvas, type WfDef } from '@/components/workflow-canvas';
 import { patch, post, refresh, useApi } from '@/lib/api';
+import { isLocalId, localWorkflow, useOutbox } from '@/lib/outbox';
 import { title as titleCase, when } from '@/lib/format';
 
 export default function WorkflowPage() {
   const { id } = useParams<{ id: string }>();
-  const res = useApi<any>(`/workflows/${id}`);
-  const accounts = useApi<any[]>('/socials/accounts');
-  const execs = useApi<any[]>('/workflows/executions', { query: { workflowId: id } });
-  const [json, setJson] = useState('');
+  const router = useRouter();
+  const phone = isLocalId(id);
+  useOutbox();
+  const local = phone ? localWorkflow(id) : null;
+  const res = useApi<any>(phone ? null : `/workflows/${id}`);
+  const accounts = useApi<any[]>(phone ? null : '/socials/accounts');
+  const execs = useApi<any[]>(phone ? null : '/workflows/executions', { query: { workflowId: id } });
+  const [def, setDef] = useState<WfDef | null>(null);
   const [conns, setConns] = useState<string[]>([]);
   const [mode, setMode] = useState('DRAFT_ONLY');
   const [testText, setTestText] = useState('Hi, I would love to collaborate!');
   const [sim, setSim] = useState<any>(null);
   const [error, setError] = useState('');
-  const w = res.data;
+  const w = phone ? local : res.data;
+  useEffect(() => {
+    const onSynced = (event: Event) => {
+      const detail = (event as CustomEvent<{ localId?: string; serverId?: string }>).detail;
+      if (detail?.localId === id && detail.serverId) router.replace(`/workflows/${detail.serverId}`);
+    };
+    window.addEventListener('cos-outbox-synced', onSynced);
+    return () => window.removeEventListener('cos-outbox-synced', onSynced);
+  }, [id, router]);
   useEffect(() => {
     if (w) {
-      setJson(JSON.stringify(w.definition, null, 2));
+      setDef(w.definition);
       setConns(w.connectionIds ?? []);
       setMode(w.mode);
     }
-  }, [w?.latestVersion, w?.id]);
+  }, [w?.latestVersion, w?.id, w?.updatedAt]);
   const guard = async (fn: () => Promise<unknown>) => {
     try {
       setError('');
@@ -48,9 +62,15 @@ export default function WorkflowPage() {
       throw e;
     }
   };
+  const shown = phone
+    ? { data: local ?? undefined, error: undefined, isLoading: false, mutate: () => undefined }
+    : res;
   return (
     <div>
-      <Async res={res}>
+      {phone && !local ? (
+        <p className="text-sm text-muted">This workflow was saved to Creator OS. Open Workflows if this page stays here.</p>
+      ) : null}
+      <Async res={shown}>
         {(wf) => (
           <>
             <PageHeader
@@ -62,23 +82,30 @@ export default function WorkflowPage() {
                   <ActionButton
                     variant="primary"
                     success="Activated"
+                    disabled={!!wf.pendingSync}
                     onAction={() => guard(() => post(`/workflows/${id}/activate`))}
                   >
                     Activate
                   </ActionButton>
-                  <ActionButton onAction={() => guard(() => post(`/workflows/${id}/pause`))}>
+                  <ActionButton disabled={!!wf.pendingSync} onAction={() => guard(() => post(`/workflows/${id}/pause`))}>
                     Pause
                   </ActionButton>
-                  <ActionButton onAction={() => guard(() => post(`/workflows/${id}/duplicate`))}>
+                  <ActionButton disabled={!!wf.pendingSync} onAction={() => guard(() => post(`/workflows/${id}/duplicate`))}>
                     Duplicate
                   </ActionButton>
                 </>
               }
             />
             {error && <Notice tone="bad">{error}</Notice>}
-            <Notice tone="info" title="Editor">
-              There is no drag-and-drop canvas yet: steps are edited as JSON (validated on save). Saving
-              creates a new version; an Automatic workflow must pass a test again before it can be activated.
+            {wf.pendingSync ? (
+              <Notice tone="warn" dismissible={false} title="On this phone">
+                This workflow is not in Creator OS yet. Keep editing. It will sync when you are back online. Turning it on waits until then.
+              </Notice>
+            ) : null}
+            <Notice tone="info" title="How a workflow runs">
+              Drag the cards into order, or use Move up and Move down. Saving creates a new version. An
+              automatic workflow must pass a test again before it can be activated. A reply is not sent unless
+              the mode is Fully automatic and you have turned that on.
             </Notice>
             <div className="mt-4 grid gap-4 lg:grid-cols-2">
               <Card>
@@ -106,23 +133,18 @@ export default function WorkflowPage() {
                     ))}
                   </div>
                 </Field>
-                <Textarea
-                  aria-label="Workflow JSON"
-                  className="font-mono text-xs"
-                  rows={16}
-                  value={json}
-                  onChange={(e) => setJson(e.target.value)}
-                />
+                {def && <WorkflowCanvas def={def} onChange={setDef} />}
                 <div className="mt-2">
                   <ActionButton
                     variant="primary"
                     success="Saved as a new version"
+                    disabled={!def}
                     onAction={() =>
                       guard(() =>
                         patch(`/workflows/${id}`, {
                           mode,
                           connectionIds: conns,
-                          definition: JSON.parse(json),
+                          definition: def,
                         }),
                       )
                     }
@@ -130,6 +152,10 @@ export default function WorkflowPage() {
                     Save new version
                   </ActionButton>
                 </div>
+                <details className="mt-3 text-xs">
+                  <summary className="cursor-pointer text-muted">Saved definition</summary>
+                  <Textarea aria-label="Workflow JSON" className="mt-2 font-mono" rows={8} readOnly value={JSON.stringify(def, null, 2)} />
+                </details>
               </Card>
               <Card>
                 <CardTitle>Test (dry run, never sends)</CardTitle>
@@ -137,6 +163,7 @@ export default function WorkflowPage() {
                   <Input value={testText} onChange={(e) => setTestText(e.target.value)} />
                 </Field>
                 <ActionButton
+                  disabled={!!wf.pendingSync}
                   onAction={() =>
                     guard(async () =>
                       setSim(

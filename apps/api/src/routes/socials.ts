@@ -24,6 +24,8 @@ import {
   platformCatalog,
   scheduledContent,
   socialsOverview,
+  analyseSocialTrends,
+  socialTrendMessages,
   updateThreadLocal,
   createWorkflow,
   deleteWorkflow,
@@ -344,6 +346,27 @@ export function socialsRoutes(app: FastifyInstance, deps: AppDeps) {
       query: z.object({ account: uuid.optional(), days: z.coerce.number().int().min(1).max(365).optional() }),
     },
     ({ ctx, query }) => socialsOverview(ctx, { connectionId: query.account, days: query.days }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/socials/trends',
+      tag: 'Socials',
+      summary: 'Group stored DMs and comments into trends. Does not call a platform and does not send.',
+      body: z.object({ days: z.number().int().min(1).max(90).optional() }),
+    },
+    ({ ctx, body }) => analyseSocialTrends(ctx, body.days),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/socials/trends/:id',
+      tag: 'Socials',
+      summary: 'Every stored message in one trend',
+      params: z.object({ id: z.string().min(1).max(80) }),
+      query: z.object({ days: z.coerce.number().int().min(1).max(90).optional() }),
+    },
+    ({ ctx, params, query }) => socialTrendMessages(ctx, params.id, query.days),
   );
   route(
     {

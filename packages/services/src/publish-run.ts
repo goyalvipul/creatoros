@@ -11,6 +11,7 @@ import {
   socialAccounts,
   sql,
 } from '@creatoros/db';
+import { parseLocalDateTime } from '@creatoros/domain';
 import {
   refreshGoogleToken,
   UploadOutcome,
@@ -96,7 +97,7 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const drafts = rowsOf<any>(
     await ctx.db.execute(sql`
       select d.id, d.item_id as "itemId", d.social_account_id as "accountId", d.title, d.caption, d.hashtags, d.privacy,
-             d.content_form as "contentForm",
+             d.content_form as "contentForm", d.scheduled_at as "scheduledAt",
              d.upload_state as "uploadState", d.error, d.publication_id as "publicationId",
              r.canonical_url as url, r.state as "recordState"
       from publish_drafts d
@@ -252,8 +253,177 @@ function draftView(d: typeof publishDrafts.$inferSelect) {
     uploadState: d.uploadState,
     error: d.error,
     publicationId: d.publicationId,
+    scheduledAt: d.scheduledAt,
     duplicate: false,
   };
+}
+
+export interface ScheduleRequest extends PublishRequest {
+  plannedLocal: string;
+  timezone?: string;
+}
+
+/**
+ * Saves the same per-platform text as Publish, and posts when scheduledAt arrives.
+ * The worker claims SCHEDULED rows; nothing is sent at save time.
+ */
+export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
+  const [item] = await ctx.db
+    .select()
+    .from(publishItems)
+    .where(and(eq(publishItems.id, input.itemId), eq(publishItems.orgId, ctx.orgId)));
+  if (!item) throw notFound('Attached file');
+  const accounts = await publishAccounts(ctx);
+  const account = accounts.find((a) => a.id === input.socialAccountId);
+  if (!account) throw notFound('Account');
+  if (!account.canPublish) throw conflict(account.reason, undefined, 'CANNOT_PUBLISH');
+  if (account.platform === 'youtube' && !input.privacy)
+    throw badRequest('Choose a privacy setting. Nothing is published as public unless you pick Public.');
+  if (account.platform === 'youtube' && !input.title?.trim()) throw badRequest('A YouTube title is required.');
+  if (account.platform === 'youtube' && input.contentForm !== 'VIDEO' && input.contentForm !== 'SHORT')
+    throw badRequest('Choose Video or Short.');
+  const tzRows = rowsOf<{ timezone: string }>(
+    await ctx.db.execute(sql`select timezone from organizations where id = ${ctx.orgId}`),
+  );
+  const tz = input.timezone || tzRows[0]?.timezone || 'America/Vancouver';
+  let scheduledAt: Date;
+  try {
+    scheduledAt = parseLocalDateTime(input.plannedLocal, tz);
+  } catch {
+    throw badRequest('Enter a date and time.');
+  }
+  if (Number.isNaN(scheduledAt.getTime())) throw badRequest('Enter a date and time.');
+  if (scheduledAt.getTime() < Date.now() - 60_000) throw badRequest('Pick a time that has not already passed.');
+
+  const [existing] = await ctx.db
+    .select()
+    .from(publishDrafts)
+    .where(and(eq(publishDrafts.itemId, item.id), eq(publishDrafts.socialAccountId, input.socialAccountId)));
+  if (
+    existing &&
+    (existing.uploadState === 'QUEUED' ||
+      existing.uploadState === 'UPLOADING' ||
+      existing.uploadState === 'PUBLISHED' ||
+      existing.uploadState === 'UNCERTAIN')
+  )
+    throw conflict(
+      existing.uploadState === 'PUBLISHED'
+        ? 'This file is already published to that account.'
+        : 'This upload is already in progress.',
+      undefined,
+      'ALREADY_PUBLISHING',
+    );
+
+  const text = {
+    title: input.title?.trim() || null,
+    caption: input.caption?.trim() || null,
+    hashtags: (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
+    privacy: (input.privacy ?? 'PUBLIC') as 'PUBLIC',
+  };
+  return ctx.db.transaction(async (tx) => {
+    let publicationId = existing?.publicationId ?? null;
+    if (publicationId) {
+      const [cur] = await tx
+        .select({ state: publicationRecords.state })
+        .from(publicationRecords)
+        .where(eq(publicationRecords.id, publicationId));
+      if (cur && cur.state !== 'PUBLISHED_VERIFIED' && cur.state !== 'PUBLISHED_MANUAL') {
+        await tx
+          .update(publicationRecords)
+          .set({
+            title: text.title,
+            caption: text.caption,
+            hashtags: text.hashtags,
+            privacy: text.privacy,
+            state: 'SCHEDULED',
+            plannedAt: scheduledAt,
+            plannedTimezone: tz,
+            fileInstanceId: item.fileInstanceId,
+            failureReason: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(publicationRecords.id, publicationId));
+      } else publicationId = null;
+    }
+    if (!publicationId) {
+      const [rec] = await tx
+        .insert(publicationRecords)
+        .values({
+          orgId: ctx.orgId,
+          variantId: item.variantId,
+          fileInstanceId: item.fileInstanceId,
+          socialAccountId: account.id,
+          provider: account.platform as 'youtube',
+          title: text.title,
+          caption: text.caption,
+          hashtags: text.hashtags,
+          privacy: text.privacy,
+          state: 'SCHEDULED',
+          stateProvenance: 'USER_ENTERED',
+          stateEvidence: 'Scheduled to publish from Creator OS',
+          plannedAt: scheduledAt,
+          plannedTimezone: tz,
+          createdBy: ctx.userId,
+        })
+        .returning();
+      publicationId = rec!.id;
+      await tx.insert(publicationStatusEvents).values({
+        orgId: ctx.orgId,
+        publicationId,
+        event: 'scheduled',
+        toState: 'SCHEDULED',
+        source: 'user',
+        provenance: 'USER_ENTERED',
+        actorUserId: ctx.userId,
+      });
+    }
+    const values = {
+      ...text,
+      contentForm: input.contentForm ?? null,
+      requestId: input.requestId,
+      uploadState: 'SCHEDULED',
+      scheduledAt,
+      publicationId,
+      error: null,
+      updatedAt: new Date(),
+    };
+    let draft = existing;
+    if (existing) {
+      const [u] = await tx.update(publishDrafts).set(values).where(eq(publishDrafts.id, existing.id)).returning();
+      draft = u!;
+    } else {
+      const [c] = await tx
+        .insert(publishDrafts)
+        .values({ orgId: ctx.orgId, itemId: item.id, socialAccountId: input.socialAccountId, ...values })
+        .returning();
+      draft = c!;
+    }
+    await audit({ ...ctx, db: tx }, 'publish.scheduled', { type: 'publish_draft', id: draft!.id }, undefined, {
+      platform: account.platform,
+      scheduledAt: scheduledAt.toISOString(),
+    });
+    return { ...draftView(draft!), scheduledAt };
+  });
+}
+
+/** Claims due schedules and returns their ids. The worker then runs the same upload as Publish. */
+export async function claimDuePublishes(db: Ctx['db'], limit = 5) {
+  return rowsOf<{ id: string; orgId: string }>(
+    await db.execute(sql`
+      with due as (
+        select id from publish_drafts
+        where upload_state = 'SCHEDULED' and scheduled_at is not null and scheduled_at <= now()
+        order by scheduled_at
+        limit ${limit}
+        for update skip locked
+      )
+      update publish_drafts d
+      set upload_state = 'QUEUED', updated_at = now()
+      from due
+      where d.id = due.id
+      returning d.id, d.org_id as "orgId"
+    `),
+  );
 }
 
 /** Runs one queued upload. A row that is not QUEUED is left alone, so a retry cannot send the file twice. */
@@ -289,6 +459,17 @@ export async function executePublish(
       .update(publishDrafts)
       .set({ uploadState: state, error: error.slice(0, 500), updatedAt: new Date() })
       .where(eq(publishDrafts.id, claimed.id));
+    if (claimed.publicationId) {
+      await ctx.db
+        .update(publicationRecords)
+        .set({ state: 'FAILED', failureReason: error.slice(0, 500), updatedAt: new Date() })
+        .where(
+          and(
+            eq(publicationRecords.id, claimed.publicationId),
+            sql`${publicationRecords.state} in ('SCHEDULED','PLANNED','READY','SUBMITTED','PROCESSING')`,
+          ),
+        );
+    }
     return { ...draftView(claimed), uploadState: state, error };
   };
   try {
@@ -370,27 +551,46 @@ export async function executePublish(
       });
     } else return fail('FAILED', 'Publishing is not available for this platform.');
 
-    const [rec] = await ctx.db
-      .insert(publicationRecords)
-      .values({
-        orgId: ctx.orgId,
-        variantId: item.variantId,
-        fileInstanceId: item.fileInstanceId,
-        socialAccountId: account.id,
-        provider: account.platform as 'youtube',
-        externalPostId: result.externalId,
-        canonicalUrl: result.url,
-        title: claimed.title?.trim() || claimed.caption?.trim().split('\n')[0]?.slice(0, 300) || null,
-        caption: claimed.caption,
-        hashtags: claimed.hashtags ?? [],
-        privacy: (claimed.privacy as 'PUBLIC') || 'PUBLIC',
-        state: 'PUBLISHED_VERIFIED',
-        stateProvenance: 'VERIFIED_PLATFORM',
-        stateEvidence: 'Uploaded by Creator OS when you pressed Publish',
-        publishedAt: new Date(),
-        createdBy: ctx.userId,
-      })
-      .returning();
+    const publishedFields = {
+      provider: account.platform as 'youtube',
+      externalPostId: result.externalId,
+      canonicalUrl: result.url,
+      title: claimed.title?.trim() || claimed.caption?.trim().split('\n')[0]?.slice(0, 300) || null,
+      caption: claimed.caption,
+      hashtags: claimed.hashtags ?? [],
+      privacy: (claimed.privacy as 'PUBLIC') || 'PUBLIC',
+      state: 'PUBLISHED_VERIFIED' as const,
+      stateProvenance: 'VERIFIED_PLATFORM' as const,
+      stateEvidence: claimed.scheduledAt
+        ? 'Uploaded by Creator OS at the scheduled time'
+        : 'Uploaded by Creator OS when you pressed Publish',
+      publishedAt: new Date(),
+      fileInstanceId: item.fileInstanceId,
+      updatedAt: new Date(),
+    };
+    let recId = claimed.publicationId;
+    if (recId) {
+      const [updated] = await ctx.db
+        .update(publicationRecords)
+        .set(publishedFields)
+        .where(eq(publicationRecords.id, recId))
+        .returning();
+      if (!updated) recId = null;
+    }
+    if (!recId) {
+      const [rec] = await ctx.db
+        .insert(publicationRecords)
+        .values({
+          orgId: ctx.orgId,
+          variantId: item.variantId,
+          socialAccountId: account.id,
+          createdBy: ctx.userId,
+          ...publishedFields,
+        })
+        .returning();
+      recId = rec!.id;
+    }
+    const rec = { id: recId };
     await ctx.db.insert(publicationStatusEvents).values({
       orgId: ctx.orgId,
       publicationId: rec!.id,

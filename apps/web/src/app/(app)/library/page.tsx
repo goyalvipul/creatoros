@@ -32,6 +32,7 @@ import {
   Td,
   useToast,
 } from '@/components/ui';
+import { SwipeDeleteRow } from '@/components/swipe-delete';
 import { del, post, put, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
 import { ASSET_KINDS, VARIANT_TYPES, useBrands, useRoots } from '@/lib/options';
@@ -245,120 +246,166 @@ function FilePage({
     query: { ...filters, cursor, limit: 50 },
   });
   const me = useMe();
+  const toast = useToast();
+  const isOwner = me.data?.user?.role === 'OWNER';
   const tz = me.data?.organization?.timezone;
+  const [confirmDelete, setConfirmDelete] = useState<{
+    id: string;
+    fileName: string;
+    displayPath?: string;
+    deviceName?: string;
+  } | null>(null);
   return (
-    <Async res={res}>
-      {(page) => (
-        <>
-          {first && page.items.length === 0 && (
-            <EmptyState title="No files match">
-              Pair a PC and add a folder in Storage & Devices, or loosen the filters.
-            </EmptyState>
-          )}
-          {page.items.length > 0 && (
-            <ul
-              className={clsx(
-                'divide-y divide-border overflow-hidden rounded-xl border border-border bg-panel',
-                !first && 'mt-px',
-              )}
-            >
-              {page.items.map((f) => {
-                const Icon = kindIcon[f.fileType as keyof typeof kindIcon] ?? FileIcon;
-                const platforms = ['youtube', 'instagram', 'tiktok'] as const;
-                const tags: { name?: string }[] = Array.isArray(f.tags) ? f.tags : [];
-                const hasMark = (platform: string) =>
-                  tags.some((t) => t.name?.toLowerCase() === `uploaded:${platform}`);
-                const isExtra = tags.some((t) => t.name?.toLowerCase() === 'extra');
-                return (
-                  <li key={f.id}>
-                    <button
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2"
-                      onClick={() => onOpen(f.id)}
-                    >
-                      {f.hasPreview ? (
-                        <img
-                          src={`/api/v1/files/${f.id}/preview`}
-                          alt=""
-                          className="size-10 shrink-0 rounded object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className="grid size-10 shrink-0 place-items-center rounded bg-panel2 text-muted">
-                          <Icon className="size-5" />
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{f.fileName}</span>
-                        <span className="block truncate text-xs text-muted">
-                          {f.deviceName} · {f.rootLabel} · {bytes(f.size)} · {when(f.mtime, tz, false)}
-                        </span>
-                        <span className="flex gap-1 flex-wrap mt-1">
-                          {f.orientation && f.orientation !== 'UNKNOWN' && (
-                            <Badge tone="info" className="text-xs">
-                              {f.width}×{f.height}{' '}
-                              {f.orientation === 'LANDSCAPE'
-                                ? '16:9'
-                                : f.orientation === 'PORTRAIT'
-                                  ? '9:16'
-                                  : '1:1'}
-                            </Badge>
+    <>
+      <Async res={res}>
+        {(page) => (
+          <>
+            {first && page.items.length === 0 && (
+              <EmptyState title="No files match">
+                Pair a PC and add a folder in Storage & Devices, or loosen the filters.
+              </EmptyState>
+            )}
+            {page.items.length > 0 && (
+              <ul
+                className={clsx(
+                  'divide-y divide-border overflow-hidden rounded-xl border border-border bg-panel',
+                  !first && 'mt-px',
+                )}
+              >
+                {page.items.map((f) => {
+                  const Icon = kindIcon[f.fileType as keyof typeof kindIcon] ?? FileIcon;
+                  const platforms = ['youtube', 'instagram', 'tiktok'] as const;
+                  const tags: { name?: string }[] = Array.isArray(f.tags) ? f.tags : [];
+                  const hasMark = (platform: string) =>
+                    tags.some((t) => t.name?.toLowerCase() === `uploaded:${platform}`);
+                  const isExtra = tags.some((t) => t.name?.toLowerCase() === 'extra');
+                  const canSwipeDelete =
+                    isOwner && f.effectiveAvailability !== 'CONFIRMED_MISSING';
+                  return (
+                    <li key={f.id}>
+                      <SwipeDeleteRow
+                        enabled={canSwipeDelete}
+                        onDelete={() =>
+                          setConfirmDelete({
+                            id: f.id,
+                            fileName: f.fileName,
+                            displayPath: f.displayPath,
+                            deviceName: f.deviceName,
+                          })
+                        }
+                      >
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2"
+                          onClick={() => onOpen(f.id)}
+                        >
+                          {f.hasPreview ? (
+                            <img
+                              src={`/api/v1/files/${f.id}/preview`}
+                              alt=""
+                              className="size-10 shrink-0 rounded object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <span className="grid size-10 shrink-0 place-items-center rounded bg-panel2 text-muted">
+                              <Icon className="size-5" />
+                            </span>
                           )}
-                          {platforms.map((p) => (
-                            <button
-                              key={p}
-                              className={`text-xs px-2 py-1 rounded border ${
-                                hasMark(p)
-                                  ? 'bg-accent text-white border-accent'
-                                  : 'bg-panel2 text-muted border-border hover:border-accent'
-                              }`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                put(`/library/marks`, {
-                                  fileInstanceId: f.id,
-                                  tag: `uploaded:${p}`,
-                                  on: !hasMark(p),
-                                })
-                                  .then(() => refresh('/library'))
-                                  .catch((err) => console.error(err));
-                              }}
-                              title="Manual mark: I uploaded it"
-                            >
-                              {p}
-                            </button>
-                          ))}
-                          {isExtra && <Badge tone="warn">Extra</Badge>}
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 flex-col items-end gap-1">
-                        <StateBadge state={f.effectiveAvailability} />
-                        {f.otherCopies > 0 && <Badge tone="info">{f.otherCopies + 1} copies</Badge>}
-                        {onAttach && f.fileType === 'VIDEO' && (
-                          <button
-                            type="button"
-                            className="rounded border border-border px-2 py-1 text-xs hover:border-accent"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAttach(f);
-                            }}
-                          >
-                            Add to title
-                          </button>
-                        )}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {last && page.nextCursor && (
-            <div className="mt-3 text-center">
-              <Button onClick={() => onMore(page.nextCursor!)}>Load more</Button>
-            </div>
-          )}
-        </>
-      )}
-    </Async>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{f.fileName}</span>
+                            <span className="block truncate text-xs text-muted">
+                              {f.deviceName} · {f.rootLabel} · {bytes(f.size)} · {when(f.mtime, tz, false)}
+                            </span>
+                            <span className="mt-1 flex flex-wrap gap-1">
+                              {f.orientation && f.orientation !== 'UNKNOWN' && (
+                                <Badge tone="info" className="text-xs">
+                                  {f.width}×{f.height}{' '}
+                                  {f.orientation === 'LANDSCAPE'
+                                    ? '16:9'
+                                    : f.orientation === 'PORTRAIT'
+                                      ? '9:16'
+                                      : '1:1'}
+                                </Badge>
+                              )}
+                              {platforms.map((p) => (
+                                <button
+                                  key={p}
+                                  type="button"
+                                  className={`rounded border px-2 py-1 text-xs ${
+                                    hasMark(p)
+                                      ? 'border-accent bg-accent text-white'
+                                      : 'border-border bg-panel2 text-muted hover:border-accent'
+                                  }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    put(`/library/marks`, {
+                                      fileInstanceId: f.id,
+                                      tag: `uploaded:${p}`,
+                                      on: !hasMark(p),
+                                    })
+                                      .then(() => refresh('/library'))
+                                      .catch((err) => console.error(err));
+                                  }}
+                                  title="Manual mark: I uploaded it"
+                                >
+                                  {p}
+                                </button>
+                              ))}
+                              {isExtra && <Badge tone="warn">Extra</Badge>}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 flex-col items-end gap-1">
+                            <StateBadge state={f.effectiveAvailability} />
+                            {f.otherCopies > 0 && <Badge tone="info">{f.otherCopies + 1} copies</Badge>}
+                            {onAttach && f.fileType === 'VIDEO' && (
+                              <button
+                                type="button"
+                                className="rounded border border-border px-2 py-1 text-xs hover:border-accent"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onAttach(f);
+                                }}
+                              >
+                                Add to title
+                              </button>
+                            )}
+                          </span>
+                        </button>
+                      </SwipeDeleteRow>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {last && page.nextCursor && (
+              <div className="mt-3 text-center">
+                <Button onClick={() => onMore(page.nextCursor!)}>Load more</Button>
+              </div>
+            )}
+          </>
+        )}
+      </Async>
+      <FormDialog
+        open={Boolean(confirmDelete)}
+        onClose={() => setConfirmDelete(null)}
+        title="Delete from this PC?"
+        submitLabel="Delete file"
+        danger
+        onSubmit={async () => {
+          if (!confirmDelete) return;
+          await post(`/files/${confirmDelete.id}/operations`, { kind: 'DELETE' });
+          toast.ok('Delete queued on this PC');
+          setConfirmDelete(null);
+          await refresh('/library', `/files/${confirmDelete.id}`);
+        }}
+      >
+        <Notice tone="warn" title="This deletes the file from the disk">
+          It does not go to the Recycle Bin. Posts that already went out stay.
+          {confirmDelete?.deviceName ? ` Runs on ${confirmDelete.deviceName}.` : ''}
+        </Notice>
+        <p className="break-all font-mono text-xs text-muted">{confirmDelete?.displayPath || confirmDelete?.fileName}</p>
+      </FormDialog>
+    </>
   );
 }
 
@@ -379,7 +426,6 @@ function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; on
   const [mode, setMode] = useState<'rename' | 'move' | 'delete' | null>(null);
   const [name, setName] = useState(file.fileName ?? '');
   const [folder, setFolder] = useState(parentPath(file.copyPaths?.local || file.displayPath || ''));
-  const [typed, setTyped] = useState('');
   const folders = useApi<{ folders: string[] }>(mode === 'move' ? `/files/${fileId}/folders` : null);
   useEffect(() => {
     if (!waiting) return;
@@ -403,7 +449,6 @@ function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; on
   const submit = async (body: { kind: 'RENAME'; name: string } | { kind: 'MOVE'; folder: string } | { kind: 'DELETE' }) => {
     await post(`/files/${fileId}/operations`, body);
     setMode(null);
-    setTyped('');
     onChanged();
   };
   return (
@@ -448,7 +493,7 @@ function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; on
           <Button size="sm" onClick={() => { setFolder(parentPath(path || '')); setMode('move'); }}>
             Move
           </Button>
-          <Button size="sm" variant="danger" onClick={() => { setTyped(''); setMode('delete'); }}>
+          <Button size="sm" variant="danger" onClick={() => setMode('delete')}>
             Delete
           </Button>
         </div>
@@ -521,35 +566,22 @@ function FileOnDisk({ file, fileId, onChanged }: { file: any; fileId: string; on
           </div>
         </form>
       )}
-      {mode === 'delete' && (
-        <form
-          className="mt-3 space-y-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              await submit({ kind: 'DELETE' });
-              toast.ok('Delete queued on this PC');
-            } catch (err) {
-              toast.error(err);
-            }
-          }}
-        >
-          <Notice tone="warn" title="This deletes the file from the PC">
-            <code className="break-all text-xs">{path}</code>
-          </Notice>
-          <Field label="Type delete to confirm">
-            <Input aria-label="Type delete to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} />
-          </Field>
-          <div className="flex gap-2">
-            <Button type="submit" variant="danger" disabled={typed.trim().toLowerCase() !== 'delete'}>
-              Delete from this PC
-            </Button>
-            <Button type="button" onClick={() => setMode(null)}>
-              Back
-            </Button>
-          </div>
-        </form>
-      )}
+      <FormDialog
+        open={mode === 'delete'}
+        onClose={() => setMode(null)}
+        title="Delete from this PC?"
+        submitLabel="Delete file"
+        danger
+        onSubmit={async () => {
+          await submit({ kind: 'DELETE' });
+          toast.ok('Delete queued on this PC');
+        }}
+      >
+        <Notice tone="warn" title="This deletes the file from the disk">
+          It does not go to the Recycle Bin. Posts that already went out stay.
+        </Notice>
+        <p className="break-all font-mono text-xs text-muted">{path}</p>
+      </FormDialog>
     </Card>
   );
 }

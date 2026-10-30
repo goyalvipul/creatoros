@@ -62,6 +62,7 @@ export function ago(value: unknown): string {
 }
 
 export function title(s: unknown): string {
+  if (s === 'IN_PROGRESS') return 'In-Progress';
   return String(s ?? '')
     .toLowerCase()
     .replace(/_/g, ' ')

@@ -1,4 +1,4 @@
-import type { ClipState } from './enums';
+import type { ClipState, ProjectStage } from './enums';
 
 export interface SceneLike {
   status: ClipState;
@@ -34,7 +34,7 @@ export function computeProjectProgress(scenes: SceneLike[]): ProjectProgress {
 }
 
 export interface StageSuggestion {
-  stage: string;
+  stage: ProjectStage;
   reason: string;
 }
 
@@ -44,11 +44,10 @@ export function suggestNextStage(
   progress: ProjectProgress,
   hasApprovedFinal: boolean,
 ): StageSuggestion | null {
-  if (current === 'APPROVED' && progress.running > 0)
-    return { stage: 'GENERATING', reason: 'Clips are queued or running.' };
-  if (current === 'GENERATING' && progress.total > 0 && progress.completed === progress.total)
-    return { stage: 'EDITING', reason: 'Every scene has a selected final.' };
-  if (current === 'QA' && hasApprovedFinal)
+  if (current === 'DRAFT' && (progress.running > 0 || progress.completed > 0))
+    return { stage: 'IN_PROGRESS', reason: 'Work has started on this project.' };
+  if (current === 'IN_PROGRESS' && hasApprovedFinal)
     return { stage: 'READY', reason: 'An approved final export exists.' };
+  if (current === 'READY') return { stage: 'PUBLISHED', reason: 'Mark published when the post is live.' };
   return null;
 }

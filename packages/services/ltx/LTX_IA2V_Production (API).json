@@ -417,6 +417,8 @@
       "resize_type.width": 1152,
       "resize_type.height": 2048,
       "quality": "ULTRA",
+      "strength": 1,
+      "image_encoding": "8-bit RGB",
       "images": [
         "366",
         0

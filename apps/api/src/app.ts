@@ -75,7 +75,7 @@ export async function buildApp(
       contentRoutes(v1, deps);
       workRoutes(v1, deps);
       socialsRoutes(v1, deps);
-      comfyRoutes(v1, deps);
+      await comfyRoutes(v1, deps);
     },
     { prefix: '/api/v1' },
   );

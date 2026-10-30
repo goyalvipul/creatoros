@@ -241,6 +241,18 @@ export async function jobSocialSync(d: WorkerDeps) {
   return out;
 }
 
+/** Turns due schedules into the same upload Publish uses. */
+export async function jobDuePublishes(d: WorkerDeps) {
+  const { claimDuePublishes, executePublish } = await import('@creatoros/services');
+  const due = await claimDuePublishes(d.db);
+  for (const row of due) {
+    await executePublish(systemCtx({ db: d.db, env: d.env }, row.orgId), row.id, {
+      fetch: d.overrides?.fetch as typeof fetch | undefined,
+    });
+  }
+  return { due: due.length };
+}
+
 /** One explicit Publish. The draft row is claimed from QUEUED, so a second delivery does not upload again. */
 export async function jobPublish(d: WorkerDeps, draftId: string) {
   const [row] = await d.db
@@ -255,6 +267,7 @@ export async function jobPublish(d: WorkerDeps, draftId: string) {
 
 export const JOB_TABLE = {
   heartbeat: jobHeartbeat,
+  'publish-due': jobDuePublishes,
   ltx: jobLtx,
   events: jobEvents,
   actions: jobActions,

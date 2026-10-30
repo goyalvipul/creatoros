@@ -27,7 +27,7 @@ import {
 import { CreativeFields, RichHtml, creativeFrom, creativePayload, type CreativeForm } from '@/components/creative-fields';
 import { ApiError, patch, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase, when } from '@/lib/format';
-import { PROJECT_STAGES } from '@/lib/options';
+import { PROJECT_STAGES, projectStageLabel } from '@/lib/options';
 
 const SCENE_STATUSES = ['PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SELECTED', 'REJECTED'];
 
@@ -109,7 +109,7 @@ export default function ProjectPage() {
                   >
                     {PROJECT_STAGES.map((s) => (
                       <option key={s} value={s}>
-                        {titleCase(s)}
+                        {projectStageLabel(s)}
                       </option>
                     ))}
                   </Select>
@@ -249,6 +249,34 @@ export default function ProjectPage() {
               </div>
 
               <div className="space-y-4">
+                <Card>
+                  <CardTitle>Publishing</CardTitle>
+                  {(p.variants ?? []).length === 0 ? (
+                    <p className="text-sm text-muted">
+                      No publishing variant yet. When you generate an LTX clip with this project selected, a variant named like this project is created and linked to that video.
+                    </p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {(p.variants as { id: string; titleMaster: string; readiness: string; format: string; fileName: string | null; createdAt: string }[]).map(
+                        (v) => (
+                          <li key={v.id}>
+                            <Link
+                              href={`/publishing/${v.id}`}
+                              className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-panel2"
+                            >
+                              <span className="font-medium">{v.titleMaster}</span>
+                              <Badge>{titleCase(v.readiness)}</Badge>
+                              <Badge tone="neutral">{titleCase(v.format)}</Badge>
+                              <span className="text-xs text-muted">
+                                {v.fileName ?? 'Video not in the library yet'} · {when(v.createdAt, tz)}
+                              </span>
+                            </Link>
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  )}
+                </Card>
                 <Card>
                   <CardTitle
                     action={

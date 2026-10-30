@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type HTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
@@ -142,12 +143,17 @@ export function Card({
   children,
   className,
   as: As = 'section',
+  ...rest
 }: {
   children: ReactNode;
   className?: string;
   as?: 'section' | 'div' | 'article';
-}) {
-  return <As className={clsx('rounded-xl border border-border bg-panel p-4', className)}>{children}</As>;
+} & Omit<HTMLAttributes<HTMLElement>, 'as'>) {
+  return (
+    <As className={clsx('rounded-xl border border-border bg-panel p-4', className)} {...rest}>
+      {children}
+    </As>
+  );
 }
 export function CardTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
@@ -358,8 +364,10 @@ const STATE_TONES: Record<string, keyof typeof tones> = {
   CONFIRMED: 'ok',
   NEW: 'info',
   DRAFT: 'neutral',
+  IN_PROGRESS: 'info',
   IN_PRODUCTION: 'info',
   RUNNING: 'info',
+  ARCHIVED: 'neutral',
   PENDING: 'neutral',
   STILL_WRITING: 'warn',
   MISSING_CANDIDATE: 'warn',

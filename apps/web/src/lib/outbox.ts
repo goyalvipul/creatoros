@@ -12,7 +12,7 @@ const MAX_ITEMS = 50;
  * fail honestly while offline.
  */
 const REFUSE =
-  /\/(generate|publish|mark-published|payments|reply|send|activate|simulate|rollback|operations|check|validate|pause-all|backup|restore|scan|sync)(\/|$)/;
+  /\/(generate|publish|mark-published|payments|reply|send|activate|simulate|rollback|operations|check|validate|pause-all|backup|restore|scan|sync|trends)(\/|$)/;
 
 export type OutboxItem = {
   id: string;

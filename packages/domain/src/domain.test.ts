@@ -332,9 +332,9 @@ describe('production progress', () => {
 
   it('only suggests stage changes; never decides', () => {
     const all = computeProjectProgress([{ status: 'SELECTED' }] as any);
-    expect(suggestNextStage('GENERATING', all, false)?.stage).toBe('EDITING');
-    expect(suggestNextStage('QA', all, true)?.stage).toBe('READY');
-    expect(suggestNextStage('DRAFT', all, true)).toBeNull();
+    expect(suggestNextStage('DRAFT', all, false)?.stage).toBe('IN_PROGRESS');
+    expect(suggestNextStage('IN_PROGRESS', all, true)?.stage).toBe('READY');
+    expect(suggestNextStage('DRAFT', { ...all, completed: 0, running: 0, pct: 0 }, false)).toBeNull();
   });
 });
 

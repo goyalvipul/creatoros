@@ -32,6 +32,7 @@ import {
   createChannel,
   createIdea,
   deleteIdea,
+  deleteProject,
   getIdea,
   createProject,
   createRecord,
@@ -61,6 +62,7 @@ import {
   listUnmatchedPublications,
   listVariants,
   requestPublish,
+  schedulePublish,
   unlinkPublishFile,
   markPublishedManual,
   publishingMatrix,
@@ -466,10 +468,21 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   );
   route(
     {
+      method: 'DELETE',
+      url: '/projects/:id',
+      tag: 'Production',
+      summary: 'Delete a production project (owner). Soft-delete; media and posts stay.',
+      params: idParam,
+      role: 'OWNER',
+    },
+    ({ ctx, params }) => deleteProject(ctx, params.id),
+  );
+  route(
+    {
       method: 'POST',
       url: '/projects/:id/stage',
       tag: 'Production',
-      summary: 'Move a project to another stage (checklist gates READY/DISTRIBUTING)',
+      summary: 'Move a project to another stage (checklist gates READY/PUBLISHED)',
       params: idParam,
       body: z.object({
         to: z.enum(PROJECT_STAGE),
@@ -967,6 +980,32 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       }),
     },
     ({ ctx, body }) => requestPublish(ctx, body, { enqueue: deps.enqueue }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/publishing/schedule',
+      tag: 'Publishing',
+      summary: 'Save publish details and post at the given local time. Nothing is sent until then.',
+      status: 201,
+      body: z.object({
+        itemId: uuid,
+        socialAccountId: uuid,
+        requestId: uuid,
+        title: z.string().max(300).nullable().optional(),
+        caption: z.string().max(5000).nullable().optional(),
+        hashtags: z.array(z.string().max(100)).max(30).optional(),
+        privacy: z.enum(PRIVACY).nullable().optional(),
+        contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
+        plannedLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/),
+        timezone: z.string().max(64).optional(),
+      }),
+    },
+    ({ ctx, body }) =>
+      schedulePublish(ctx, {
+        ...body,
+        plannedLocal: body.plannedLocal.slice(0, 16),
+      }),
   );
 
   const recordBody = z.object({

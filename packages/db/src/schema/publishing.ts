@@ -184,6 +184,8 @@ export const publishDrafts = pgTable(
     privacy: text('privacy'),
     contentForm: text('content_form'),
     requestId: text('request_id'),
+    /** When set and upload_state is SCHEDULED, the worker publishes at this instant. */
+    scheduledAt: ts('scheduled_at'),
     uploadState: text('upload_state').notNull().default('DRAFT'),
     publicationId: uuid('publication_id').references(() => publicationRecords.id, { onDelete: 'set null' }),
     error: text('error'),

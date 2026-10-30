@@ -123,16 +123,7 @@ export const VARIANT_TYPE = [
 ] as const;
 
 export const IDEA_STATUS = ['NEW', 'RESEARCHING', 'APPROVED', 'REJECTED', 'ARCHIVED'] as const;
-export const PROJECT_STAGE = [
-  'DRAFT',
-  'APPROVED',
-  'GENERATING',
-  'EDITING',
-  'QA',
-  'READY',
-  'DISTRIBUTING',
-  'ARCHIVED',
-] as const;
+export const PROJECT_STAGE = ['DRAFT', 'IN_PROGRESS', 'READY', 'PUBLISHED', 'ARCHIVED'] as const;
 export type ProjectStage = (typeof PROJECT_STAGE)[number];
 export const PROJECT_TYPE = [
   'SONG',

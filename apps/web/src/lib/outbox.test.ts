@@ -19,6 +19,7 @@ describe('offline queue', () => {
     expect(queueable('PUT', '/comfy/ltx/draft')).toBe(true);
     expect(queueable('PATCH', '/ideas/abc')).toBe(true);
     expect(queueable('POST', '/comfy/ltx/generate')).toBe(false);
+    expect(queueable('POST', '/socials/trends')).toBe(false);
     expect(queueable('POST', '/workflows/abc/activate')).toBe(false);
     expect(queueable('POST', '/files/abc/operations')).toBe(false);
     expect(queueable('POST', '/threads/abc/reply')).toBe(false);

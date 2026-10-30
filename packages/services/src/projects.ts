@@ -389,18 +389,41 @@ export async function getProject(ctx: Ctx, id: string) {
         sql`select count(*)::int as n from logical_assets where project_id = ${id} and selected_version_id is not null`,
       ),
     )[0]!.n > 0;
+  const variants = rowsOf<{
+    id: string;
+    titleMaster: string;
+    readiness: string;
+    format: string;
+    assetId: string;
+    createdAt: Date;
+    fileName: string | null;
+  }>(
+    await ctx.db.execute(sql`
+      select v.id, v.title_master as "titleMaster", v.readiness, v.format::text as format, v.asset_id as "assetId",
+             v.created_at as "createdAt",
+             (select f.file_name from asset_file_links l
+                join file_instances f on f.id = l.file_instance_id
+               where l.asset_version_id = v.asset_version_id
+               order by l.primary_preference desc, l.created_at desc
+               limit 1) as "fileName"
+      from distribution_variants v
+      where v.org_id = ${ctx.orgId} and v.project_id = ${id}
+      order by v.created_at desc
+      limit 50`),
+  );
   return {
     ...p,
     scenes,
     checklist,
     decisions,
     history,
+    variants,
     progress,
     nextStageHint: suggestNextStage(p.stage, progress, approvedFinal),
   };
 }
 
-/** Stage changes are always an owner decision. Moving to READY/DISTRIBUTING needs the required checklist done unless forced (and then the override is recorded). */
+/** Stage changes are always an owner decision. Moving to READY/PUBLISHED needs the required checklist done unless forced (and then the override is recorded). */
 export async function changeStage(ctx: Ctx, id: string, to: ProjectStage, reason?: string, force = false) {
   if (!PROJECT_STAGE.includes(to)) throw badRequest(`Unknown stage ${to}`);
   return ctx.db.transaction(async (tx) => {
@@ -416,7 +439,7 @@ export async function changeStage(ctx: Ctx, id: string, to: ProjectStage, reason
       );
     if (!p) throw notFound('Project');
     if (p.stage === to) return p;
-    if (to === 'READY' || to === 'DISTRIBUTING') {
+    if (to === 'READY' || to === 'PUBLISHED') {
       const open = await tx
         .select({ label: projectChecklistItems.label })
         .from(projectChecklistItems)
@@ -440,7 +463,7 @@ export async function changeStage(ctx: Ctx, id: string, to: ProjectStage, reason
         stage: to,
         updatedAt: new Date(),
         completedAt:
-          (to === 'DISTRIBUTING' || to === 'ARCHIVED') && !p.completedAt ? new Date() : p.completedAt,
+          (to === 'PUBLISHED' || to === 'ARCHIVED') && !p.completedAt ? new Date() : p.completedAt,
       })
       .where(eq(creativeProjects.id, id))
       .returning();
@@ -462,6 +485,20 @@ export async function changeStage(ctx: Ctx, id: string, to: ProjectStage, reason
     );
     return after!;
   });
+}
+
+/** Soft-deletes a production project. Original media and linked publishing records stay. */
+export async function deleteProject(ctx: Ctx, id: string) {
+  const [row] = await ctx.db
+    .update(creativeProjects)
+    .set({ deletedAt: new Date(), updatedAt: new Date() })
+    .where(
+      and(eq(creativeProjects.id, id), eq(creativeProjects.orgId, ctx.orgId), isNull(creativeProjects.deletedAt)),
+    )
+    .returning({ id: creativeProjects.id });
+  if (!row) throw notFound('Project');
+  await audit(ctx, 'project.delete', { type: 'project', id });
+  return { id, removed: true };
 }
 
 // ------------------------------------------------------------- checklist

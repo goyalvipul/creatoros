@@ -190,10 +190,17 @@ export interface LtxDraftInput {
   width: number;
   height: number;
   fps: number;
+  loraName: string;
   loraStrength: number;
+  upscaleWidth: number;
+  upscaleHeight: number;
   workerId?: string | null;
   expectedVramGb?: number | null;
   wantUpscale?: boolean;
+  imageUploadName?: string | null;
+  imageUploadWorkerId?: string | null;
+  audioUploadName?: string | null;
+  audioUploadWorkerId?: string | null;
 }
 
 /** Local checks only. This does not contact a machine. */
@@ -207,8 +214,14 @@ export function validateLtxDraft(
     if (!ok) errors.push({ field, message });
   };
   if (opts.requireMedia) {
-    need('imageFileId', !!input.imageFileId, 'Choose the starting image from the library.');
-    need('audioFileId', !!input.audioFileId, 'Choose the song from the library.');
+    const imageReady = !!input.imageFileId || (!!input.imageUploadName && input.imageUploadWorkerId === input.workerId);
+    const audioReady = !!input.audioFileId || (!!input.audioUploadName && input.audioUploadWorkerId === input.workerId);
+    need('imageFileId', imageReady, input.imageUploadName && input.imageUploadWorkerId !== input.workerId
+      ? 'That image was uploaded to a different PC. Upload it again, or choose one from the library.'
+      : 'Choose a starting image from the library, or upload one to the PC you picked.');
+    need('audioFileId', audioReady, input.audioUploadName && input.audioUploadWorkerId !== input.workerId
+      ? 'That song was uploaded to a different PC. Upload it again, or choose one from the library.'
+      : 'Choose a song from the library, or upload one to the PC you picked.');
     need('prompt', input.prompt.trim().length > 0, 'The prompt is empty.');
   }
   need('audioStartSec', input.audioStartSec >= 0 && input.audioStartSec <= 3600, 'The start time has to be zero or later.');
@@ -238,7 +251,14 @@ export function validateLtxDraft(
     warnings.push({ field: 'width', message: 'Width or height is not a multiple of 32. The saved graph uses 576×1024.' });
   }
   need('fps', Number.isInteger(input.fps) && input.fps >= 1 && input.fps <= 60, 'Frame rate must be a whole number from 1 to 60. The saved graph uses 30.');
+  need(
+    'loraName',
+    input.loraName.trim().length > 0 && input.loraName.length <= 180 && !/[\\/]/.test(input.loraName),
+    'Choose a LoRA file name, without a folder.',
+  );
   need('loraStrength', input.loraStrength >= 0 && input.loraStrength <= 2, 'LoRA strength must be from 0 to 2.');
+  need('upscaleWidth', Number.isInteger(input.upscaleWidth) && input.upscaleWidth >= 64 && input.upscaleWidth <= 4096, 'Upscale width must be a whole number from 64 to 4096.');
+  need('upscaleHeight', Number.isInteger(input.upscaleHeight) && input.upscaleHeight >= 64 && input.upscaleHeight <= 4096, 'Upscale height must be a whole number from 64 to 4096.');
   if (opts.requireWorker && !input.workerId) {
     errors.push({ field: 'workerId', message: 'Choose the PC that should run this.' });
   } else if (!input.workerId) {
@@ -248,7 +268,7 @@ export function validateLtxDraft(
     warnings.push({
       field: 'workerId',
       message: input.wantUpscale
-        ? 'This graph was built for a 24GB card, and the upscale goes to 1152×2048. A 12GB card can be selected. It will fail if the models do not fit.'
+        ? `This graph was built for a 24GB card, and the upscale goes to ${input.upscaleWidth}×${input.upscaleHeight}. A 12GB card can be selected. It will fail if the models do not fit.`
         : 'This graph was built for a 24GB card. A 12GB card can be selected. It will fail if the models do not fit.',
     });
   }
@@ -354,7 +374,10 @@ export interface LtxPromptPatch {
   fps: number;
   durationSec: number;
   audioStartSec: number;
+  loraName: string;
   loraStrength: number;
+  upscaleWidth: number;
+  upscaleHeight: number;
   wantUpscale: boolean;
   filenamePrefix: string;
   seed: number;
@@ -380,15 +403,38 @@ export function buildLtxApiPrompt(graph: unknown, patch: LtxPromptPatch): Record
   set('379', 'value', patch.fps);
   set('378', 'value', patch.durationSec);
   set('383', 'start_index', patch.audioStartSec);
+  set('446', 'lora_name', patch.loraName);
   set('446', 'strength_model', patch.loraStrength);
   set('346', 'noise_seed', patch.seed);
   set('400', 'filename_prefix', patch.filenamePrefix);
   if (patch.wantUpscale) {
+    set('609', 'resize_type.width', patch.upscaleWidth);
+    set('609', 'resize_type.height', patch.upscaleHeight);
     set('610', 'filename_prefix', `${patch.filenamePrefix}_upscale`);
     set('610', 'frame_rate', patch.fps);
+    // The 3090's RTX Video Super Resolution node requires these. The 3060's older node does not.
+    // fitRtxUpscaleInputs keeps or drops them after the PC is known.
+    if (prompt['609'].inputs.strength == null) prompt['609'].inputs.strength = 1;
+    if (prompt['609'].inputs.image_encoding == null) prompt['609'].inputs.image_encoding = '8-bit RGB';
   } else {
     for (const id of UPSCALE_NODES) delete prompt[id];
   }
   for (const node of Object.values(prompt)) delete (node as { _meta?: unknown })._meta;
   return prompt;
+}
+
+/**
+ * RTX Video Super Resolution gained `strength` and `image_encoding` on newer ComfyUI.
+ * Older installs reject those inputs. `accepted` is the input names that PC's node allows.
+ * Null means the PC could not be asked, so the newer required inputs are left in place.
+ */
+export function fitRtxUpscaleInputs(prompt: Record<string, ApiNode>, accepted: string[] | null): void {
+  const node = prompt['609'];
+  if (!node) return;
+  const extras = ['strength', 'image_encoding'] as const;
+  if (accepted == null) return;
+  const ok = new Set(accepted);
+  for (const key of extras) {
+    if (!ok.has(key)) delete node.inputs[key];
+  }
 }

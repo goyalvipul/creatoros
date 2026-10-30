@@ -21,6 +21,18 @@ export const IDEA_STATUSES = IDEA_STATUS;
 export const PRIORITIES = PRIORITY;
 export const PROJECT_TYPES = PROJECT_TYPE;
 export const PROJECT_STAGES = PROJECT_STAGE;
+
+export const PROJECT_STAGE_LABELS: Record<(typeof PROJECT_STAGE)[number], string> = {
+  DRAFT: 'Draft',
+  IN_PROGRESS: 'In-Progress',
+  READY: 'Ready',
+  PUBLISHED: 'Published',
+  ARCHIVED: 'Archived',
+};
+
+export function projectStageLabel(stage: string): string {
+  return PROJECT_STAGE_LABELS[stage as keyof typeof PROJECT_STAGE_LABELS] ?? stage;
+}
 export const PLATFORMS = PLATFORM;
 export const ASSET_KINDS = ASSET_KIND;
 export const CREATIVE_STATES = CREATIVE_STATE;

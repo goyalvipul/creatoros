@@ -1,5 +1,7 @@
 import { and, conversationThreads, eq, internalActions, opportunities, sql } from '@creatoros/db';
+import { analyseEngagement, type EngagementTrend, type TrendMessage } from '@creatoros/domain';
 import { audit } from './audit';
+import { decrypt } from './crypto';
 import { triageThread } from './crm';
 import { badRequest, notFound, type Ctx } from './types';
 import { SOCIAL_SOURCES } from './social';
@@ -369,4 +371,117 @@ export function platformCatalog(live: Record<string, string> = {}): PlatformInfo
       note: 'The Threads API covers posts and replies, not DMs. Not implemented in CreatorOS yet.',
     },
   ];
+}
+
+type StoredTrendMessage = {
+  messageId: string;
+  threadId: string;
+  text: string;
+  bodyEnc: string | null;
+  kind: string;
+  platform: string;
+  state: string;
+  fromName: string | null;
+  account: string | null;
+  receivedAt: string;
+};
+
+function trendWindow(daysInput?: number) {
+  return Math.min(Math.max(daysInput ?? 30, 1), 90);
+}
+
+async function loadTrendWindow(ctx: Ctx, days: number) {
+  const accounts = rowsOf<{ provider: string; state: string; label: string | null; lastSyncAt: string | null }>(
+    await ctx.db.execute(sql`
+      select provider::text as provider, state::text as state, label, last_sync_at as "lastSyncAt"
+      from provider_connections
+      where org_id = ${ctx.orgId} and provider in ('instagram','facebook','youtube','tiktok')
+      order by provider`),
+  );
+  const stored = rowsOf<StoredTrendMessage>(
+    await ctx.db.execute(sql`
+      select m.id as "messageId", m.thread_id as "threadId", m.body_preview as text, m.body_enc as "bodyEnc",
+             t.kind, t.source as platform, t.state::text as state, t.participant_name as "fromName",
+             coalesce(nullif(pc.label, ''), pc.config->>'username') as account,
+             m.received_at as "receivedAt"
+      from messages m
+      join conversation_threads t on t.id = m.thread_id
+      left join provider_connections pc on pc.id = t.provider_connection_id
+      where t.org_id = ${ctx.orgId}
+        and t.merged_into_id is null
+        and not t.is_demo
+        and t.source in ('INSTAGRAM','FACEBOOK','TIKTOK','YOUTUBE')
+        and m.direction = 'INBOUND'
+        and m.body_preview is not null
+        and length(trim(m.body_preview)) > 0
+        and m.received_at > now() - make_interval(days => ${days})
+      order by m.received_at desc
+      limit 2000`),
+  );
+  return { accounts, stored };
+}
+
+function toTrendMessages(stored: StoredTrendMessage[]): TrendMessage[] {
+  return stored.map((r) => ({
+    text: r.text,
+    kind: r.kind,
+    platform: r.platform,
+    needsReply: r.state === 'NEED_REPLY',
+    at: r.receivedAt,
+  }));
+}
+
+function publicTrend(trend: EngagementTrend) {
+  const { messageIndexes: _indexes, ...rest } = trend;
+  return rest;
+}
+
+function fullText(row: StoredTrendMessage, ctx: Ctx): string {
+  if (!row.bodyEnc) return row.text;
+  try {
+    const plain = decrypt(row.bodyEnc, ctx.env.encryptionKey).replace(/\s+/g, ' ').trim();
+    return plain || row.text;
+  } catch {
+    return row.text;
+  }
+}
+
+/** Reads DMs and comments already stored. Does not call Instagram, Facebook or YouTube, and does not send. */
+export async function analyseSocialTrends(ctx: Ctx, daysInput?: number) {
+  const days = trendWindow(daysInput);
+  const { accounts, stored } = await loadTrendWindow(ctx, days);
+  const report = analyseEngagement(toTrendMessages(stored));
+  return {
+    days,
+    lookedAt: stored.length,
+    newestAt: stored[0]?.receivedAt ?? null,
+    accounts,
+    notes: report.notes,
+    trends: report.trends.map(publicTrend),
+  };
+}
+
+/** Every message in one trend, with a link back to the conversation. */
+export async function socialTrendMessages(ctx: Ctx, trendId: string, daysInput?: number) {
+  const days = trendWindow(daysInput);
+  const { stored } = await loadTrendWindow(ctx, days);
+  const report = analyseEngagement(toTrendMessages(stored));
+  const trend = report.trends.find((t) => t.id === trendId);
+  if (!trend) throw notFound('Trend');
+  const messages = trend.messageIndexes
+    .map((index) => stored[index])
+    .filter((row): row is StoredTrendMessage => !!row)
+    .map((row) => ({
+      messageId: row.messageId,
+      threadId: row.threadId,
+      text: fullText(row, ctx),
+      kind: row.kind,
+      platform: row.platform,
+      state: row.state,
+      fromName: row.fromName,
+      account: row.account,
+      receivedAt: row.receivedAt,
+    }));
+  const people = new Set(messages.map((m) => m.fromName || m.threadId)).size;
+  return { days, people, trend: publicTrend(trend), messages };
 }

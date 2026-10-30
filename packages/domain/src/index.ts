@@ -14,5 +14,6 @@ export * from './templates';
 export * from './workflow';
 export * from './workflow-templates';
 export * from './triage';
+export * from './trends';
 export * from './invoice-extract';
 export * from './rich-html';

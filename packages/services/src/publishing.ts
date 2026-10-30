@@ -189,6 +189,25 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
         publishedAt: r.publishedAt,
         plannedAt: r.plannedAt,
       });
+    for (const s of rowsOf<any>(
+      await ctx.db.execute(
+        sql`select i.variant_id as "variantId", d.social_account_id as "accountId", d.scheduled_at as "scheduledAt"
+            from publish_drafts d
+            join publish_items i on i.id = d.item_id
+            where i.variant_id in (${idList}) and d.upload_state = 'SCHEDULED'`,
+      ),
+    )) {
+      const key = `${s.variantId}:${s.accountId}`;
+      const cur = cells.get(key) ?? { state: 'SCHEDULED', recordId: null };
+      const published =
+        cur.state === 'PUBLISHED_VERIFIED' || cur.state === 'PUBLISHED_MANUAL';
+      cells.set(key, {
+        ...cur,
+        scheduledAt: s.scheduledAt,
+        plannedAt: s.scheduledAt ?? cur.plannedAt,
+        state: published ? cur.state : 'SCHEDULED',
+      });
+    }
   }
   const attached = new Map<string, number>();
   const published = new Map<string, number>();

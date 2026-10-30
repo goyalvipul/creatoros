@@ -134,6 +134,27 @@
       "when": 1793600000000,
       "tag": "0018_comfy_ltx",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793700000000,
+      "tag": "0019_ltx_form",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793800000000,
+      "tag": "0020_project_board",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793900000000,
+      "tag": "0021_publish_schedule",
+      "breakpoints": true
     }
   ]
 }

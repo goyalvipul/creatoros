@@ -16,8 +16,8 @@ export interface BuiltInTemplate {
 
 const common: TemplateItem[] = [
   { label: 'Approve creative direction / brief', required: true, stage: 'DRAFT' },
-  { label: 'Final export approved', required: true, stage: 'QA' },
-  { label: 'Thumbnail / cover selected', required: false, stage: 'QA' },
+  { label: 'Final export approved', required: true, stage: 'READY' },
+  { label: 'Thumbnail / cover selected', required: false, stage: 'READY' },
   { label: 'Captions & hashtags drafted per platform', required: true, stage: 'READY' },
   { label: 'Sponsor / AI-content disclosure checked', required: true, stage: 'READY' },
 ];
@@ -38,10 +38,10 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
     items: [
       { label: 'Lyrics finalised', required: true, stage: 'DRAFT' },
       { label: 'Suno version chosen & audio master saved', required: true, stage: 'DRAFT' },
-      { label: 'Storyboard / scene plan', required: true, stage: 'APPROVED' },
-      { label: 'All scenes generated and a final selected for each', required: true, stage: 'GENERATING' },
-      { label: 'Long-form music video edited', required: true, stage: 'EDITING' },
-      { label: 'Short-form cut-downs exported', required: false, stage: 'EDITING' },
+      { label: 'Storyboard / scene plan', required: true, stage: 'IN_PROGRESS' },
+      { label: 'All scenes generated and a final selected for each', required: true, stage: 'IN_PROGRESS' },
+      { label: 'Long-form music video edited', required: true, stage: 'IN_PROGRESS' },
+      { label: 'Short-form cut-downs exported', required: false, stage: 'IN_PROGRESS' },
       ...common,
     ],
   },
@@ -80,7 +80,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
     variants: ['REEL', 'SHORTS'],
     items: [
       { label: 'Brand brief & usage rights confirmed', required: true, stage: 'DRAFT' },
-      { label: 'Brand approval received (confirmed by owner)', required: true, stage: 'QA' },
+      { label: 'Brand approval received (confirmed by owner)', required: true, stage: 'READY' },
       ...common,
     ],
   },

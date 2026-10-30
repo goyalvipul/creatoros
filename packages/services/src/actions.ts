@@ -531,7 +531,7 @@ export async function briefing(ctx: Ctx, now = new Date()) {
     select p.id, p.title, p.due_at as "dueAt", p.priority,
       (select count(*)::float8 from production_scenes s where s.project_id = p.id) as total,
       (select count(*)::float8 from production_scenes s where s.project_id = p.id and s.status = 'SELECTED') as done
-    from creative_projects p where p.org_id = ${ctx.orgId} and p.deleted_at is null and p.stage not in ('ARCHIVED','DISTRIBUTING') and p.due_at is not null and p.due_at <= ${new Date(now.getTime() + 7 * DAY).toISOString()}::timestamptz`),
+    from creative_projects p where p.org_id = ${ctx.orgId} and p.deleted_at is null and p.stage not in ('ARCHIVED','PUBLISHED') and p.due_at is not null and p.due_at <= ${new Date(now.getTime() + 7 * DAY).toISOString()}::timestamptz`),
   );
   for (const p of projects)
     candidates.push({

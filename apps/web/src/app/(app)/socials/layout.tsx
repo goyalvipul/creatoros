@@ -13,6 +13,7 @@ const TABS = [
   ['/socials/platform/youtube', 'YouTube'],
   ['/socials/platform/tiktok', 'TikTok'],
   ['/socials/platform/threads', 'Threads'],
+  ['/socials/trends', 'Trends'],
   ['/socials/comments', 'Comments'],
   ['/socials/leads', 'Collaboration leads'],
   ['/socials/scheduled', 'Scheduled content'],

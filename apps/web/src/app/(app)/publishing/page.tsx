@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import { Plus, X } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useMe } from '@/components/shell';
 import {
   ActionButton,
@@ -27,6 +27,7 @@ import {
   StateBadge,
   Tabs,
 } from '@/components/ui';
+import { PublishFields, parseTags } from '@/components/publish-fields';
 import { del, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { VARIANT_TYPES, useAccounts } from '@/lib/options';
@@ -53,6 +54,8 @@ export default function PublishingPage() {
 }
 
 function Publishing() {
+  const me = useMe();
+  const tz = me.data?.organization?.timezone;
   const router = useRouter();
   const sp = useSearchParams();
   const [tab, setTabState] = useState<'matrix' | 'unmatched'>(
@@ -74,7 +77,7 @@ function Publishing() {
     <>
       <PageHeader
         title="Publishing"
-        subtitle="Which title is going to which account. A video is sent only when you press Publish on that file."
+        subtitle="Which title is going to which account. Schedule a cell to send that video at the date and time you set."
         actions={
           <>
             <Select
@@ -180,14 +183,14 @@ function Publishing() {
                                 )}
                                 onClick={() => setCell({ row: r, account: a, cell: c })}
                               >
-                                {label}
-                                {c.plannedAt &&
+                                {c.state === 'SCHEDULED' ? 'Scheduled' : label}
+                                {(c.scheduledAt || c.plannedAt) &&
                                   c.state !== 'PUBLISHED_MANUAL' &&
                                   c.state !== 'PUBLISHED_VERIFIED' && (
-                                    <div className="opacity-80">{when(c.plannedAt, undefined, false)}</div>
+                                    <div className="opacity-80">{when(c.scheduledAt || c.plannedAt, tz)}</div>
                                   )}
                                 {c.publishedAt && (
-                                  <div className="opacity-80">{when(c.publishedAt, undefined, false)}</div>
+                                  <div className="opacity-80">{when(c.publishedAt, tz)}</div>
                                 )}
                               </button>
                             </td>
@@ -430,16 +433,160 @@ function ExistingDialog({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
+function wallClockInput(value: unknown, tz?: string) {
+  if (!value) return '';
+  const d = new Date(String(value).trim().replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+}
+
+function SchedulePost({
+  row,
+  account,
+  tz,
+  onDone,
+}: {
+  row: { id: string; title: string };
+  account: { id: string; platform: string; handle: string };
+  tz?: string;
+  onDone: () => Promise<void>;
+}) {
+  const detail = useApi<any>(`/variants/${row.id}/publish`);
+  const items: any[] = detail.data?.items ?? [];
+  const drafts: any[] = detail.data?.drafts ?? [];
+  const acct = (detail.data?.accounts ?? []).find((a: { id: string }) => a.id === account.id) as
+    | { canPublish?: boolean; reason?: string }
+    | undefined;
+  const [itemId, setItemId] = useState('');
+  const chosen = items.find((i) => i.id === (itemId || items[0]?.id));
+  const draft = drafts.find((d) => d.accountId === account.id && (!chosen || d.itemId === chosen.id));
+  const [title, setTitle] = useState(row.title ?? '');
+  const [caption, setCaption] = useState('');
+  const [tags, setTags] = useState('');
+  const [privacy, setPrivacy] = useState('');
+  const [contentForm, setContentForm] = useState('');
+  const [whenLocal, setWhenLocal] = useState('');
+  const [seeded, setSeeded] = useState(false);
+
+  useEffect(() => {
+    if (!detail.data || seeded) return;
+    const first = (detail.data.items ?? [])[0];
+    const existing = (detail.data.drafts ?? []).find(
+      (d: { accountId: string; itemId: string }) => d.accountId === account.id && d.itemId === first?.id,
+    );
+    if (existing) {
+      setTitle(existing.title ?? row.title ?? '');
+      setCaption(existing.caption ?? '');
+      setTags((existing.hashtags ?? []).join(', '));
+      setPrivacy(existing.privacy ?? '');
+      setContentForm(existing.contentForm ?? '');
+      setWhenLocal(wallClockInput(existing.scheduledAt, tz));
+    }
+    setSeeded(true);
+  }, [detail.data, seeded, account.id, row.title, tz]);
+
+  if (detail.isLoading && !detail.data) return <Spinner />;
+  if (items.length === 0) {
+    return (
+      <Notice tone="warn" title="No video attached">
+        Attach a video on the title, then schedule it here.{' '}
+        <Link href={`/publishing/${row.id}`} className="text-accent">
+          Open {row.title}
+        </Link>
+      </Notice>
+    );
+  }
+
+  return (
+    <Card>
+      <CardTitle>Schedule this post</CardTitle>
+      <p className="mb-3 text-sm text-muted">
+        {chosen?.fileName ?? items[0].fileName} → {account.handle}. At this time Creator OS sends the file with the
+        details below. The original stays on the PC.
+      </p>
+      {acct && !acct.canPublish && (
+        <div className="mb-3">
+          <Notice tone="warn">{acct.reason}</Notice>
+        </div>
+      )}
+      {items.length > 1 && (
+        <Field label="Video">
+          <Select value={itemId || items[0].id} onChange={(e) => setItemId(e.target.value)}>
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.fileName}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+      <PublishFields
+        platform={account.platform}
+        item={chosen}
+        title={title}
+        setTitle={setTitle}
+        caption={caption}
+        setCaption={setCaption}
+        tags={tags}
+        setTags={setTags}
+        privacy={privacy}
+        setPrivacy={setPrivacy}
+        contentForm={contentForm}
+        setContentForm={setContentForm}
+      />
+      <Field label="Publish at (your local time)">
+        <Input type="datetime-local" required value={whenLocal} onChange={(e) => setWhenLocal(e.target.value)} />
+      </Field>
+      {draft?.scheduledAt && (
+        <p className="text-xs text-muted">Currently scheduled for {when(draft.scheduledAt, tz)}.</p>
+      )}
+      <div className="mt-3">
+        <ActionButton
+          variant="primary"
+          disabled={!whenLocal || acct?.canPublish === false}
+          onAction={async () => {
+            await post('/publishing/schedule', {
+              itemId: (chosen ?? items[0]).id,
+              socialAccountId: account.id,
+              requestId: crypto.randomUUID(),
+              title: title.trim() || null,
+              caption: caption.trim() || null,
+              hashtags: parseTags(tags),
+              privacy: privacy || null,
+              contentForm: contentForm || null,
+              plannedLocal: whenLocal.slice(0, 16),
+              timezone: tz,
+            });
+            await refresh(`/variants/${row.id}/publish`, '/publishing/matrix');
+            await onDone();
+          }}
+          success="Scheduled"
+        >
+          {draft?.uploadState === 'SCHEDULED' ? 'Update schedule' : 'Schedule'}
+        </ActionButton>
+      </div>
+    </Card>
+  );
+}
+
 function CellDialog({ ctx, onClose }: { ctx: { row: any; account: any; cell: any }; onClose: () => void }) {
   const me = useMe();
   const tz = me.data?.organization?.timezone;
   const { row, account, cell } = ctx;
   const rec = useApi<any>(cell.recordId ? `/publications/${cell.recordId}` : null);
-  const [when_, setWhen] = useState('');
   const [url, setUrl] = useState('');
   const [evidence, setEvidence] = useState('');
   const [m, setM] = useState({ views: '', likes: '', comments: '', shares: '', saves: '', impressions: '' });
-  const [warn, setWarn] = useState<string[]>([]);
   const reload = async () => {
     await refresh('/publishing', '/publications', '/calendar', '/analytics', '/briefing');
   };
@@ -465,84 +612,10 @@ function CellDialog({ ctx, onClose }: { ctx: { row: any; account: any; cell: any
           )}
         </div>
 
-        {!cell.recordId && (
-          <Card>
-            <CardTitle>Plan this post</CardTitle>
-            <Field label="Planned for (your local time)">
-              <Input type="datetime-local" value={when_} onChange={(e) => setWhen(e.target.value)} />
-            </Field>
-            {warn.length > 0 && (
-              <div className="mt-2">
-                <Notice tone="warn" title="Check before planning">
-                  {warn.join(' ')}
-                </Notice>
-              </div>
-            )}
-            <div className="mt-3">
-              <ActionButton
-                variant="primary"
-                onAction={async () => {
-                  const r = await post('/publications', {
-                    socialAccountId: account.id,
-                    variantId: row.id,
-                    title: row.title,
-                    plannedLocal: when_ ? localStamp(when_) : undefined,
-                    plannedTimezone: tz,
-                    state: 'PLANNED',
-                  });
-                  if (r.warnings?.length) setWarn(r.warnings.map((w: any) => w.message ?? String(w)));
-                  await reload();
-                  onClose();
-                }}
-                success="Planned"
-              >
-                Plan
-              </ActionButton>
-            </div>
-          </Card>
-        )}
+        {!done && <SchedulePost row={row} account={account} tz={tz} onDone={async () => { await reload(); onClose(); }} />}
 
         {cell.recordId && rec.data && !done && (
           <>
-            <Card>
-              <CardTitle>Schedule</CardTitle>
-              <p className="mb-2 text-sm text-muted">
-                {rec.data.plannedAt
-                  ? `Planned ${when(rec.data.plannedAt, rec.data.plannedTimezone ?? tz)}`
-                  : 'No date set.'}{' '}
-                Creator OS only reminds you; it does not post.
-              </p>
-              <div className="flex flex-wrap items-end gap-2">
-                <Field label="New date & time">
-                  <Input type="datetime-local" value={when_} onChange={(e) => setWhen(e.target.value)} />
-                </Field>
-                <ActionButton
-                  disabled={!when_}
-                  onAction={async () => {
-                    await post(`/publications/${cell.recordId}/reschedule`, {
-                      plannedLocal: localStamp(when_),
-                      timezone: tz,
-                    });
-                    await rec.mutate();
-                    await reload();
-                  }}
-                  success="Rescheduled"
-                >
-                  Reschedule
-                </ActionButton>
-                {state !== 'READY' && (
-                  <ActionButton
-                    onAction={async () => {
-                      await post(`/publications/${cell.recordId}/transition`, { to: 'READY' });
-                      await rec.mutate();
-                      await reload();
-                    }}
-                  >
-                    Mark ready
-                  </ActionButton>
-                )}
-              </div>
-            </Card>
             <Card>
               <CardTitle>I published it</CardTitle>
               <div className="grid gap-3 sm:grid-cols-2">

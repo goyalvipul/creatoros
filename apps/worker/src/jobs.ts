@@ -76,7 +76,12 @@ async function each<T>(d: WorkerDeps, items: T[], name: string, fn: (item: T) =>
 export async function jobLtx(d: WorkerDeps) {
   const queued = await submitQueuedLtx(d.db, d.env);
   const running = await pollRunningLtx(d.db, d.env);
-  return { queued: queued.length, ...running };
+  const { pollRunningH3, pollRunningQwen, submitQueuedH3, submitQueuedQwen } = await import('@creatoros/services');
+  const qwenQueued = await submitQueuedQwen(d.db, d.env);
+  const qwen = await pollRunningQwen(d.db, d.env);
+  const h3Queued = await submitQueuedH3(d.db, d.env);
+  const h3 = await pollRunningH3(d.db, d.env);
+  return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3 };
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {

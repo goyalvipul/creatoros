@@ -168,3 +168,34 @@ type FileOpResult struct {
 	ToPath string `json:"toPath,omitempty"`
 }
 
+// WindowsTask is one Task Scheduler name the owner saved. The agent only queries or restarts that name.
+type WindowsTask struct {
+	ID       string `json:"id"`
+	TaskName string `json:"taskName"`
+}
+
+type WindowsRestart struct {
+	ID       string `json:"id"`
+	TaskID   string `json:"taskId"`
+	TaskName string `json:"taskName"`
+}
+
+type WindowsTasksPage struct {
+	Tasks    []WindowsTask    `json:"tasks"`
+	Restarts []WindowsRestart `json:"restarts"`
+}
+
+type WindowsTaskReport struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type WindowsTaskResult struct {
+	ID     string `json:"id"`
+	OK     bool   `json:"ok"`
+	Error  string `json:"error,omitempty"`
+	Status string `json:"status,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+

@@ -1,0 +1,284 @@
+{
+  "1": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "2": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "10": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "11": {
+    "inputs": {
+      "unet_name": "Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "15": {
+    "inputs": {
+      "project_name": "longtake_demo",
+      "project_save": "override",
+      "segment_start_number": 1,
+      "segment_count": -1,
+      "seed": 605426809192638,
+      "sampling_plan": "custom",
+      "sampling_mode": "single",
+      "1st_pass_only": false,
+      "disable_2nd_noise": false,
+      "upscale_by": 1.5,
+      "upscale_model": "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+      "enabled_tiling": "false",
+      "tracks_info": [
+        "29",
+        0
+      ],
+      "model_loader": [
+        "16",
+        0
+      ],
+      "sampler": [
+        "20",
+        0
+      ],
+      "sampler_2nd": [
+        "24",
+        0
+      ],
+      "sigmas": [
+        "22",
+        0
+      ],
+      "sigmas_2nd": [
+        "33",
+        0
+      ]
+    },
+    "class_type": "easy multitrackProject",
+    "_meta": {
+      "title": "MultiTrack Project"
+    }
+  },
+  "16": {
+    "inputs": {
+      "model": [
+        "21",
+        0
+      ],
+      "clip": [
+        "10",
+        0
+      ],
+      "vae": [
+        "2",
+        0
+      ],
+      "audio_vae": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "easy modelLoaderPack",
+    "_meta": {
+      "title": "Model Loader Pack"
+    }
+  },
+  "17": {
+    "inputs": {
+      "project_data": "{\"project_name\":\"longtake_demo\",\"width\":768,\"height\":1376,\"frame_rate\":24,\"clips\":[{\"id\":\"segment-0\",\"index\":0,\"file_path\":\"easy_media/projects/longtake_demo/video_0_1.mp4\",\"file_name\":\"video_0_1.mp4\",\"media_revision\":\"1792710872177287400\",\"source_start_frame\":0,\"source_end_frame\":213,\"source_frame_count\":213,\"updated_at\":1792710882.3294976,\"continuity_mode\":\"shot\",\"audio_locked\":true,\"enabled\":true,\"video_files\":[{\"file_path\":\"easy_media/projects/longtake_demo/video_0_1.mp4\",\"file_name\":\"video_0_1.mp4\",\"media_revision\":\"1792710872177287400\",\"source_frame_count\":213,\"continuity_mode\":\"shot\"}]},{\"id\":\"segment-1\",\"index\":1,\"file_path\":\"easy_media/projects/longtake_demo/video_1_1.mp4\",\"file_name\":\"video_1_1.mp4\",\"media_revision\":\"1792711801153323800\",\"source_start_frame\":0,\"source_end_frame\":192,\"source_frame_count\":192,\"updated_at\":1792711810.7291758,\"continuity_mode\":\"context\",\"audio_locked\":true,\"enabled\":true,\"video_files\":[{\"file_path\":\"easy_media/projects/longtake_demo/video_1_1.mp4\",\"file_name\":\"video_1_1.mp4\",\"media_revision\":\"1792711801153323800\",\"source_frame_count\":192,\"continuity_mode\":\"context\"}]}],\"auto_combine\":true,\"updated_at\":1792711810.7291758}",
+      "project_name": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "easy multitrackProjectVideoCombine",
+    "_meta": {
+      "title": "MultiTrack Project Video Combine"
+    }
+  },
+  "20": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "21": {
+    "inputs": {
+      "max_resolution": 1024,
+      "jpeg_quality": 80,
+      "suppress_default_preview": true,
+      "preview_frames": 48,
+      "preview_fps": 24,
+      "tiny_vae": "taeh3.safetensors",
+      "model": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "ModelPreviewOverrideKJ",
+    "_meta": {
+      "title": "Model Preview Override"
+    }
+  },
+  "22": {
+    "inputs": {
+      "scheduler": "beta",
+      "steps": 8,
+      "denoise": 1,
+      "model": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "★ Steps — set them here (beta scheduler)"
+    }
+  },
+  "24": {
+    "inputs": {
+      "sampler_name": "sa_solver"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "25": {
+    "inputs": {
+      "input_mode": "video",
+      "output_mode": "save",
+      "output_mode.save_metadata": "ComfyUI",
+      "filename_prefix": [
+        "17",
+        1
+      ]
+    },
+    "class_type": "easy saveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "27": {
+    "inputs": {
+      "model": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+    "_meta": {
+      "title": "MiniMax H3 Mem Eff Sage Attention Patch"
+    }
+  },
+  "29": {
+    "inputs": {
+      "resolution": "width x height (megapixels)",
+      "resolution.aspect_ratio": "9:16 (Portrait Widescreen)",
+      "resolution.megapixels": 1,
+      "format": "MiniMax",
+      "track_data": "{\"muted\":false,\"volume_db\":0,\"task_markers\":[],\"task_overview\":false,\"tracks\":[{\"id\":\"343f1aaa-d413-4928-a81c-8aef771d992c\",\"name\":\"Task 0\",\"type\":\"task\",\"task_mode\":\"default\",\"color\":\"var(--multitrack-task-bg)\",\"muted\":false,\"solo\":false,\"volume_db\":0,\"locked\":false,\"segments\":[{\"id\":\"f4505e82-6a07-4d2d-801d-a37aac8c4075\",\"start_frame\":0,\"end_frame\":213,\"color\":\"var(--multitrack-task-bg)\",\"content\":{\"media_type\":\"none\",\"task_mode\":\"ref\",\"continuity_mode\":\"shot\",\"ref_image_size\":\"max\",\"images\":[{\"id\":\"ada3e687-92df-48b6-9949-5f2858269c65\",\"source_type\":\"input\",\"file_path\":\"Cozy Living Room Portrait with Tattoos.png\",\"file_name\":\"Cozy Living Room Portrait with Tattoos.png\",\"shared_reference\":true}],\"muted\":false,\"volume_db\":0,\"user_prompt\":\"REFERENCE MAP\\n<Picture 1> = canonical Mehak identity and starting visual state.\\n\\nREFERENCE PRIORITY\\nPreserve Mehak’s exact facial identity, facial proportions, tattoos, hair, skin tone, body proportions, and wardrobe from <Picture 1>. Do not reinterpret her face.\\nSHOT INTENT\\nA warm, personal, direct-to-fan thank-you message.\\nIt should feel like Mehak recorded a sincere message for one listener — natural, grounded, and human — not like an ad, performance, or music video.\\nFORMAT\\n- Vertical 9:16\\n- Single continuous talking-head shot\\n- Medium close-up / chest-up framing\\n- Keep upper chest, shoulders, and some upper torso clearly visible\\n- Leave a little breathing room above the head\\n- Her face should not dominate the whole frame\\n- Her head should occupy roughly 25–35% of the frame height, not more\\n- Maintain this framing throughout the shot\\nCAMERA — VERY IMPORTANT\\n- Camera remains locked and stable\\n- Use a natural eye-level perspective\\n- Lens feel: 50mm–70mm portrait, but framed wider rather than tight\\n- No push-in\\n- No zoom-in\\n- No creeping crop\\n- No face-only close-up\\n- No dramatic reframing\\n- No dolly movement\\n- No orbit\\n- No sudden camera drift toward the face\\n- Very subtle natural handheld micro-movement is okay, but framing must stay essentially unchanged from beginning to end\\nFraming goal:\\nA relaxed chest-up composition where Mehak feels present and personal, but the viewer can still see:\\n- shoulders\\n- upper chest / neckline\\n- some surrounding environment\\nAUDIO / LIP-SYNC PERFORMANCE — ABSOLUTE PRIORITY\\nUse the externally supplied locked WAV as the timing authority.\\n\\nMehak must visibly and clearly speak the complete supplied audio.\\n\\nEvery spoken sound must have corresponding natural articulation:\\n- lips\\n- jaw\\n- mouth corners\\n- subtle cheek movement\\nDo not treat the supplied audio as background.\\n\\nDo not skip, paraphrase, shorten, or add words.\\n\\nDuring active speech:\\n- mouth articulation must remain clear\\n- no held smile over dialogue\\n- emotion should come mostly through eyes, cheeks, brows, and posture\\nDuring pauses:\\n- a small warm smile may appear naturally\\n- mouth can rest softly\\nFACIAL PERFORMANCE\\nStart with a soft, genuine, welcoming energy — like she’s speaking to someone who truly supported her music.\\n\\nExpression should feel:\\n- warm\\n- open\\n- relaxed\\n- appreciative\\n- emotionally present\\nAllow:\\n- gentle eye softness\\n- subtle cheek warmth\\n- one or two natural blinks\\n- small natural expression changes\\nDo not make her overly serious or emotionally flat.\\n\\nDo not make her grin constantly.\\n\\nThe final “thank you” may carry a slightly fuller natural smile.\\nBODY LANGUAGE\\nKeep movement minimal and believable.\\n\\nAllowed:\\n- tiny head motion\\n- slight shoulder relaxation\\n- one subtle breath\\n- one small shift in posture\\n- maybe a tiny nod\\nAvoid:\\n- exaggerated gestures\\n- repeated hand motions\\n- influencer-style emphasis\\n- overacting\\n- constant swaying\\nIf hands appear, they should stay subtle and secondary.\\nVISUAL REALISM\\n- realistic skin texture\\n- visible pores\\n- subtle tonal variation\\n- no beauty-filter skin\\n- no glamour treatment\\n- no over-smoothing\\n- no waxy face\\n- natural colour balance\\n- realistic indoor light\\n- slightly warm-neutral tones, not golden/orange\\nENVIRONMENT\\nA realistic home-studio / lounge environment:\\n- soft natural décor\\n- subtle background blur\\n- clean and intimate\\n- no visible logos\\n- no visible text\\n- no branding\\n- no microphone blocking the face\\nBackground should support the shot without competing with it.\\nEMOTIONAL ARC\\nRecognition → gratitude → sincerity → quiet excitement → appreciation\\n\\nThe viewer should feel:\\n“She is actually talking to me.”\\nHARD NEGATIVES\\n- no zoom-in\\n- no push-in\\n- no progressive crop tightening\\n- no face-only framing\\n- no extreme close-up\\n- no cinematic orbit\\n- no dramatic camera move\\n- no performance/singing\\n- no music video style\\n- no over-smiling during speech\\n- no robotic lip-sync\\n- no text or subtitles\\n- no visible logos\\n- no filters\\n- no identity drift\"}},{\"id\":\"922bc275-421e-40a5-850e-fcef43e7eabd\",\"start_frame\":213,\"end_frame\":405,\"color\":\"var(--multitrack-task-bg)\",\"content\":{\"media_type\":\"none\",\"task_mode\":\"ref\",\"continuity_mode\":\"context\",\"ref_image_size\":\"max\",\"images\":[{\"id\":\"a0843f72-791a-4452-90d9-3e6ab1ccb759\",\"source_type\":\"input\",\"file_path\":\"Cozy Living Room Portrait with Tattoos.png\",\"file_name\":\"Cozy Living Room Portrait with Tattoos.png\",\"shared_reference\":true,\"shared_reference_copy\":true}],\"muted\":false,\"volume_db\":0,\"user_prompt\":\"REFERENCE MAP\\n<Picture 1> = canonical Mehak identity and starting visual state.\\n\\nREFERENCE PRIORITY\\nPreserve Mehak’s exact facial identity, facial proportions, tattoos, hair, skin tone, body proportions, and wardrobe from <Picture 1>. Do not reinterpret her face.\\nSHOT INTENT\\nA warm, personal, direct-to-fan thank-you message.\\nIt should feel like Mehak recorded a sincere message for one listener — natural, grounded, and human — not like an ad, performance, or music video.\\nFORMAT\\n- Vertical 9:16\\n- Single continuous talking-head shot\\n- Medium close-up / chest-up framing\\n- Keep upper chest, shoulders, and some upper torso clearly visible\\n- Leave a little breathing room above the head\\n- Her face should not dominate the whole frame\\n- Her head should occupy roughly 25–35% of the frame height, not more\\n- Maintain this framing throughout the shot\\nCAMERA — VERY IMPORTANT\\n- Camera remains locked and stable\\n- Use a natural eye-level perspective\\n- Lens feel: 50mm–70mm portrait, but framed wider rather than tight\\n- No push-in\\n- No zoom-in\\n- No creeping crop\\n- No face-only close-up\\n- No dramatic reframing\\n- No dolly movement\\n- No orbit\\n- No sudden camera drift toward the face\\n- Very subtle natural handheld micro-movement is okay, but framing must stay essentially unchanged from beginning to end\\nFraming goal:\\nA relaxed chest-up composition where Mehak feels present and personal, but the viewer can still see:\\n- shoulders\\n- upper chest / neckline\\n- some surrounding environment\\nAUDIO / LIP-SYNC PERFORMANCE — ABSOLUTE PRIORITY\\nUse the externally supplied locked WAV as the timing authority.\\n\\nMehak must visibly and clearly speak the complete supplied audio.\\n\\nEvery spoken sound must have corresponding natural articulation:\\n- lips\\n- jaw\\n- mouth corners\\n- subtle cheek movement\\nDo not treat the supplied audio as background.\\n\\nDo not skip, paraphrase, shorten, or add words.\\n\\nDuring active speech:\\n- mouth articulation must remain clear\\n- no held smile over dialogue\\n- emotion should come mostly through eyes, cheeks, brows, and posture\\nDuring pauses:\\n- a small warm smile may appear naturally\\n- mouth can rest softly\\nFACIAL PERFORMANCE\\nStart with a soft, genuine, welcoming energy — like she’s speaking to someone who truly supported her music.\\n\\nExpression should feel:\\n- warm\\n- open\\n- relaxed\\n- appreciative\\n- emotionally present\\nAllow:\\n- gentle eye softness\\n- subtle cheek warmth\\n- one or two natural blinks\\n- small natural expression changes\\nDo not make her overly serious or emotionally flat.\\n\\nDo not make her grin constantly.\\n\\nThe final “thank you” may carry a slightly fuller natural smile.\\nBODY LANGUAGE\\nKeep movement minimal and believable.\\n\\nAllowed:\\n- tiny head motion\\n- slight shoulder relaxation\\n- one subtle breath\\n- one small shift in posture\\n- maybe a tiny nod\\nAvoid:\\n- exaggerated gestures\\n- repeated hand motions\\n- influencer-style emphasis\\n- overacting\\n- constant swaying\\nIf hands appear, they should stay subtle and secondary.\\nVISUAL REALISM\\n- realistic skin texture\\n- visible pores\\n- subtle tonal variation\\n- no beauty-filter skin\\n- no glamour treatment\\n- no over-smoothing\\n- no waxy face\\n- natural colour balance\\n- realistic indoor light\\n- slightly warm-neutral tones, not golden/orange\\nENVIRONMENT\\nA realistic home-studio / lounge environment:\\n- soft natural décor\\n- subtle background blur\\n- clean and intimate\\n- no visible logos\\n- no visible text\\n- no branding\\n- no microphone blocking the face\\nBackground should support the shot without competing with it.\\nEMOTIONAL ARC\\nRecognition → gratitude → sincerity → quiet excitement → appreciation\\n\\nThe viewer should feel:\\n“She is actually talking to me.”\\nHARD NEGATIVES\\n- no zoom-in\\n- no push-in\\n- no progressive crop tightening\\n- no face-only framing\\n- no extreme close-up\\n- no cinematic orbit\\n- no dramatic camera move\\n- no performance/singing\\n- no music video style\\n- no over-smiling during speech\\n- no robotic lip-sync\\n- no text or subtitles\\n- no visible logos\\n- no filters\\n- no identity drift\"}}]},{\"id\":\"87f35e68-cac8-489e-9d2f-746b20fc44d7\",\"name\":\"Video 0\",\"type\":\"video\",\"color\":\"var(--primary)\",\"muted\":false,\"solo\":false,\"volume_db\":0,\"locked\":false,\"segments\":[],\"audio_locked\":false},{\"id\":\"66e811d3-4036-4be8-8177-d57f0e7a9f79\",\"name\":\"Audio 0\",\"type\":\"audio\",\"color\":\"var(--highlight)\",\"muted\":false,\"solo\":false,\"volume_db\":0,\"locked\":false,\"segments\":[{\"id\":\"38ac87e3-f163-4193-b55e-17e9915a86d5\",\"start_frame\":0,\"end_frame\":213,\"color\":\"var(--highlight)\",\"content\":{\"media_type\":\"audio\",\"source_type\":\"input\",\"file_path\":\"mehak_20261022_134937_275227765.wav\",\"file_name\":\"mehak_20261022_134937_275227765.wav\",\"muted\":false,\"volume_db\":0,\"duration\":8.88,\"shared_reference\":false}},{\"id\":\"1d85d28f-9b77-4f3c-848e-824fbf42d908\",\"start_frame\":213,\"end_frame\":405,\"color\":\"var(--highlight)\",\"content\":{\"media_type\":\"audio\",\"source_type\":\"input\",\"file_path\":\"mehak_20261022_135102_275227765.wav\",\"file_name\":\"mehak_20261022_135102_275227765.wav\",\"muted\":false,\"volume_db\":0,\"duration\":8,\"shared_reference\":false}}],\"audio_locked\":true}],\"total_length\":405,\"frame_rate\":24}"
+    },
+    "class_type": "easy multiTrackEditor",
+    "_meta": {
+      "title": "MultiTrack Editor"
+    }
+  },
+  "33": {
+    "inputs": {
+      "sigmas": "0.50, 0.30, 0.14, 0.06, 0.0"
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "Pass 2 sigmas (only used if sampling_mode = dual — ignore)"
+    }
+  },
+  "36": {
+    "inputs": {
+      "PowerLoraLoaderHeaderWidget": {
+        "type": "PowerLoraLoaderHeaderWidget"
+      },
+      "lora_1": {
+        "on": true,
+        "lora": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "strength": 1
+      },
+      "lora_2": {
+        "on": true,
+        "lora": "h3-realism-people-t2v-i2v-r2v.safetensors",
+        "strength": 0.7
+      },
+      "lora_3": {
+        "on": false,
+        "lora": "minimax_h3_lms_v1.0_r64.safetensors",
+        "strength": 0.5
+      },
+      "➕ Add Lora": "",
+      "model": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "Power Lora Loader (rgthree)",
+    "_meta": {
+      "title": "Power Lora Loader (rgthree)"
+    }
+  },
+  "37": {
+    "inputs": {
+      "audio": "Tika Tika Tum.mp3",
+      "start_time": 80,
+      "end_time": 110,
+      "duration": 30,
+      "audio_ui": ""
+    },
+    "class_type": "LoadAudioUI",
+    "_meta": {
+      "title": "Load Audio UI"
+    }
+  },
+  "38": {
+    "inputs": {
+      "filename_prefix": [
+        "37",
+        2
+      ],
+      "format": "mp3",
+      "format.quality": "V0",
+      "audio": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "SaveAudioAdvanced",
+    "_meta": {
+      "title": "Save Audio (Advanced)"
+    }
+  }
+}

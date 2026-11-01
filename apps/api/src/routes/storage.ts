@@ -24,6 +24,9 @@ import {
   cancelFileOperation,
   claimFileOperations,
   finishFileOperation,
+  agentWindowsTasks,
+  reportWindowsTask,
+  finishWindowsTaskRestart,
   getFileDetail,
   getHashRequests,
   getPreviewRequests,
@@ -153,6 +156,38 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Confirmed rename, move, or delete for this PC',
     },
     ({ agent }) => claimFileOperations(db, agent),
+  );
+  agentRoute(
+    { method: 'GET', url: '/agents/windows-tasks', summary: 'Scheduled tasks this PC should check, and any restart the owner asked for' },
+    ({ agent }) => agentWindowsTasks(db, agent),
+  );
+  agentRoute(
+    {
+      method: 'POST',
+      url: '/agents/windows-tasks/report',
+      summary: 'Report whether a saved scheduled task is running',
+      body: z.object({
+        id: z.uuid(),
+        status: z.enum(['RUNNING', 'READY', 'DISABLED', 'NOT_FOUND', 'UNKNOWN']),
+        detail: z.string().max(500).optional(),
+      }),
+    },
+    ({ agent, body }) => reportWindowsTask(db, agent, body),
+  );
+  agentRoute(
+    {
+      method: 'POST',
+      url: '/agents/windows-tasks/result',
+      summary: 'Report a scheduled-task restart',
+      body: z.object({
+        id: z.uuid(),
+        ok: z.boolean(),
+        error: z.string().max(500).optional(),
+        status: z.enum(['RUNNING', 'READY', 'DISABLED', 'NOT_FOUND', 'UNKNOWN']).optional(),
+        detail: z.string().max(500).optional(),
+      }),
+    },
+    ({ agent, body }) => finishWindowsTaskRestart(db, agent, body),
   );
   agentRoute(
     {

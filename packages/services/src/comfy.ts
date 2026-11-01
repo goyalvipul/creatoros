@@ -284,12 +284,49 @@ async function readWorkerQueue(baseUrl: string): Promise<'busy' | 'free' | 'offl
   }
 }
 
+/** ComfyUI's own queue, plus a job Creator OS has queued or is still rendering on that PC. */
+export async function machineQueue(db: Db, orgId: string, worker: { id: string; baseUrl: string; enabled: boolean }) {
+  if (!worker.enabled) return 'offline' as const;
+  const live = await readWorkerQueue(worker.baseUrl);
+  if (live !== 'free') return live;
+  const pending = rowsOf<{ n: number }>(
+    await db.execute(sql`
+      select 1 as n from generation_jobs
+      where org_id = ${orgId} and status in ('QUEUED', 'RUNNING')
+        and settings->>'workerId' = ${worker.id}
+      limit 1`),
+  );
+  return pending.length ? ('busy' as const) : ('free' as const);
+}
+
 /** Queue for one saved PC. Does not start a render. */
 export async function workerQueue(ctx: Ctx, workerId: string) {
   const worker = await workerOrNull(ctx, workerId);
   if (!worker) throw notFound('PC');
-  const queue = worker.enabled ? await readWorkerQueue(worker.baseUrl) : ('offline' as const);
+  const queue = await machineQueue(ctx.db, ctx.orgId, worker);
   return { id: worker.id, queue };
+}
+
+/** The picture uploaded onto a PC, so a reopened form can show it again. */
+export async function openWorkerInput(ctx: Ctx, workerId: string, name: string) {
+  if (!name || name.includes('..') || name.includes('\\') || name.startsWith('/')) throw badRequest('That file name is not allowed.');
+  const worker = await workerOrNull(ctx, workerId);
+  if (!worker?.enabled) throw notFound('PC');
+  const slash = name.lastIndexOf('/');
+  const filename = slash >= 0 ? name.slice(slash + 1) : name;
+  const subfolder = slash >= 0 ? name.slice(0, slash) : '';
+  const url = new URL('/view', worker.baseUrl);
+  url.searchParams.set('filename', filename);
+  url.searchParams.set('type', 'input');
+  if (subfolder) url.searchParams.set('subfolder', subfolder);
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  } catch {
+    throw badRequest('Creator OS could not reach that PC to show the picture.');
+  }
+  if (!upstream.ok || !upstream.body) throw notFound('File');
+  return { upstream, filename };
 }
 
 export async function getLtxStudio(ctx: Ctx) {
@@ -298,7 +335,7 @@ export async function getLtxStudio(ctx: Ctx) {
   const workers = await Promise.all(
     listed.map(async (w) => ({
       ...w,
-      queue: w.enabled ? await readWorkerQueue(w.baseUrl) : ('offline' as const),
+      queue: await machineQueue(ctx.db, ctx.orgId, w),
     })),
   );
   const [draft] = await ctx.db
@@ -516,6 +553,7 @@ interface ClaimedJob {
   orgId: string;
   promptId: string | null;
   projectId: string | null;
+  provider?: string;
   settings: LtxSettings;
   startedAt: Date | null;
 }
@@ -806,11 +844,36 @@ function variantFormatFor(contentFormat: string | null | undefined) {
   return 'MASTER';
 }
 
-/** When a clip was generated for a Production project, create a publishing variant with that project’s name and attach the video when the library has it. */
+/** When a clip was generated for a Production project, create one publishing variant and attach later videos to that same variant. */
 async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
   if (!job.projectId) return;
-  if (job.settings?.variantId) {
-    await linkLtxVariantFile(db, job.orgId, job.id, job.settings.assetVersionId ?? null);
+  const source = job.provider === 'comfyui-h3' ? 'comfyui-h3' : 'comfyui-ltx';
+  let variantId = job.settings?.variantId ?? null;
+  let assetId = job.settings?.assetId ?? null;
+  let assetVersionId = job.settings?.assetVersionId ?? null;
+  if (!variantId) {
+    const existing = rowsOf<{ variantId: string; assetId: string; assetVersionId: string | null }>(
+      await db.execute(sql`
+        select v.id as "variantId", v.asset_id as "assetId", v.asset_version_id as "assetVersionId"
+        from distribution_variants v
+        join logical_assets a on a.id = v.asset_id
+        where v.org_id = ${job.orgId} and v.project_id = ${job.projectId}
+          and a.source in ('comfyui-ltx', 'comfyui-h3') and a.is_archived = false
+        order by v.created_at asc
+        limit 1`),
+    )[0];
+    if (existing) {
+      variantId = existing.variantId;
+      assetId = existing.assetId;
+      assetVersionId = existing.assetVersionId;
+    }
+  }
+  if (variantId && assetVersionId) {
+    await linkLtxVariantFile(db, job.orgId, job.id, assetVersionId, source);
+    await db.execute(sql`
+      update generation_jobs
+      set settings = settings || ${JSON.stringify({ variantId, assetId, assetVersionId })}::jsonb, updated_at = now()
+      where id = ${job.id}`);
     return;
   }
   const [project] = rowsOf<{ title: string; brandId: string | null; contentFormat: string | null }>(
@@ -825,7 +888,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       select file_instance_id as "fileId"
       from generation_outputs
       where job_id = ${job.id}
-      order by case when output_role = 'upscale' then 0 else 1 end, created_at desc
+      order by case when output_role in ('upscale', 'final') then 0 else 1 end, created_at desc
       limit 1`),
   );
   const title = project.title.trim() || 'Untitled';
@@ -837,7 +900,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       kind: 'VIDEO',
       brandId: project.brandId,
       projectId: job.projectId,
-      source: 'comfyui-ltx',
+      source,
       creativeState: 'APPROVED',
     })
     .returning({ id: logicalAssets.id });
@@ -846,7 +909,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
     .values({
       orgId: job.orgId,
       assetId: asset!.id,
-      label: 'LTX',
+      label: source === 'comfyui-h3' ? 'MiniMax' : 'LTX',
       number: 1,
       variantType: 'MASTER',
       isMaster: true,
@@ -860,10 +923,13 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
         orgId: job.orgId,
         assetVersionId: version!.id,
         fileInstanceId: file.fileId,
-        linkReason: 'comfyui-ltx',
+        linkReason: source,
         primaryPreference: true,
       })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: [assetFileLinks.assetVersionId, assetFileLinks.fileInstanceId],
+        set: { primaryPreference: true },
+      });
     await db.execute(sql`
       update generation_outputs
       set asset_version_id = ${version!.id}
@@ -898,27 +964,33 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
     where id = ${job.id}`);
 }
 
-async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVersionId: string | null) {
+async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVersionId: string | null, source = 'comfyui-ltx') {
   if (!assetVersionId) return;
   const [file] = rowsOf<{ fileId: string }>(
     await db.execute(sql`
       select file_instance_id as "fileId"
       from generation_outputs
       where job_id = ${jobId} and file_instance_id is not null
-      order by case when output_role = 'upscale' then 0 else 1 end, created_at desc
+      order by case when output_role in ('upscale', 'final') then 0 else 1 end, created_at desc
       limit 1`),
   );
   if (!file?.fileId) return;
+  await db.execute(sql`
+    update asset_file_links set primary_preference = false
+    where org_id = ${orgId} and asset_version_id = ${assetVersionId} and file_instance_id <> ${file.fileId}`);
   await db
     .insert(assetFileLinks)
     .values({
       orgId,
       assetVersionId,
       fileInstanceId: file.fileId,
-      linkReason: 'comfyui-ltx',
+      linkReason: source,
       primaryPreference: true,
     })
-    .onConflictDoNothing();
+    .onConflictDoUpdate({
+      target: [assetFileLinks.assetVersionId, assetFileLinks.fileInstanceId],
+      set: { primaryPreference: true, linkReason: source },
+    });
   await db.execute(sql`
     update generation_outputs
     set asset_version_id = ${assetVersionId}
@@ -985,7 +1057,7 @@ async function applyHistoryResult(db: Db, job: ClaimedJob, entry: ReturnType<typ
   return finishLtxSuccess(db, job, entry.outputs);
 }
 
-async function linkRecentLtxOutputs(db: Db) {
+export async function linkRecentGeneratedOutputs(db: Db) {
   await db.execute(sql`
     update generation_outputs o
     set file_instance_id = f.id
@@ -1002,9 +1074,9 @@ async function linkRecentLtxOutputs(db: Db) {
       and f.file_name = regexp_replace(o.expected_path, '^.*/', '')`);
   const pending = rowsOf<ClaimedJob>(
     await db.execute(sql`
-      select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", settings, started_at as "startedAt"
+      select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", provider, settings, started_at as "startedAt"
       from generation_jobs
-      where provider = 'comfyui-ltx' and status = 'SUCCEEDED' and project_id is not null
+      where provider in ('comfyui-ltx', 'comfyui-h3') and status = 'SUCCEEDED' and project_id is not null
         and finished_at > now() - interval '14 days'
         and (settings->>'variantId' is null or settings->>'assetVersionId' is not null)
       order by finished_at desc
@@ -1107,7 +1179,7 @@ async function recoverFalseFailedLtx(db: Db) {
 
 export async function pollRunningLtx(db: Db, env: ServiceEnv) {
   void env;
-  await linkRecentLtxOutputs(db);
+  await linkRecentGeneratedOutputs(db);
   const recovered = await recoverFalseFailedLtx(db);
   const running = rowsOf<ClaimedJob>(
     await db.execute(sql`
@@ -1168,11 +1240,12 @@ export async function openLtxVideo(db: Db, orgId: string, jobId: string, range?:
   const [job] = rowsOf<{ settings: LtxSettings; status: string }>(
     await db.execute(sql`
       select settings, status from generation_jobs
-      where id = ${jobId} and org_id = ${orgId} and provider = 'comfyui-ltx'`),
+      where id = ${jobId} and org_id = ${orgId} and provider in ('comfyui-ltx', 'comfyui-h3')`),
   );
   if (!job) throw notFound('Video');
   const outputs = job.settings?.outputs ?? [];
   const video =
+    outputs.find((o) => o.node === '25' && /\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => o.node === '610' && /-audio\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => o.node === '610' && /\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => /-audio\.mp4$/i.test(o.filename)) ??

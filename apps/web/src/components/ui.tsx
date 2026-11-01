@@ -14,7 +14,6 @@ import {
   type HTMLAttributes,
   type ReactNode,
   type SelectHTMLAttributes,
-  type TextareaHTMLAttributes,
 } from 'react';
 import { ApiError } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
@@ -92,7 +91,7 @@ const field =
 export function Input(props: ComponentProps<'input'>) {
   return <input {...props} className={clsx(field, props.className)} />;
 }
-export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea(props: ComponentProps<'textarea'>) {
   return <textarea rows={3} {...props} className={clsx(field, props.className)} />;
 }
 export function Select({ children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {

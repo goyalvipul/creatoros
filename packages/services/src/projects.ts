@@ -401,11 +401,10 @@ export async function getProject(ctx: Ctx, id: string) {
     await ctx.db.execute(sql`
       select v.id, v.title_master as "titleMaster", v.readiness, v.format::text as format, v.asset_id as "assetId",
              v.created_at as "createdAt",
-             (select f.file_name from asset_file_links l
+             (select string_agg(f.file_name, ', ' order by l.primary_preference desc, l.created_at desc)
+                from asset_file_links l
                 join file_instances f on f.id = l.file_instance_id
-               where l.asset_version_id = v.asset_version_id
-               order by l.primary_preference desc, l.created_at desc
-               limit 1) as "fileName"
+               where l.asset_version_id = v.asset_version_id) as "fileName"
       from distribution_variants v
       where v.org_id = ${ctx.orgId} and v.project_id = ${id}
       order by v.created_at desc

@@ -155,6 +155,48 @@
       "when": 1793900000000,
       "tag": "0021_publish_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1794000000000,
+      "tag": "0022_qwen_voice",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1794100000000,
+      "tag": "0023_h3_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794200000000,
+      "tag": "0024_h3_editor",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794300000000,
+      "tag": "0025_h3_project",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0026_windows_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0027_qwen_clips",
+      "breakpoints": true
     }
   ]
 }

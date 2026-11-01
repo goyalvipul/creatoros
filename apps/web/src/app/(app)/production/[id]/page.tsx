@@ -253,7 +253,7 @@ export default function ProjectPage() {
                   <CardTitle>Publishing</CardTitle>
                   {(p.variants ?? []).length === 0 ? (
                     <p className="text-sm text-muted">
-                      No publishing variant yet. When you generate an LTX clip with this project selected, a variant named like this project is created and linked to that video.
+                      No publishing variant yet. Generate an LTX or MiniMax clip with this project selected. The first one creates a variant in this project’s name. Later clips on the same project attach to that variant.
                     </p>
                   ) : (
                     <ul className="space-y-2">

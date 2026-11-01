@@ -104,6 +104,14 @@ async function main() {
         const { submitLtxJob } = await import('@creatoros/services');
         return submitLtxJob(deps.db, deps.env, String(job.data.jobId)) as Promise<object>;
       }
+      if (job.name === 'qwen') {
+        const { submitQwenJob } = await import('@creatoros/services');
+        return submitQwenJob(deps.db, deps.env, String(job.data.jobId)) as Promise<object>;
+      }
+      if (job.name === 'h3') {
+        const { submitH3Job } = await import('@creatoros/services');
+        return submitH3Job(deps.db, deps.env, String(job.data.jobId)) as Promise<object>;
+      }
       if (job.name === 'sync') {
         const { runSync } = await import('@creatoros/services');
         return runSync(handle.db, config.env, String(job.data.connectionId), {

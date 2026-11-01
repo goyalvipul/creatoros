@@ -1,0 +1,46 @@
+{
+  "1": {
+    "inputs": {
+      "audio": "mehakdeepvoice.wav"
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "Load Audio"
+    }
+  },
+  "2": {
+    "inputs": {
+      "reference_text": "Does anyone have tips on how to what's the opposite of deepen your voice? Raise your voice. I for the life of me cannot speak higher. This is something that I've noticed over time the past few years maybe that my voice has gotten a lot deeper. That just naturally comes with age but sometimes I am talking to someone especially in the morning and my voice just goes really low or it's just like really like down here and even sometimes I get irritated by it. [laughter] I love my voice. I love my deep voice, but it's also like sometimes it would be nice if my voice was just a little bit more excited or a little bit like higher. So, let me practice. This is my regular voice. I feel it a lot down here, but I would like my I would I I would like [laughter] I would like my voice to be ah it just doesn't sound natural. The weird thing is when I'm talking to strangers, my voice will go really high. That's the only time it will go high. If you're with me, I could be having a normal conversation with you, but then all of a sudden, yeah, everything's good here. Thank you. [gasps] Hi, my name is Nina. Oh, nice to meet you. Yeah, I would just like to speak up here like more often. How can you speak in a way that it doesn't sound like I'm Why do I sound condescending? I remember this one time I got a comment. Not even one time. This happens a lot. It was like, \"No wonder you're single. Your voice sounds like a man.\" Maybe that is why I'm single. No one can outman my voice or outman me. My head voice. Chest voice. Chest voice. Head voice. This actually sounds a lot like how I used to speak when I was younger. Hello my friends. It's Dina and in this video we're going to be doing this and that and my voice is up here and I don't know what changed over the years but for some reason my voice is like down here now. But also this isn't hard to do either. This is just naturally where I feel comfortable. So at least I can switch between",
+      "target_text": "And honestly... I feel like I'm just getting started.\nThere's a lot more music coming in 2027, and I'm really, really happy you're here for it.\nSo... thank you. Really.",
+      "language": "English",
+      "qwen_python_path": "D:\\AI_Tools\\Qwen3-TTS\\venv\\Scripts\\python.exe",
+      "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "device": "cuda:0",
+      "dtype": "bfloat16",
+      "attention": "sdpa",
+      "seed": 275227765,
+      "max_new_tokens": 2048,
+      "filename_prefix": "qwen3_tts/mehak",
+      "reference_audio": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "Qwen3ExternalVoiceClone",
+    "_meta": {
+      "title": "MEHAK — Qwen3 Voice Clone (Isolated Venv)"
+    }
+  },
+  "3": {
+    "inputs": {
+      "audio": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "PreviewAudio",
+    "_meta": {
+      "title": "Preview Audio"
+    }
+  }
+}

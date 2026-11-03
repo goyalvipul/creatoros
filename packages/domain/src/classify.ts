@@ -1,8 +1,11 @@
 /**
- * Deterministic, offline message screening. The result is only ever a *suggestion* placed in a
- * "possibly collaboration" queue; nothing here creates a committed deal. Message text is treated as
- * untrusted data and is never interpreted as instructions.
+ * Deterministic, offline message screening. A score of 0.35 is only a suggestion in the inbox.
+ * `isClearCollaboration` is the bar for opening a pipeline item on its own. Message text is
+ * untrusted data and is never interpreted as instructions. This never creates a deal.
  */
+
+/** Several commercial terms together, not one casual mention of a brand or a video. */
+export const CLEAR_COLLABORATION_CONFIDENCE = 0.8;
 
 export interface ClassificationInput {
   subject?: string | null;
@@ -87,6 +90,11 @@ export function classifyMessage(input: ClassificationInput): ClassificationResul
       missingTerms: missing,
     },
   };
+}
+
+export function isClearCollaboration(result: ClassificationResult): boolean {
+  if (result.category !== 'COLLABORATION' || result.confidence < CLEAR_COLLABORATION_CONFIDENCE) return false;
+  return !result.signals.some((s) => s.includes('newsletter'));
 }
 
 export function extractMoney(text: string): { amountMinor: number; currency: string } | null {

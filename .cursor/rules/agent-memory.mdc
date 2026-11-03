@@ -1,0 +1,14 @@
+---
+description: Read the agent memory before searching the repo, and keep it current
+alwaysApply: true
+---
+
+# Agent memory
+
+Before searching or opening source files, read `docs/AGENT_MEMORY.md`. It is the map of where behavior lives. Open only the files it names for the current task.
+
+Do not reread `docs/PRODUCT_SPEC.md`, `docs/AGENT_HANDOFF.md`, or the tree to rediscover a fact the memory already states. Open the handoff only when the memory does not cover the task.
+
+When behavior, commands, routes, or deploy steps change, update `docs/AGENT_MEMORY.md` in that same change. Keep it a map: where the code is, what it does now, and the rebuild command. Do not paste the product spec into it.
+
+The owner rebuilds with Docker. Give the `docker compose` command. Do not start Docker, a generation, or a commit unless asked.

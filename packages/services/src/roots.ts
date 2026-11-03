@@ -11,7 +11,9 @@ import {
   desc,
 } from '@creatoros/db';
 import { canonicalPath, isInsideRoot, osToPathOs, type PathOs } from '@creatoros/domain';
+import { syncFolderAssets } from './assets';
 import { audit } from './audit';
+import { linkRecentGeneratedOutputs } from './comfy';
 import { badRequest, conflict, notFound, type Ctx } from './types';
 
 export interface RootInput {
@@ -154,6 +156,19 @@ export async function updateRoot(
   const [row] = await ctx.db.update(storageRoots).set(set).where(eq(storageRoots.id, id)).returning();
   await audit(ctx, 'storage_root.update', { type: 'storage_root', id }, undefined, set);
   return row;
+}
+
+/** Ask every active folder to scan on the next agent check, and link files already in the catalogue. */
+export async function requestLibrarySync(ctx: Ctx) {
+  const roots = await ctx.db
+    .update(storageRoots)
+    .set({ scanRequestedAt: ctx.now() })
+    .where(and(eq(storageRoots.orgId, ctx.orgId), eq(storageRoots.state, 'ACTIVE')))
+    .returning({ id: storageRoots.id });
+  await syncFolderAssets(ctx.db, ctx.orgId);
+  await linkRecentGeneratedOutputs(ctx.db);
+  await audit(ctx, 'library.sync', { type: 'organization', id: ctx.orgId }, undefined, { roots: roots.length });
+  return { roots: roots.length };
 }
 
 export async function requestScan(ctx: Ctx, id: string, kind: 'scan' | 'reconcile' = 'scan') {

@@ -1,0 +1,4 @@
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'BUSINESS';
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS tax_category text;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS receipt_path text;
+ALTER TABLE expenses ADD COLUMN IF NOT EXISTS receipt_type text;

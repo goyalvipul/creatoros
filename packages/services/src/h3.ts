@@ -16,6 +16,7 @@ import {
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
 import { linkRecentGeneratedOutputs, machineQueue } from './comfy';
+import { notifyGenerationReady } from './notifications';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
 const PROVIDER = 'comfyui-h3';
@@ -698,6 +699,9 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
         returning id`),
     );
     if (!saved.length) continue;
+    await notifyGenerationReady(db, { id: job.id, orgId: job.orgId, provider: PROVIDER, settings: job.settings }).catch(
+      () => undefined,
+    );
     await db.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
     const ordered = [
       ...entry.outputs.filter((o) => o.node === '25'),

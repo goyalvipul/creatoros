@@ -3,27 +3,33 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
+import { FileDownload } from '@/components/file-download';
 import {
   ActionButton,
   Async,
   Badge,
   Button,
   Card,
+  Dialog,
   EmptyState,
   Field,
   FormDialog,
   Input,
   Notice,
   PageHeader,
+  Select,
 } from '@/components/ui';
 import { PublishFields, parseTags } from '@/components/publish-fields';
-import { del, post, refresh, useApi } from '@/lib/api';
+import { ApiError, del, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
+import { useRoots } from '@/lib/options';
 
 export default function PublishTitlePage() {
   const { id } = useParams<{ id: string }>();
   const page = useApi<any>(id ? `/variants/${id}/publish` : null, { refreshInterval: 4000 });
   const [linkOpen, setLinkOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [play, setPlay] = useState<{ id: string; fileName: string; online: boolean } | null>(null);
   const [form, setForm] = useState<{ item: any; account: any; draft?: any } | null>(null);
 
   return (
@@ -45,9 +51,12 @@ export default function PublishTitlePage() {
                 Attach videos, then publish each one. Nothing is sent until you press Publish. Removing a link
                 does not delete the file or a post that already went out.
               </p>
-              <Button variant="primary" onClick={() => setLinkOpen(true)}>
-                Link a file
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={() => setUploadOpen(true)}>Upload</Button>
+                <Button variant="primary" onClick={() => setLinkOpen(true)}>
+                  Link a file
+                </Button>
+              </div>
             </div>
             {data.items.length === 0 ? (
               <EmptyState title="No videos attached" action={<Button onClick={() => setLinkOpen(true)}>Link a file</Button>}>
@@ -60,13 +69,32 @@ export default function PublishTitlePage() {
                     <Card>
                       <div className="flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="truncate font-medium">{item.fileName}</p>
+                          <button
+                            type="button"
+                            className="truncate font-medium text-accent hover:underline"
+                            onClick={() =>
+                              setPlay({
+                                id: item.fileInstanceId,
+                                fileName: item.fileName,
+                                online: item.deviceState === 'ONLINE',
+                              })
+                            }
+                          >
+                            {item.fileName}
+                          </button>
                           <p className="truncate text-xs text-muted">{item.displayPath}</p>
                           <p className="text-xs text-muted">
                             {item.deviceName}
                             {item.deviceState !== 'ONLINE' ? ' · machine offline' : ''}
                           </p>
                         </div>
+                        <div className="flex items-center gap-2">
+                          {item.deviceState === 'ONLINE' && item.fileInstanceId && (
+                            <FileDownload
+                              href={`/api/v1/files/${item.fileInstanceId}/stream?download=1`}
+                              name={item.fileName}
+                            />
+                          )}
                         <ActionButton
                           onAction={async () => {
                             await del(`/variants/${id}/files/${item.id}`);
@@ -76,6 +104,7 @@ export default function PublishTitlePage() {
                         >
                           Unlink
                         </ActionButton>
+                        </div>
                       </div>
                       <ul className="mt-3 grid gap-2 sm:grid-cols-2">
                         {data.accounts.map((account: any) => {
@@ -136,6 +165,23 @@ export default function PublishTitlePage() {
           onClose={() => setLinkOpen(false)}
         />
       )}
+      {uploadOpen && id && (
+        <UploadDialog
+          variantId={id}
+          onClose={() => setUploadOpen(false)}
+        />
+      )}
+      {play && (
+        <Dialog open onClose={() => setPlay(null)} title={play.fileName} wide>
+          {play.online ? (
+            <video className="max-h-80 w-full rounded-lg bg-black" controls autoPlay preload="metadata" src={`/api/v1/files/${play.id}/stream`} />
+          ) : (
+            <Notice tone="info" title="That PC is off">
+              The video plays when the machine that holds it is back on. It is not missing.
+            </Notice>
+          )}
+        </Dialog>
+      )}
       {form && id && (
         <PublishDialog
           variantId={id}
@@ -166,6 +212,65 @@ function tone(state: string): 'ok' | 'bad' | 'warn' | 'neutral' {
   if (state === 'FAILED') return 'bad';
   if (state === 'UNCERTAIN' || state === 'QUEUED' || state === 'UPLOADING') return 'warn';
   return 'neutral';
+}
+
+function UploadDialog({ variantId, onClose }: { variantId: string; onClose: () => void }) {
+  const roots = useRoots();
+  const [rootId, setRootId] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const choices = (roots.data ?? []).filter((r) => r.state === 'ACTIVE' && r.deviceState === 'ONLINE');
+  return (
+    <FormDialog
+      open
+      onClose={onClose}
+      title="Upload a video"
+      submitLabel="Upload and link"
+      onSubmit={async () => {
+        if (!file || !rootId) throw new ApiError(400, 'BAD_REQUEST', 'Choose a video and a folder on a PC that is on.');
+        const res = await fetch(
+          `/api/v1/variants/${variantId}/upload?rootId=${encodeURIComponent(rootId)}&name=${encodeURIComponent(file.name)}`,
+          {
+            method: 'POST',
+            headers: { 'x-requested-with': 'creatoros', 'content-type': 'application/x-creatoros-file' },
+            body: file,
+          },
+        );
+        const json = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new ApiError(res.status, json?.error?.code ?? 'UPLOAD', json?.error?.message ?? 'The upload did not finish.');
+        }
+        await refresh(`/variants/${variantId}/publish`, '/publishing/matrix', '/library');
+        onClose();
+      }}
+    >
+      <p className="text-sm text-muted">
+        The original file is copied into a folder that PC already indexes. It is not compressed or resized. Publish
+        then sends that copy. The PC has to be on, and its scanner has to be the current one.
+      </p>
+      <Field label="Folder on the PC">
+        <Select value={rootId} onChange={(e) => setRootId(e.target.value)}>
+          <option value="">Choose a folder</option>
+          {choices.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.deviceName} · {r.label} · {r.displayPath}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {roots.data && choices.length === 0 && (
+        <p className="text-sm text-muted">No scanned folder has its PC on right now.</p>
+      )}
+      <Field label="Video">
+        <input
+          type="file"
+          accept=".mp4,.mov,.mkv,.webm,.m4v,video/mp4,video/quicktime,video/webm"
+          className="block w-full text-sm"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </Field>
+      {file && <p className="text-xs text-muted">{file.name}</p>}
+    </FormDialog>
+  );
 }
 
 function LinkDialog({

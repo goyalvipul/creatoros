@@ -7,6 +7,7 @@ import {
   sql,
   storageRoots,
   type Db,
+  type Executor,
 } from '@creatoros/db';
 import { inQuietHours, type EventType } from '@creatoros/domain';
 import { badRequest, type Ctx } from './types';
@@ -37,7 +38,7 @@ export function quietHoursEnd(now: Date, tz: string, start: string | null, end: 
   return null;
 }
 
-export async function notify(db: Db, input: NotifyInput, now = new Date()): Promise<boolean> {
+export async function notify(db: Executor, input: NotifyInput, now = new Date()): Promise<boolean> {
   let snoozedUntil: Date | null = null;
   if (input.severity !== 'CRITICAL') {
     const [pref] = await db
@@ -72,6 +73,32 @@ export async function notify(db: Db, input: NotifyInput, now = new Date()): Prom
     .onConflictDoNothing()
     .returning({ id: notifications.id });
   return rows.length > 0;
+}
+
+const JOB_KIND: Record<string, string> = {
+  'comfyui-ltx': 'LTX',
+  'comfyui-h3': 'MiniMax',
+  'comfyui-qwen-tts': 'Audio',
+};
+
+/** One in-app notice per finished LTX, MiniMax, or voice job. A repeat poll does not add another. */
+export async function notifyGenerationReady(
+  db: Executor,
+  job: { id: string; orgId: string; provider?: string | null; settings?: { prompt?: string | null } | null },
+) {
+  const kind = JOB_KIND[job.provider ?? ''] ?? 'ComfyUI';
+  const prompt = (job.settings?.prompt ?? '').trim();
+  await notify(db, {
+    orgId: job.orgId,
+    type: 'comfy.ready',
+    dedupeKey: `comfy.ready:${job.id}`,
+    title: `${kind} file is ready`,
+    body: prompt ? prompt.slice(0, 140) : 'Open History to play it or download it.',
+    severity: 'INFO',
+    deepLink: '/comfy#history',
+    sourceType: 'generation_job',
+    sourceId: job.id,
+  });
 }
 
 export async function listNotifications(ctx: Ctx, q: { unreadOnly?: boolean; limit?: number } = {}) {

@@ -24,6 +24,7 @@ import {
 } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
+import { notifyGenerationReady } from './notifications';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
 const API_FILE = 'LTX_IA2V_Production (API).json';
@@ -847,7 +848,9 @@ function variantFormatFor(contentFormat: string | null | undefined) {
 /** When a clip was generated for a Production project, create one publishing variant and attach later videos to that same variant. */
 async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
   if (!job.projectId) return;
-  const source = job.provider === 'comfyui-h3' ? 'comfyui-h3' : 'comfyui-ltx';
+  const source =
+    job.provider === 'comfyui-h3' ? 'comfyui-h3' : job.provider === 'comfyui-qwen-tts' ? 'comfyui-qwen-tts' : 'comfyui-ltx';
+  const label = source === 'comfyui-h3' ? 'MiniMax' : source === 'comfyui-qwen-tts' ? 'Voice' : 'LTX';
   let variantId = job.settings?.variantId ?? null;
   let assetId = job.settings?.assetId ?? null;
   let assetVersionId = job.settings?.assetVersionId ?? null;
@@ -856,10 +859,9 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       await db.execute(sql`
         select v.id as "variantId", v.asset_id as "assetId", v.asset_version_id as "assetVersionId"
         from distribution_variants v
-        join logical_assets a on a.id = v.asset_id
+        left join logical_assets a on a.id = v.asset_id
         where v.org_id = ${job.orgId} and v.project_id = ${job.projectId}
-          and a.source in ('comfyui-ltx', 'comfyui-h3') and a.is_archived = false
-        order by v.created_at asc
+        order by case when a.source in ('comfyui-ltx', 'comfyui-h3', 'comfyui-qwen-tts') then 0 else 1 end, v.created_at asc
         limit 1`),
     )[0];
     if (existing) {
@@ -867,6 +869,29 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       assetId = existing.assetId;
       assetVersionId = existing.assetVersionId;
     }
+  }
+  if (variantId && assetId && !assetVersionId) {
+    const nextNumber =
+      rowsOf<{ n: number }>(
+        await db.execute(sql`select (coalesce(max(number), 0) + 1)::int as n from asset_versions where asset_id = ${assetId}`),
+      )[0]?.n ?? 1;
+    const [version] = await db
+      .insert(assetVersions)
+      .values({
+        orgId: job.orgId,
+        assetId,
+        label,
+        number: nextNumber,
+        variantType: 'MASTER',
+        isMaster: true,
+        approvalState: 'APPROVED',
+      })
+      .returning({ id: assetVersions.id });
+    assetVersionId = version!.id;
+    await db.execute(sql`
+      update distribution_variants
+      set asset_version_id = ${assetVersionId}, updated_at = now()
+      where id = ${variantId} and org_id = ${job.orgId}`);
   }
   if (variantId && assetVersionId) {
     await linkLtxVariantFile(db, job.orgId, job.id, assetVersionId, source);
@@ -897,7 +922,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
     .values({
       orgId: job.orgId,
       title,
-      kind: 'VIDEO',
+      kind: source === 'comfyui-qwen-tts' ? 'AUDIO' : 'VIDEO',
       brandId: project.brandId,
       projectId: job.projectId,
       source,
@@ -909,7 +934,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
     .values({
       orgId: job.orgId,
       assetId: asset!.id,
-      label: source === 'comfyui-h3' ? 'MiniMax' : 'LTX',
+      label,
       number: 1,
       variantType: 'MASTER',
       isMaster: true,
@@ -948,6 +973,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       readiness: file?.fileId ? 'READY' : 'DRAFT',
     })
     .returning({ id: distributionVariants.id });
+  if (file?.fileId) await linkPublishVideo(db, job.orgId, variant!.id, file.fileId);
   await db.execute(sql`
     update logical_assets
     set selected_version_id = ${version!.id}, updated_at = now()
@@ -962,6 +988,17 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
     })}::jsonb,
         updated_at = now()
     where id = ${job.id}`);
+}
+
+/** The publishing page lists publish_items. A library link alone does not show the video there. */
+async function linkPublishVideo(db: Db, orgId: string, variantId: string, fileId: string) {
+  await db.execute(sql`
+    insert into publish_items (org_id, variant_id, file_instance_id)
+    select ${orgId}, ${variantId}::uuid, f.id
+    from file_instances f
+    where f.id = ${fileId}::uuid and f.org_id = ${orgId}
+      and (f.file_type = 'VIDEO' or f.file_name ~* '\\.(mp4|webm|mov|mkv)$')
+    on conflict (variant_id, file_instance_id) do nothing`);
 }
 
 async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVersionId: string | null, source = 'comfyui-ltx') {
@@ -995,6 +1032,15 @@ async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVer
     update generation_outputs
     set asset_version_id = ${assetVersionId}
     where job_id = ${jobId} and file_instance_id = ${file.fileId}`);
+  const variants = rowsOf<{ id: string }>(
+    await db.execute(sql`
+      select id from distribution_variants
+      where org_id = ${orgId} and (
+        asset_version_id = ${assetVersionId}
+        or id = (select nullif(settings->>'variantId', '')::uuid from generation_jobs where id = ${jobId})
+      )`),
+  );
+  for (const variant of variants) await linkPublishVideo(db, orgId, variant.id, file.fileId);
   await db.execute(sql`
     update distribution_variants
     set readiness = 'READY', asset_version_id = ${assetVersionId}, updated_at = now()
@@ -1038,6 +1084,7 @@ async function finishLtxSuccess(db: Db, job: ClaimedJob, outputs: NonNullable<Lt
   } catch {
     // The video is saved; the publishing link can wait for the next scan pass.
   }
+  await notifyGenerationReady(db, { ...job, provider: job.provider ?? 'comfyui-ltx' }).catch(() => undefined);
   return true;
 }
 
@@ -1055,6 +1102,17 @@ async function applyHistoryResult(db: Db, job: ClaimedJob, entry: ReturnType<typ
     return true;
   }
   return finishLtxSuccess(db, job, entry.outputs);
+}
+
+/** Attach a finished LTX, MiniMax, or voice job to the project's publishing row. */
+export async function attachJobToProject(db: Db, jobId: string) {
+  const [job] = rowsOf<ClaimedJob>(
+    await db.execute(sql`
+      select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", provider, settings, started_at as "startedAt"
+      from generation_jobs where id = ${jobId}`),
+  );
+  if (!job?.projectId) return;
+  await attachLtxVariantToProject(db, job);
 }
 
 export async function linkRecentGeneratedOutputs(db: Db) {
@@ -1076,7 +1134,7 @@ export async function linkRecentGeneratedOutputs(db: Db) {
     await db.execute(sql`
       select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", provider, settings, started_at as "startedAt"
       from generation_jobs
-      where provider in ('comfyui-ltx', 'comfyui-h3') and status = 'SUCCEEDED' and project_id is not null
+      where provider in ('comfyui-ltx', 'comfyui-h3', 'comfyui-qwen-tts') and status = 'SUCCEEDED' and project_id is not null
         and finished_at > now() - interval '14 days'
         and (settings->>'variantId' is null or settings->>'assetVersionId' is not null)
       order by finished_at desc

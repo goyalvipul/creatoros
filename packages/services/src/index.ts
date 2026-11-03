@@ -10,6 +10,7 @@ export * from './assets';
 export * from './projects';
 export * from './publishing';
 export * from './publish-run';
+export * from './publish-upload';
 export * from './agent-file';
 export * from './file-ops';
 export * from './crm';

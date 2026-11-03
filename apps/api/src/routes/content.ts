@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { organizations, asc } from '@creatoros/db';
@@ -81,6 +82,8 @@ import {
   systemCtx,
   transitionRecord,
   unauthorized,
+  uploadPublishVideo,
+  forbidden,
   unlinkFile,
   updateAsset,
   updateBrand,
@@ -92,7 +95,7 @@ import {
   upsertScenes,
   listScenes,
 } from '@creatoros/services';
-import { idParam, makeRouter, withMeta, type AppDeps } from '../http';
+import { ctxFor, idParam, makeRouter, withMeta, type AppDeps } from '../http';
 
 const date = z.coerce.date();
 const uuid = z.uuid();
@@ -1182,5 +1185,26 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       query: z.object({ from: date, to: date, tz: z.string().max(64).optional() }),
     },
     ({ ctx, query }) => calendar(ctx, query.from, query.to, query.tz),
+  );
+
+  app.addContentTypeParser('application/x-creatoros-file', (_req, payload, done) => {
+    done(null, payload);
+  });
+  app.post(
+    '/variants/:id/upload',
+    { bodyLimit: 4 * 1024 * 1024 * 1024 },
+    async (req, reply) => {
+      if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
+      if (!req.session) throw unauthorized();
+      if (req.session.role !== 'OWNER') throw forbidden();
+      const { id } = idParam.parse(req.params);
+      const rootId = z.uuid().parse((req.query as { rootId?: string }).rootId);
+      const name = z.string().trim().min(1).max(240).parse((req.query as { name?: string }).name);
+      const size = Number(req.headers['content-length']);
+      const body = req.body as Readable;
+      if (!body || typeof body.pipe !== 'function') throw new AppError(400, 'BAD_REQUEST', 'Choose a video file.');
+      const saved = await uploadPublishVideo(ctxFor(deps, req), id, { rootId, fileName: name, size, body });
+      return reply.send({ data: saved, meta: { requestId: req.correlationId }, error: null });
+    },
   );
 }

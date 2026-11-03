@@ -96,3 +96,25 @@ export function planFileOperation(input: {
     throw new FileOpError(input.kind === 'RENAME' ? 'That is already the file name.' : 'The file is already in that folder.');
   return { fromPath, toPath, rootId: dest.id, fileName: baseName(toPath), ext: extName(toPath) };
 }
+
+const PUBLISH_UPLOAD_EXT = new Set(['mp4', 'mov', 'mkv', 'webm', 'm4v']);
+
+/** Path for one new video the owner uploads into a folder this machine already indexes. */
+export function planPublishUpload(input: { fileName: string; rootDisplayPath: string; os: PathOs }): {
+  displayPath: string;
+  canonicalPath: string;
+  fileName: string;
+  ext: string;
+} {
+  const fileName = input.fileName.trim();
+  checkName(fileName);
+  const ext = extName(fileName);
+  if (!PUBLISH_UPLOAD_EXT.has(ext)) throw new FileOpError('Upload an mp4, mov, mkv, webm, or m4v.');
+  const root = separators(input.rootDisplayPath.trim(), input.os).replace(/[\\/]+$/, '');
+  if (!root) throw new FileOpError('Choose a folder on this machine.');
+  const displayPath = root + pathSeparator(input.os) + fileName;
+  const key = canonicalPath(displayPath, input.os);
+  const rootKey = canonicalPath(root, input.os);
+  if (!isInsideRoot(rootKey, key, input.os)) throw new FileOpError('That file would land outside the selected folder.');
+  return { displayPath, canonicalPath: key, fileName, ext };
+}

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, api, del, post, put, refresh, useApi } from '@/lib/api';
+import { FileDownload } from '@/components/file-download';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
 import { ago } from '@/lib/format';
 
@@ -231,6 +232,9 @@ const PRESET_FALLBACK = {
 export default function ComfyPage() {
   const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'history' | 'settings'>('ltx');
   const [recall, setRecall] = useState<SavedClip | null>(null);
+  useEffect(() => {
+    if (window.location.hash === '#history') setTab('history');
+  }, []);
   return (
     <div>
       <PageHeader
@@ -365,14 +369,20 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
                 ) : null}
                 {job.error ? <p className="mt-2 text-sm text-muted">{job.error}</p> : null}
                 {job.status === 'SUCCEEDED' && s.outputs?.length ? (
-                  <video className="mt-2 w-full max-w-sm rounded-lg" controls src={`/api/v1/comfy/jobs/${job.id}/video`} />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <video className="w-full max-w-sm rounded-lg" controls src={`/api/v1/comfy/jobs/${job.id}/video`} />
+                    <FileDownload href={`/api/v1/comfy/jobs/${job.id}/video?download=1`} name={`${job.kind}-${job.id}.mp4`} />
+                  </div>
                 ) : null}
                 {job.files?.some((f) => f.fileId) ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     {job.files.filter((f) => f.fileId).map((f) => (
-                      <Button key={f.fileId ?? f.expectedPath} size="sm" onClick={() => f.fileId && setOpenFile(f.fileId)}>
-                        Open {f.assetTitle ? `${f.assetTitle} / ` : ''}{f.fileName ?? 'library file'}
-                      </Button>
+                      <span key={f.fileId ?? f.expectedPath} className="inline-flex items-center gap-2">
+                        <Button size="sm" onClick={() => f.fileId && setOpenFile(f.fileId)}>
+                          Open {f.assetTitle ? `${f.assetTitle} / ` : ''}{f.fileName ?? 'library file'}
+                        </Button>
+                        {f.fileId ? <FileDownload href={`/api/v1/files/${f.fileId}/stream?download=1`} name={f.fileName ?? 'video.mp4'} /> : null}
+                      </span>
                     ))}
                   </div>
                 ) : job.status === 'SUCCEEDED' ? (
@@ -653,7 +663,6 @@ function MachineSetup() {
 
 function LtxStudio({ recall }: { recall: SavedClip | null }) {
   const studio = useApi<Studio>('/comfy/ltx');
-  const projects = useApi<{ id: string; title: string }[]>('/projects', { query: { limit: 200 } });
   const [form, setForm] = useState<Form | null>(null);
   const [imageName, setImageName] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string | null>(null);
@@ -894,7 +903,6 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
       {(data) => {
         const workers = Array.isArray(data.workers) ? data.workers : [];
         const preset = data.preset ?? PRESET_FALLBACK;
-        const projectsRows = Array.isArray(projects.data) ? projects.data : [];
         if (!form) return <Spinner />;
         return (
           <div className="space-y-4">
@@ -914,16 +922,7 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
                 Workflow: {preset.width}×{preset.height}, {preset.fps} fps, {preset.durationSec}s from {preset.audioStartSec}s, LoRA {preset.loraName} at {preset.loraStrength}. Upscale {preset.upscale.width}×{preset.upscale.height} {preset.upscale.quality}.
               </p>
               <div className="grid gap-3 md:grid-cols-2">
-                <Field label="Project">
-                  <Select value={form.projectId ?? ''} onChange={(e) => set({ projectId: e.target.value || null })}>
-                    <option value="">No project</option>
-                    {projectsRows.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
+                <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} />
                 <Field
                   label="Run on"
                   hint="Green is free. Red is rendering. Choosing a PC checks it again."
@@ -1207,6 +1206,9 @@ function LibraryFileOnPage({ id, onClose }: { id: string; onClose: () => void })
               <img alt="" className="max-h-64 rounded-lg" src={`/api/v1/files/${id}/preview`} />
             ) : null}
             <p className="break-all text-xs text-muted">{row.copyPaths?.local || row.displayPath || 'Path is on the PC that holds this file.'}</p>
+            {row.effectiveAvailability === 'AVAILABLE' ? (
+              <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={row.fileName} />
+            ) : null}
           </div>
         )}
       </Async>
@@ -1274,6 +1276,85 @@ function FilePick({
   );
 }
 
+function ProjectPick({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const projects = useApi<{ id: string; title: string }[]>('/projects', { query: { limit: 200 } });
+  const [creating, setCreating] = useState(false);
+  const [title, setTitle] = useState('');
+  const [made, setMade] = useState<{ id: string; title: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const listed = Array.isArray(projects.data) ? projects.data : [];
+  const rows = [...made.filter((item) => !listed.some((p) => p.id === item.id)), ...listed];
+  return (
+    <Field label="Project" hint="Empty leaves Production and Publishing alone. A later clip on the same project joins the publishing row that is already there.">
+      <Select
+        value={creating ? '__new__' : (value ?? '')}
+        onChange={(e) => {
+          if (e.target.value === '__new__') {
+            setCreating(true);
+            setError('');
+            return;
+          }
+          setCreating(false);
+          onChange(e.target.value || null);
+        }}
+      >
+        <option value="">No project</option>
+        <option value="__new__">New project…</option>
+        {rows.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.title}
+          </option>
+        ))}
+      </Select>
+      {creating ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Input
+            className="min-w-0 flex-1"
+            value={title}
+            placeholder="Project name"
+            aria-label="New project name"
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <Button
+            busy={busy}
+            onClick={async () => {
+              const name = title.trim();
+              if (!name) {
+                setError('Name the project.');
+                return;
+              }
+              setBusy(true);
+              setError('');
+              try {
+                const created = await post<{ id: string; title: string }>('/projects', { title: name, type: 'OTHER' });
+                setMade((items) => [{ id: created.id, title: created.title || name }, ...items]);
+                onChange(created.id);
+                setCreating(false);
+                setTitle('');
+                await refresh('/projects');
+              } catch (e) {
+                setError(e instanceof ApiError ? e.message : 'That project was not created.');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Create
+          </Button>
+        </div>
+      ) : null}
+      {error ? <p className="mt-1 text-xs text-bad">{error}</p> : null}
+    </Field>
+  );
+}
+
 function LastOnMachine({
   jobs,
   workerId,
@@ -1327,6 +1408,7 @@ function AudioTab() {
     defaults: { referenceText: string; targetText: string; builtinName: string; clips?: { file: string; label: string; referenceText: string }[] };
     workers: Worker[];
     draft: {
+      projectId?: string | null;
       workerId: string | null;
       audioFileId: string | null;
       audioUploadName: string | null;
@@ -1340,6 +1422,7 @@ function AudioTab() {
     jobs: Studio['jobs'];
   }>('/comfy/audio');
   const [form, setForm] = useState<{
+    projectId: string | null;
     workerId: string | null;
     audioFileId: string | null;
     audioUploadName: string | null;
@@ -1365,6 +1448,7 @@ function AudioTab() {
       remembered = null;
     }
     setForm({
+      projectId: d?.projectId ?? null,
       workerId:
         (remembered && workers.some((w) => w.id === remembered) ? remembered : null) ??
         d?.workerId ??
@@ -1428,6 +1512,7 @@ function AudioTab() {
         if (!form) return <Spinner />;
         const workers = data.workers ?? [];
         const payload = {
+          projectId: form.projectId,
           workerId: form.workerId,
           audioFileId: form.useBuiltin ? null : form.audioFileId,
           audioUploadName: form.useBuiltin ? null : form.audioUploadName,
@@ -1449,6 +1534,7 @@ function AudioTab() {
               </div>
             ) : null}
             <div className="grid gap-3 md:grid-cols-2">
+              <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} />
               <Field label="Run on" hint="Green is free. Red is rendering. Choosing a PC checks it again.">
                 <div className="flex items-center gap-2">
                   <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
@@ -1697,7 +1783,6 @@ function H3Tab() {
     } | null;
     jobs: Studio['jobs'];
   }>('/comfy/h3');
-  const projects = useApi<{ id: string; title: string }[]>('/projects', { query: { limit: 200 } });
   const [form, setForm] = useState<{
     projectId: string | null;
     workerId: string | null;
@@ -1954,16 +2039,10 @@ function H3Tab() {
               </Field>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Project" hint="Leave this empty and nothing is added to Production or Publishing.">
-                <Select value={form.projectId ?? ''} onChange={(e) => setForm((current) => (current ? { ...current, projectId: e.target.value || null } : current))}>
-                  <option value="">No project</option>
-                  {(Array.isArray(projects.data) ? projects.data : []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.title}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <ProjectPick
+                value={form.projectId}
+                onChange={(projectId) => setForm((current) => (current ? { ...current, projectId } : current))}
+              />
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[240px_1fr]">
               <div className="rounded-lg border border-border bg-black p-2">

@@ -31,6 +31,11 @@ import {
   createDeal,
   createGoal,
   createInvoice,
+  createExpense,
+  updateExpense,
+  deleteExpense,
+  listExpenses,
+  readExpenseReceipt,
   acceptInvoiceSuggestion,
   deleteInvoice,
   dismissInvoiceSuggestion,
@@ -108,7 +113,7 @@ import {
   updatePrefs,
   voidInvoice,
 } from '@creatoros/services';
-import { idParam, makeRouter, withMeta, type AppDeps } from '../http';
+import { idParam, makeRouter, RAW, withMeta, type AppDeps } from '../http';
 
 const date = z.coerce.date();
 const uuid = z.uuid();
@@ -563,6 +568,93 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   );
 
   // ================================================================ finance
+  route(
+    {
+      method: 'GET',
+      url: '/expenses',
+      tag: 'Collaborations',
+      summary: 'Business costs or personal tax entries',
+      query: z.object({
+        scope: z.enum(['BUSINESS', 'PERSONAL']).optional(),
+        year: z.coerce.number().int().min(2000).max(2100).optional(),
+      }),
+    },
+    async ({ ctx, query }) => {
+      await ensureLiveRates(ctx, ov()).catch(() => undefined);
+      return listExpenses(ctx, query);
+    },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/expenses',
+      tag: 'Collaborations',
+      summary: 'Log an expense, with an optional receipt photo',
+      bodyLimit: 12 * 1024 * 1024,
+      body: z.object({
+        scope: z.enum(['BUSINESS', 'PERSONAL']).optional(),
+        description: z.string().trim().min(1).max(500),
+        amountMinor: z.number().int().positive(),
+        currency: z.string().trim().min(3).max(8).optional(),
+        category: z.string().max(40).optional(),
+        taxCategory: z.string().max(40).optional(),
+        incurredAt: z.string().max(40).nullable().optional(),
+        notes: z.string().max(5000).nullable().optional(),
+        receiptBase64: z.string().max(12_000_000).nullable().optional(),
+        receiptType: z.string().max(40).nullable().optional(),
+      }),
+    },
+    ({ ctx, body }) => createExpense(ctx, body),
+  );
+  route(
+    {
+      method: 'PATCH',
+      url: '/expenses/:id',
+      tag: 'Collaborations',
+      summary: 'Edit a business or personal expense',
+      params: idParam,
+      bodyLimit: 12 * 1024 * 1024,
+      body: z.object({
+        description: z.string().trim().min(1).max(500),
+        amountMinor: z.number().int().positive(),
+        currency: z.string().trim().min(3).max(8).optional(),
+        category: z.string().max(40).optional(),
+        taxCategory: z.string().max(40).optional(),
+        incurredAt: z.string().max(40).nullable().optional(),
+        notes: z.string().max(5000).nullable().optional(),
+        receiptBase64: z.string().max(12_000_000).nullable().optional(),
+        receiptType: z.string().max(40).nullable().optional(),
+        removeReceipt: z.boolean().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => updateExpense(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/expenses/:id',
+      tag: 'Collaborations',
+      summary: 'Remove an expense. The receipt photo is removed with it.',
+      params: idParam,
+    },
+    ({ ctx, params }) => deleteExpense(ctx, params.id),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/expenses/:id/receipt',
+      tag: 'Collaborations',
+      summary: 'The receipt photo for one expense',
+      params: idParam,
+    },
+    async ({ ctx, params, reply }) => {
+      const file = await readExpenseReceipt(ctx, params.id);
+      reply.header('content-type', file.type);
+      reply.header('cache-control', 'private, max-age=3600');
+      reply.send(file.bytes);
+      return RAW;
+    },
+  );
   route(
     {
       method: 'GET',

@@ -421,6 +421,11 @@ export const expenses = pgTable('expenses', {
   amountMinor: int8('amount_minor').notNull(),
   currency: text('currency').notNull().default('CAD'),
   category: expenseCategory('category').notNull().default('OTHER'),
+  /** BUSINESS costs reduce earnings. PERSONAL costs are only for year-end taxes. */
+  scope: text('scope').notNull().default('BUSINESS'),
+  taxCategory: text('tax_category'),
+  receiptPath: text('receipt_path'),
+  receiptType: text('receipt_type'),
   incurredAt: ts('incurred_at').notNull().defaultNow(),
   notes: text('notes'),
   createdAt: createdAt(),

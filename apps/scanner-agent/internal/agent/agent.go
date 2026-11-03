@@ -1,8 +1,8 @@
 // Package agent wires the scanner, spool, uploader, hasher and stream server into one long-running process.
 //
 // The agent is outbound-first: it pulls its configuration, pushes observations and heartbeats, and only exposes a
-// small signed, read-only streaming endpoint. Scanning never writes, moves, or deletes media. The only disk
-// changes are owner-confirmed rename, move, and delete requests, and each one has to stay inside an indexed folder.
+// small signed streaming endpoint. Scanning never writes. Disk changes are an owner upload of one new file into
+// an indexed folder, or one confirmed rename, move, or delete inside an indexed folder.
 // If the server is down it keeps scanning into the durable spool and
 // replays when the server returns; if it is revoked it goes idle and never touches the disk again.
 package agent

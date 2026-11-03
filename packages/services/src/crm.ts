@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import {
   and,
   asc,
@@ -23,13 +26,17 @@ import {
 import {
   CLOSED_DEAL_STAGES,
   DEAL_STAGE,
+  EXPENSE_CATEGORY,
   classifyMessage,
+  isClearCollaboration,
   deriveInvoiceStatus,
   INVOICE_STATUS_CHOICES,
   type DealStage,
 } from '@creatoros/domain';
 import { audit, emit } from './audit';
 import { decrypt, encrypt, sha256Hex } from './crypto';
+import { notify } from './notifications';
+import { createDraftProject } from './projects';
 import { badRequest, conflict, notFound, type Ctx } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
@@ -201,6 +208,7 @@ export async function ingestMessage(ctx: Ctx, input: MessageInput) {
         });
       if (thread!.opportunityId || thread!.dealId)
         await emit(tx, ctx.orgId, 'deal.reply_required', { threadId: thread!.id, dealId: thread!.dealId });
+      if (input.source !== 'MANUAL') await noteCollaboration(tx, ctx, thread!, msg.id, classification, input.subject);
     }
     return { threadId: thread!.id, messageId: msg.id, duplicate: false, classification };
   });
@@ -407,6 +415,129 @@ async function upsertContact(
 }
 
 /**
+ * A collaboration email notifies the owner. One that names real commercial terms also opens the pipeline
+ * and a draft production project. A single casual mention stays in the inbox for review.
+ */
+async function noteCollaboration(
+  tx: Executor,
+  ctx: Ctx,
+  thread: { id: string; opportunityId: string | null; triageState: string },
+  messageId: string,
+  classification: ReturnType<typeof classifyMessage>,
+  subject?: string | null,
+) {
+  if (thread.opportunityId || thread.triageState === 'CONFIRMED') {
+    await notify(tx, {
+      orgId: ctx.orgId,
+      type: 'mail.reply',
+      dedupeKey: `mail.reply:${messageId}`,
+      title: 'New email on a collaboration',
+      body: (subject ?? 'New email').slice(0, 180),
+      severity: 'INFO',
+      deepLink: '/collaborations?tab=pipeline',
+      sourceType: 'thread',
+      sourceId: thread.id,
+    });
+    return;
+  }
+  const clear = isClearCollaboration(classification);
+  let projectId: string | null = null;
+  if (clear) {
+    const opened = await confirmOpportunityTx(tx, ctx, thread.id, { title: subject ?? undefined });
+    const [existing] = rowsOf<{ id: string }>(
+      await tx.execute(sql`
+        select id from creative_projects
+        where org_id = ${ctx.orgId} and deleted_at is null and metadata->>'threadId' = ${thread.id}
+        limit 1`),
+    );
+    if (existing) projectId = existing.id;
+    else {
+      const who = classification.extracted.brandGuess;
+      const project = await createDraftProject(tx, ctx, {
+        title: (subject?.trim() || who || 'Collaboration').slice(0, 180),
+        type: 'OTHER',
+        brief: who ? `Collaboration email from ${who}.` : 'Opened from a collaboration email.',
+        reason: 'collaboration email',
+        metadata: { threadId: thread.id, opportunityId: opened.opportunity.id, source: 'collaboration-email' },
+      });
+      projectId = project.id;
+    }
+  }
+  await notify(tx, {
+    orgId: ctx.orgId,
+    type: clear ? 'mail.pipeline' : 'mail.possible',
+    dedupeKey: clear ? `mail.pipeline:${thread.id}` : `mail.possible:${messageId}`,
+    title: clear ? 'Collaboration added to the pipeline' : 'Possible collaboration',
+    body: (subject ?? 'New email').slice(0, 180),
+    severity: 'INFO',
+    deepLink: projectId ? `/production/${projectId}` : '/collaborations?tab=inbox&triage=POSSIBLE',
+    sourceType: 'thread',
+    sourceId: thread.id,
+  });
+}
+
+async function confirmOpportunityTx(tx: Executor, ctx: Ctx, threadId: string, opts: { title?: string } = {}) {
+  const [t] = await tx
+    .select()
+    .from(conversationThreads)
+    .where(and(eq(conversationThreads.id, threadId), eq(conversationThreads.orgId, ctx.orgId)));
+  if (!t) throw notFound('Thread');
+  const cls = rowsOf<any>(
+    await tx.execute(
+      sql`select c.* from inbound_classifications c join messages m on m.id = c.message_id where m.thread_id = ${threadId} order by c.confidence desc limit 1`,
+    ),
+  )[0];
+  const existing = t.opportunityId
+    ? (await tx.select().from(opportunities).where(eq(opportunities.id, t.opportunityId)))[0]
+    : undefined;
+  if (existing) return { opportunity: existing, alreadyConfirmed: true as const };
+  const lastIn = rowsOf<any>(
+    await tx.execute(
+      sql`select from_email as "fromEmail", from_name as "fromName" from messages where thread_id = ${threadId} and direction = 'INBOUND' order by received_at desc limit 1`,
+    ),
+  )[0];
+  const x = (cls?.extracted ?? {}) as Record<string, any>;
+  const org = await upsertExternalOrg(tx, ctx, x.brandGuess ?? lastIn?.fromName);
+  const contact = await upsertContact(tx, ctx, lastIn?.fromEmail, lastIn?.fromName, org?.id ?? null);
+  const [opp] = await tx
+    .insert(opportunities)
+    .values({
+      orgId: ctx.orgId,
+      sourceThreadId: threadId,
+      externalOrgId: org?.id ?? null,
+      contactId: contact?.id ?? null,
+      title: opts.title?.trim() || t.subject || `Opportunity from ${lastIn?.fromEmail ?? 'inbound'}`,
+      offerType: (x.compensation as any) ?? 'UNKNOWN',
+      stage: 'TRIAGE',
+      predictedValueMinor: x.amountMinor ?? null,
+      currency: x.currency ?? 'USD',
+      createdBy: ctx.userId,
+    })
+    .onConflictDoNothing()
+    .returning();
+  const opportunity =
+    opp ?? (await tx.select().from(opportunities).where(eq(opportunities.sourceThreadId, threadId)))[0]!;
+  await tx
+    .update(conversationThreads)
+    .set({
+      triageState: 'CONFIRMED',
+      opportunityId: opportunity.id,
+      externalOrgId: org?.id ?? null,
+      contactId: contact?.id ?? null,
+      updatedAt: new Date(),
+    })
+    .where(eq(conversationThreads.id, threadId));
+  if (cls)
+    await tx.execute(
+      sql`update inbound_classifications set review_outcome = 'ACCEPTED', reviewed_by = ${ctx.userId}, reviewed_at = now() where id = ${cls.id}`,
+    );
+  await audit({ ...ctx, db: tx }, 'thread.triage.confirm', { type: 'thread', id: threadId }, undefined, {
+    opportunityId: opportunity.id,
+  });
+  return { opportunity, alreadyConfirmed: false as const };
+}
+
+/**
  * Owner reviews a suggested collaboration. CONFIRMED creates one opportunity per thread (idempotent); DISMISSED hides it from the queue
  * without deleting anything; MERGED folds a duplicate thread into another.
  */
@@ -455,55 +586,8 @@ export async function triageThread(
       });
       return { threadId, triageState: 'MERGED' as const };
     }
-    const existing = t.opportunityId
-      ? (await tx.select().from(opportunities).where(eq(opportunities.id, t.opportunityId)))[0]
-      : undefined;
-    if (existing)
-      return { threadId, triageState: 'CONFIRMED' as const, opportunity: existing, alreadyConfirmed: true };
-    const lastIn = rowsOf<any>(
-      await tx.execute(
-        sql`select from_email as "fromEmail", from_name as "fromName" from messages where thread_id = ${threadId} and direction = 'INBOUND' order by received_at desc limit 1`,
-      ),
-    )[0];
-    const x = (cls?.extracted ?? {}) as Record<string, any>;
-    const org = await upsertExternalOrg(tx, ctx, x.brandGuess ?? lastIn?.fromName);
-    const contact = await upsertContact(tx, ctx, lastIn?.fromEmail, lastIn?.fromName, org?.id ?? null);
-    const [opp] = await tx
-      .insert(opportunities)
-      .values({
-        orgId: ctx.orgId,
-        sourceThreadId: threadId,
-        externalOrgId: org?.id ?? null,
-        contactId: contact?.id ?? null,
-        title: opts.title?.trim() || t.subject || `Opportunity from ${lastIn?.fromEmail ?? 'inbound'}`,
-        offerType: (x.compensation as any) ?? 'UNKNOWN',
-        stage: 'TRIAGE',
-        predictedValueMinor: x.amountMinor ?? null,
-        currency: x.currency ?? 'USD',
-        createdBy: ctx.userId,
-      })
-      .onConflictDoNothing()
-      .returning();
-    const opportunity =
-      opp ?? (await tx.select().from(opportunities).where(eq(opportunities.sourceThreadId, threadId)))[0]!;
-    await tx
-      .update(conversationThreads)
-      .set({
-        triageState: 'CONFIRMED',
-        opportunityId: opportunity.id,
-        externalOrgId: org?.id ?? null,
-        contactId: contact?.id ?? null,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversationThreads.id, threadId));
-    if (cls)
-      await tx.execute(
-        sql`update inbound_classifications set review_outcome = 'ACCEPTED', reviewed_by = ${ctx.userId}, reviewed_at = now() where id = ${cls.id}`,
-      );
-    await audit({ ...ctx, db: tx }, 'thread.triage.confirm', { type: 'thread', id: threadId }, undefined, {
-      opportunityId: opportunity.id,
-    });
-    return { threadId, triageState: 'CONFIRMED' as const, opportunity, alreadyConfirmed: false };
+    const opened = await confirmOpportunityTx(tx, ctx, threadId, opts);
+    return { threadId, triageState: 'CONFIRMED' as const, ...opened };
   });
 }
 
@@ -915,7 +999,7 @@ export async function getDeal(ctx: Ctx, id: string) {
   const invoiced = inv
     .filter((i) => i.status !== 'VOID' && i.status !== 'DRAFT')
     .reduce((s, i) => s + i.amountMinor, 0);
-  const received = inv.reduce((s, i) => s + i.paidTotalMinor, 0);
+  const received = inv.reduce((s, i) => s + (i.status === 'PAID' ? i.amountMinor : i.paidTotalMinor), 0);
   return {
     ...d,
     deliverables: deliverables.map((x) => ({
@@ -1124,9 +1208,10 @@ export async function setInvoiceStatus(ctx: Ctx, id: string, choice: string) {
       throw conflict('An invoice with payments cannot be voided.', undefined, 'HAS_PAYMENTS');
     const pastDue = i.dueAt != null && i.dueAt.getTime() < Date.now() && i.paidTotalMinor < i.amountMinor;
     const status = picked === 'ISSUED' && pastDue ? 'OVERDUE' : picked;
+    const paidTotalMinor = status === 'PAID' ? i.amountMinor : i.paidTotalMinor;
     const [after] = await tx
       .update(invoices)
-      .set({ status, updatedAt: new Date() })
+      .set({ status, paidTotalMinor, updatedAt: new Date() })
       .where(eq(invoices.id, id))
       .returning();
     await audit(
@@ -1536,7 +1621,13 @@ export async function financeSummary(ctx: Ctx, range: { from?: Date; to?: Date }
   const q = async (query: ReturnType<typeof sql>) =>
     rowsOf<{ currency: string; n: number }>(await ctx.db.execute(query));
   const received = await q(
-    sql`select p.currency, sum(p.amount_minor)::float8 as n from payments p where p.org_id = ${ctx.orgId} and p.received_at >= ${from.toISOString()}::timestamptz and p.received_at < ${to.toISOString()}::timestamptz group by 1`,
+    sql`select currency, sum(case when status = 'PAID' then amount_minor else paid_total_minor end)::float8 as n
+        from invoices
+        where org_id = ${ctx.orgId} and status <> 'VOID' and status <> 'DRAFT'
+          and (status = 'PAID' or paid_total_minor > 0)
+          and coalesce(updated_at, created_at) >= ${from.toISOString()}::timestamptz
+          and coalesce(updated_at, created_at) < ${to.toISOString()}::timestamptz
+        group by 1`,
   );
   const outstanding = await q(
     sql`select currency, sum(amount_minor - paid_total_minor)::float8 as n from invoices where org_id = ${ctx.orgId} and status in ('ISSUED','SENT','CONFIRMED','PARTIALLY_PAID','OVERDUE') group by 1`,
@@ -1545,7 +1636,7 @@ export async function financeSummary(ctx: Ctx, range: { from?: Date; to?: Date }
     sql`select currency, sum(amount_minor - paid_total_minor)::float8 as n from invoices where org_id = ${ctx.orgId} and status = 'OVERDUE' group by 1`,
   );
   const spent = await q(
-    sql`select currency, sum(amount_minor)::float8 as n from expenses where org_id = ${ctx.orgId} and incurred_at >= ${from.toISOString()}::timestamptz and incurred_at < ${to.toISOString()}::timestamptz group by 1`,
+    sql`select currency, sum(amount_minor)::float8 as n from expenses where org_id = ${ctx.orgId} and scope = 'BUSINESS' and incurred_at >= ${from.toISOString()}::timestamptz and incurred_at < ${to.toISOString()}::timestamptz group by 1`,
   );
   const rates = await ctx.db
     .select()
@@ -1604,6 +1695,234 @@ export async function listInvoices(ctx: Ctx, q: { status?: string; dealId?: stri
       where i.org_id = ${ctx.orgId} ${q.status ? sql`and i.status = ${q.status}::invoice_status` : sql``} ${q.dealId ? sql`and i.deal_id = ${q.dealId}` : sql``}
       order by i.issued_at desc nulls last, i.created_at desc limit ${Math.min(q.limit ?? 100, 500)}`),
   );
+}
+
+const TAX_CATEGORIES = [
+  'MEDICAL',
+  'CHARITY',
+  'HOME_OFFICE',
+  'EDUCATION',
+  'PROFESSIONAL',
+  'CHILDCARE',
+  'TRANSIT',
+  'SUPPLIES',
+  'OTHER',
+] as const;
+
+const RECEIPT_TYPES: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heic',
+};
+
+function receiptFile(envDir: string, rel: string) {
+  const root = path.resolve(envDir, 'receipts');
+  const abs = path.resolve(root, rel);
+  if (abs !== root && !abs.startsWith(root + path.sep)) throw badRequest('That receipt is not stored here.');
+  return abs;
+}
+
+export async function listExpenses(ctx: Ctx, q: { scope?: string; year?: number } = {}) {
+  const scope = q.scope === 'PERSONAL' ? 'PERSONAL' : 'BUSINESS';
+  const from = q.year ? new Date(Date.UTC(q.year, 0, 1)) : null;
+  const to = q.year ? new Date(Date.UTC(q.year + 1, 0, 1)) : null;
+  return rowsOf<any>(
+    await ctx.db.execute(sql`
+      select e.id, e.description, e.amount_minor::float8 as "amountMinor", e.currency, e.category,
+             e.scope, e.tax_category as "taxCategory", e.incurred_at as "incurredAt", e.notes,
+             (e.receipt_path is not null) as "hasReceipt",
+             o.base_currency as "baseCurrency",
+             case when e.currency = o.base_currency then e.amount_minor::float8
+                  when fx.rate is not null then round(e.amount_minor * fx.rate)::float8 end as "baseAmountMinor"
+      from expenses e
+      join organizations o on o.id = e.org_id
+      left join lateral (
+        select f.rate from fx_rates f
+        where f.org_id = e.org_id and f.base_currency = e.currency and f.quote_currency = o.base_currency
+        order by f.rate_date desc, f.created_at desc limit 1
+      ) fx on true
+      where e.org_id = ${ctx.orgId} and e.scope = ${scope}
+        ${from ? sql`and e.incurred_at >= ${from.toISOString()}::timestamptz and e.incurred_at < ${to!.toISOString()}::timestamptz` : sql``}
+      order by e.incurred_at desc
+      limit 500`),
+  );
+}
+
+export async function createExpense(
+  ctx: Ctx,
+  input: {
+    scope?: string | null;
+    description: string;
+    amountMinor: number;
+    currency?: string | null;
+    category?: string | null;
+    taxCategory?: string | null;
+    incurredAt?: Date | string | null;
+    notes?: string | null;
+    receiptBase64?: string | null;
+    receiptType?: string | null;
+  },
+) {
+  const scope = input.scope === 'PERSONAL' ? 'PERSONAL' : 'BUSINESS';
+  const description = input.description.trim();
+  if (!description) throw badRequest('Say what this expense was.');
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) throw badRequest('Enter an amount greater than zero.');
+  const category =
+    scope === 'BUSINESS' && input.category && (EXPENSE_CATEGORY as readonly string[]).includes(input.category)
+      ? input.category
+      : 'OTHER';
+  const taxCategory =
+    scope === 'PERSONAL' && input.taxCategory && (TAX_CATEGORIES as readonly string[]).includes(input.taxCategory)
+      ? input.taxCategory
+      : scope === 'PERSONAL'
+        ? 'OTHER'
+        : null;
+  let receipt: { bytes: Buffer; type: string; ext: string } | null = null;
+  if (input.receiptBase64) {
+    const raw = input.receiptBase64.replace(/^data:[^;]+;base64,/, '');
+    const bytes = Buffer.from(raw, 'base64');
+    const type = input.receiptType && RECEIPT_TYPES[input.receiptType] ? input.receiptType : 'image/jpeg';
+    if (!RECEIPT_TYPES[type]) throw badRequest('The receipt photo must be a JPEG, PNG, or WebP.');
+    if (bytes.length < 32 || bytes.length > 8_000_000) throw badRequest('That photo must be under 8 MB.');
+    receipt = { bytes, type, ext: RECEIPT_TYPES[type]! };
+  }
+  const incurredAt = input.incurredAt ? new Date(input.incurredAt) : ctx.now();
+  if (Number.isNaN(incurredAt.getTime())) throw badRequest('That date is not valid.');
+  const id = randomUUID();
+  const rel = receipt ? path.join(ctx.orgId, `${id}.${receipt.ext}`) : null;
+  const [row] = await ctx.db
+    .insert(expenses)
+    .values({
+      id,
+      orgId: ctx.orgId,
+      description,
+      amountMinor: input.amountMinor,
+      currency: (input.currency || 'CAD').toUpperCase(),
+      category: category as (typeof EXPENSE_CATEGORY)[number],
+      scope,
+      taxCategory,
+      receiptPath: rel,
+      receiptType: receipt?.type ?? null,
+      incurredAt,
+      notes: input.notes?.trim() || null,
+    })
+    .returning();
+  if (receipt && rel) {
+    const abs = receiptFile(ctx.env.attachmentsDir, rel);
+    await mkdir(path.dirname(abs), { recursive: true });
+    await writeFile(abs, receipt.bytes);
+  }
+  await audit(ctx, 'expense.create', { type: 'expense', id }, undefined, { scope, amountMinor: input.amountMinor });
+  return row!;
+}
+
+export async function updateExpense(
+  ctx: Ctx,
+  id: string,
+  input: {
+    description: string;
+    amountMinor: number;
+    currency?: string | null;
+    category?: string | null;
+    taxCategory?: string | null;
+    incurredAt?: Date | string | null;
+    notes?: string | null;
+    receiptBase64?: string | null;
+    receiptType?: string | null;
+    removeReceipt?: boolean | null;
+  },
+) {
+  const [existing] = await ctx.db
+    .select()
+    .from(expenses)
+    .where(and(eq(expenses.id, id), eq(expenses.orgId, ctx.orgId)));
+  if (!existing) throw notFound('Expense');
+  const description = input.description.trim();
+  if (!description) throw badRequest('Say what this expense was.');
+  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) throw badRequest('Enter an amount greater than zero.');
+  const personal = existing.scope === 'PERSONAL';
+  const category =
+    !personal && input.category && (EXPENSE_CATEGORY as readonly string[]).includes(input.category)
+      ? input.category
+      : 'OTHER';
+  const taxCategory =
+    personal && input.taxCategory && (TAX_CATEGORIES as readonly string[]).includes(input.taxCategory)
+      ? input.taxCategory
+      : personal
+        ? 'OTHER'
+        : null;
+  const incurredAt = input.incurredAt ? new Date(input.incurredAt) : existing.incurredAt;
+  if (Number.isNaN(incurredAt.getTime())) throw badRequest('That date is not valid.');
+  let receiptPath = existing.receiptPath;
+  let receiptType = existing.receiptType;
+  let nextFile: { abs: string; bytes: Buffer } | null = null;
+  let dropPath: string | null = null;
+  if (input.receiptBase64) {
+    const raw = input.receiptBase64.replace(/^data:[^;]+;base64,/, '');
+    const bytes = Buffer.from(raw, 'base64');
+    const type = input.receiptType && RECEIPT_TYPES[input.receiptType] ? input.receiptType : 'image/jpeg';
+    if (!RECEIPT_TYPES[type]) throw badRequest('The receipt photo must be a JPEG, PNG, or WebP.');
+    if (bytes.length < 32 || bytes.length > 8_000_000) throw badRequest('That photo must be under 8 MB.');
+    if (existing.receiptPath) dropPath = existing.receiptPath;
+    receiptPath = path.join(ctx.orgId, `${id}.${RECEIPT_TYPES[type]}`);
+    receiptType = type;
+    nextFile = { abs: receiptFile(ctx.env.attachmentsDir, receiptPath), bytes };
+  } else if (input.removeReceipt && existing.receiptPath) {
+    dropPath = existing.receiptPath;
+    receiptPath = null;
+    receiptType = null;
+  }
+  const [row] = await ctx.db
+    .update(expenses)
+    .set({
+      description,
+      amountMinor: input.amountMinor,
+      currency: (input.currency || existing.currency).toUpperCase(),
+      category: category as (typeof EXPENSE_CATEGORY)[number],
+      taxCategory,
+      incurredAt,
+      notes: input.notes?.trim() || null,
+      receiptPath,
+      receiptType,
+      updatedAt: new Date(),
+    })
+    .where(eq(expenses.id, id))
+    .returning();
+  if (nextFile) {
+    await mkdir(path.dirname(nextFile.abs), { recursive: true });
+    await writeFile(nextFile.abs, nextFile.bytes);
+  }
+  if (dropPath && dropPath !== receiptPath) {
+    await unlink(receiptFile(ctx.env.attachmentsDir, dropPath)).catch(() => undefined);
+  }
+  await audit(ctx, 'expense.update', { type: 'expense', id }, undefined, { amountMinor: input.amountMinor });
+  return row!;
+}
+
+export async function deleteExpense(ctx: Ctx, id: string) {
+  const [row] = await ctx.db
+    .delete(expenses)
+    .where(and(eq(expenses.id, id), eq(expenses.orgId, ctx.orgId)))
+    .returning({ id: expenses.id, receiptPath: expenses.receiptPath });
+  if (!row) throw notFound('Expense');
+  if (row.receiptPath) {
+    await unlink(receiptFile(ctx.env.attachmentsDir, row.receiptPath)).catch(() => undefined);
+  }
+  await audit(ctx, 'expense.delete', { type: 'expense', id });
+  return { id, removed: true };
+}
+
+export async function readExpenseReceipt(ctx: Ctx, id: string) {
+  const [row] = rowsOf<{ receiptPath: string | null; receiptType: string | null }>(
+    await ctx.db.execute(sql`
+      select receipt_path as "receiptPath", receipt_type as "receiptType"
+      from expenses where id = ${id} and org_id = ${ctx.orgId}`),
+  );
+  if (!row?.receiptPath) throw notFound('Receipt');
+  const bytes = await readFile(receiptFile(ctx.env.attachmentsDir, row.receiptPath));
+  return { bytes, type: row.receiptType || 'image/jpeg' };
 }
 
 export async function getInvoice(ctx: Ctx, id: string) {

@@ -32,9 +32,10 @@ import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { SuggestionCard } from './invoice-suggestions';
 import { ago, dateInput, money, title as titleCase, toMinor, when } from '@/lib/format';
 import { InvoiceStatusSelect } from './invoice-controls';
+import { ExpensesTab, PersonalTaxesTab } from './money-log';
 import { PRIORITIES } from '@/lib/options';
 
-type Tab = 'inbox' | 'pipeline' | 'invoices' | 'partners';
+type Tab = 'inbox' | 'pipeline' | 'invoices' | 'expenses' | 'taxes' | 'partners';
 
 export default function CollaborationsPage() {
   return (
@@ -48,7 +49,7 @@ function Collaborations() {
   const router = useRouter();
   const sp = useSearchParams();
   const initial =
-    (['inbox', 'pipeline', 'invoices', 'partners'] as const).find((t) => t === sp.get('tab')) ?? 'inbox';
+    (['inbox', 'pipeline', 'invoices', 'expenses', 'taxes', 'partners'] as const).find((t) => t === sp.get('tab')) ?? 'inbox';
   const [tab, setTabState] = useState<Tab>(initial);
   const setTab = (t: Tab) => {
     setTabState(t);
@@ -78,6 +79,8 @@ function Collaborations() {
           { id: 'inbox', label: 'Inbox' },
           { id: 'pipeline', label: 'Pipeline' },
           { id: 'invoices', label: 'Invoices & money' },
+          { id: 'expenses', label: 'Expenses' },
+          { id: 'taxes', label: 'Personal taxes' },
           { id: 'partners', label: 'Partners' },
         ]}
         value={tab}
@@ -86,6 +89,8 @@ function Collaborations() {
       {tab === 'inbox' && <Inbox />}
       {tab === 'pipeline' && <Pipeline />}
       {tab === 'invoices' && <Invoices />}
+      {tab === 'expenses' && <ExpensesTab />}
+      {tab === 'taxes' && <PersonalTaxesTab />}
       {tab === 'partners' && <Partners />}
       <IntakeDialog open={intake} onClose={() => setIntake(false)} />
       <NewDealDialog open={newDeal} onClose={() => setNewDeal(false)} />
@@ -669,7 +674,6 @@ function Invoices() {
               'Deal',
               'Amount',
               `In ${rows[0]?.baseCurrency ?? 'CAD'}`,
-              'Paid',
               'Due',
               'Status',
               '',
@@ -710,7 +714,6 @@ function Invoices() {
                     <span className="text-xs text-muted">no rate</span>
                   )}
                 </Td>
-                <Td>{money(i.paidMinor, i.currency)}</Td>
                 <Td>{i.dueAt ? when(i.dueAt, undefined, false) : '—'}</Td>
                 <Td>
                   <InvoiceStatusSelect invoice={i} />

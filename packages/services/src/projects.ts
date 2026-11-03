@@ -204,10 +204,10 @@ export async function convertIdea(
 
 // --------------------------------------------------------------- projects
 
-export type ProjectInput = Partial<ProjectInsert> & { title: string; templateKey?: string };
+export type ProjectInput = Partial<ProjectInsert> & { title: string; templateKey?: string; reason?: string };
 
 async function createProjectTx(tx: Executor, ctx: Ctx, input: ProjectInput) {
-  const { templateKey, ...rest } = input;
+  const { templateKey, reason, ...rest } = input;
   const [project] = await tx
     .insert(creativeProjects)
     .values({
@@ -226,9 +226,9 @@ async function createProjectTx(tx: Executor, ctx: Ctx, input: ProjectInput) {
     projectId: project!.id,
     fromStage: null,
     toStage: 'DRAFT',
-    source: 'user',
+    source: ctx.actor.type === 'system' ? 'system' : 'user',
     actorUserId: ctx.userId,
-    reason: 'created',
+    reason: reason ?? 'created',
   });
   await applyTemplateTx(tx, ctx.orgId, project!.id, project!.contentFormat, templateKey);
   await audit({ ...ctx, db: tx }, 'project.create', { type: 'project', id: project!.id });
@@ -238,6 +238,12 @@ async function createProjectTx(tx: Executor, ctx: Ctx, input: ProjectInput) {
 export async function createProject(ctx: Ctx, input: ProjectInput) {
   if (!input.title?.trim()) throw badRequest('Title is required');
   return ctx.db.transaction((tx) => createProjectTx(tx, ctx, input));
+}
+
+/** Same as createProject, on a transaction the caller already opened. */
+export async function createDraftProject(tx: Executor, ctx: Ctx, input: ProjectInput) {
+  if (!input.title?.trim()) throw badRequest('Title is required');
+  return createProjectTx(tx, ctx, input);
 }
 
 async function applyTemplateTx(tx: Executor, orgId: string, projectId: string, format: string, key?: string) {

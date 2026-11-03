@@ -3,6 +3,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { generationJobs, generationOutputs, gpuWorkers, qwenDrafts, sql, type Db } from '@creatoros/db';
 import { openAgentFile } from './agent-file';
+import { attachJobToProject } from './comfy';
+import { notifyGenerationReady } from './notifications';
 import { audit } from './audit';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
@@ -37,6 +39,7 @@ function isClip(file: string): file is QwenClipFile {
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 
 export interface QwenForm {
+  projectId?: string | null;
   workerId: string | null;
   audioFileId: string | null;
   audioUploadName: string | null;
@@ -149,6 +152,7 @@ async function listQwenJobs(db: Db, orgId: string) {
 export async function saveQwenDraft(ctx: Ctx, form: QwenForm) {
   const now = ctx.now();
   const values = {
+    projectId: form.projectId ?? null,
     workerId: form.workerId,
     audioFileId: form.useBuiltin ? null : form.audioFileId,
     audioUploadName: form.useBuiltin ? null : form.audioUploadName,
@@ -180,6 +184,12 @@ function checkForm(form: QwenForm) {
 export async function generateQwen(ctx: Ctx, form: QwenForm) {
   if (!qwenWorkflow()) throw badRequest(MISSING);
   checkForm(form);
+  if (form.projectId) {
+    const found = rowsOf<{ id: string }>(
+      await ctx.db.execute(sql`select id from creative_projects where id = ${form.projectId} and org_id = ${ctx.orgId} and deleted_at is null`),
+    )[0];
+    if (!found) throw badRequest('That project is not in this workspace.');
+  }
   await saveQwenDraft(ctx, form);
   const [worker] = await ctx.db
     .select()
@@ -191,6 +201,7 @@ export async function generateQwen(ctx: Ctx, form: QwenForm) {
     .insert(generationJobs)
     .values({
       orgId: ctx.orgId,
+      projectId: form.projectId ?? null,
       provider: PROVIDER,
       status: 'QUEUED',
       settings: {
@@ -462,6 +473,12 @@ export async function pollRunningQwen(db: Db, env: ServiceEnv) {
         returning id`),
     );
     if (!saved.length) continue;
+    await notifyGenerationReady(db, {
+      id: job.id,
+      orgId: job.orgId,
+      provider: PROVIDER,
+      settings: { prompt: job.settings.targetText || job.settings.filenamePrefix },
+    }).catch(() => undefined);
     await db.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
     for (const output of entry.outputs) {
       await db.insert(generationOutputs).values({
@@ -472,9 +489,106 @@ export async function pollRunningQwen(db: Db, env: ServiceEnv) {
         expectedPath: output.subfolder ? `${output.subfolder}/${output.filename}` : output.filename,
       });
     }
+    try {
+      await attachJobToProject(db, job.id);
+    } catch {
+      // The voice is saved. The next scan pass links it to the project.
+    }
     updated += 1;
   }
   return { checked: running.length, updated };
+}
+
+/** Phones (installed PWA) refuse a float or 24-bit WAV and also refuse a full-file reply when they asked for a byte range. */
+export function audioMime(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (ext === 'mp3') return 'audio/mpeg';
+  if (ext === 'm4a' || ext === 'mp4' || ext === 'aac') return 'audio/mp4';
+  if (ext === 'ogg' || ext === 'opus') return 'audio/ogg';
+  if (ext === 'flac') return 'audio/flac';
+  return 'audio/wav';
+}
+
+function wavPcm16(input: Buffer): Buffer | null {
+  if (input.length < 44 || input.toString('ascii', 0, 4) !== 'RIFF' || input.toString('ascii', 8, 12) !== 'WAVE') return null;
+  let offset = 12;
+  let format = 0;
+  let channels = 0;
+  let rate = 0;
+  let bits = 0;
+  let data: Buffer | null = null;
+  while (offset + 8 <= input.length) {
+    const id = input.toString('ascii', offset, offset + 4);
+    const size = input.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    if (start + size > input.length) break;
+    const chunk = input.subarray(start, start + size);
+    if (id === 'fmt ' && chunk.length >= 16) {
+      format = chunk.readUInt16LE(0);
+      channels = chunk.readUInt16LE(2);
+      rate = chunk.readUInt32LE(4);
+      bits = chunk.readUInt16LE(14);
+    } else if (id === 'data') {
+      data = Buffer.from(chunk);
+    }
+    offset = start + size + (size % 2);
+  }
+  if (!data || !channels || !rate || !bits) return null;
+  if (format === 1 && bits === 16) return input;
+  const width = bits / 8;
+  if (!Number.isInteger(width) || width < 1) return null;
+  const samples = Math.floor(data.length / width);
+  if (!samples) return null;
+  const pcm = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) {
+    const at = i * width;
+    let unit = 0;
+    if (format === 3 && bits === 32) unit = data.readFloatLE(at);
+    else if (format === 3 && bits === 64) unit = data.readDoubleLE(at);
+    else if (format === 1 && bits === 8) unit = (data[at]! - 128) / 128;
+    else if (format === 1 && bits === 24) {
+      let n = data[at]! | (data[at + 1]! << 8) | (data[at + 2]! << 16);
+      if (n & 0x800000) n |= ~0xffffff;
+      unit = n / 8388608;
+    } else if (format === 1 && bits === 32) unit = data.readInt32LE(at) / 2147483648;
+    else return null;
+    const clipped = Math.max(-1, Math.min(1, unit));
+    pcm.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(clipped * 32767))), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  const byteRate = rate * channels * 2;
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(channels * 2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+export function toPlayableAudio(filename: string, input: Buffer): { body: Buffer; type: string } {
+  const type = audioMime(filename);
+  if (type !== 'audio/wav') return { body: input, type };
+  return { body: wavPcm16(input) ?? input, type: 'audio/wav' };
+}
+
+/** One range, the only kind a phone audio element sends. */
+export function sliceAudioRange(body: Buffer, header: string | undefined): { status: 200 | 206 | 416; body: Buffer; contentRange?: string } {
+  if (!header) return { status: 200, body };
+  const match = /^bytes=(\d+)-(\d*)$/.exec(header.trim());
+  if (!match) return { status: 200, body };
+  const start = Number(match[1]);
+  if (start >= body.length) return { status: 416, body: Buffer.alloc(0), contentRange: `bytes */${body.length}` };
+  const end = match[2] ? Math.min(Number(match[2]), body.length - 1) : body.length - 1;
+  if (end < start) return { status: 416, body: Buffer.alloc(0), contentRange: `bytes */${body.length}` };
+  return { status: 206, body: body.subarray(start, end + 1), contentRange: `bytes ${start}-${end}/${body.length}` };
 }
 
 export async function openQwenAudio(db: Db, orgId: string, jobId: string, range?: string) {

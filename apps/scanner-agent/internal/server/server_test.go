@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +137,51 @@ func TestHealth(t *testing.T) {
 	res, err := http.Get(ts.URL + "/v1/health")
 	if err != nil || res.StatusCode != 200 {
 		t.Fatal(err, res)
+	}
+}
+
+func postUpload(t *testing.T, ts *httptest.Server, path, key string, exp int64, body string) *http.Response {
+	t.Helper()
+	q := url.Values{"root": {rid}, "path": {path}, "exp": {strconv.FormatInt(exp, 10)}, "sig": {client.SignFetch(key, rid, path, exp)}}
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/upload?"+q.Encode(), strings.NewReader(body))
+	req.ContentLength = int64(len(body))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { res.Body.Close() })
+	return res
+}
+
+func TestUploadWritesNewFileAndRefusesOverwrite(t *testing.T) {
+	ts, root, now := setup(t)
+	exp := now.Add(2 * time.Minute).Unix()
+	dest := filepath.Join(root, "edit.mp4")
+	res := postUpload(t, ts, dest, "device-key", exp, "original-bytes")
+	got, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		t.Fatalf("upload status %d %s", res.StatusCode, got)
+	}
+	onDisk, err := os.ReadFile(dest)
+	if err != nil || string(onDisk) != "original-bytes" {
+		t.Fatalf("disk = %q err %v", onDisk, err)
+	}
+	if _, err := os.Stat(dest + ".part"); !os.IsNotExist(err) {
+		t.Fatal("partial file was left behind")
+	}
+	again := postUpload(t, ts, dest, "device-key", exp, "changed")
+	if again.StatusCode != http.StatusConflict {
+		t.Fatalf("overwrite status %d", again.StatusCode)
+	}
+	onDisk, _ = os.ReadFile(dest)
+	if string(onDisk) != "original-bytes" {
+		t.Fatalf("overwrite changed the file to %q", onDisk)
+	}
+	outside := filepath.Join(filepath.Dir(root), "secret-"+filepath.Base(root)+".mp4")
+	if res := postUpload(t, ts, outside, "device-key", exp, "nope"); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("escape status %d", res.StatusCode)
+	}
+	if res := postUpload(t, ts, dest, "wrong-key", exp, "nope"); res.StatusCode != http.StatusForbidden {
+		t.Fatalf("bad signature status %d", res.StatusCode)
 	}
 }

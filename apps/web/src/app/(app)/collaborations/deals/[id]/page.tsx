@@ -226,12 +226,11 @@ export default function DealPage() {
                     No invoices. Create one under Collaborations → Invoices & money.
                   </p>
                 ) : (
-                  <Table head={['Invoice', 'Amount', 'Paid', 'Due', 'Status', '']}>
+                  <Table head={['Invoice', 'Amount', 'Due', 'Status', '']}>
                     {d.invoices.map((i: any) => (
                       <tr key={i.id}>
                         <Td className="font-medium">{i.invoiceNo}</Td>
                         <Td>{money(i.amountMinor, i.currency)}</Td>
-                        <Td>{money(i.paidTotalMinor, i.currency)}</Td>
                         <Td>{i.dueAt ? when(i.dueAt, tz, false) : '—'}</Td>
                         <Td>
                           <InvoiceStatusSelect invoice={i} />

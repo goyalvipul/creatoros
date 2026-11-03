@@ -66,6 +66,7 @@ export const qwenDrafts = pgTable(
   {
     id: pk(),
     orgId: orgRef(),
+    projectId: uuid('project_id').references(() => creativeProjects.id, { onDelete: 'set null' }),
     workerId: uuid('worker_id').references(() => gpuWorkers.id, { onDelete: 'set null' }),
     audioFileId: uuid('audio_file_id').references(() => fileInstances.id, { onDelete: 'set null' }),
     audioUploadName: text('audio_upload_name'),

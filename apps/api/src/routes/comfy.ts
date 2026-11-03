@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { AppError, checkGpuWorker, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listWorkerLoras, openLtxVideo, openQwenAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
+import { AppError, checkGpuWorker, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
 import { ctxFor, makeRouter } from '../http';
 
@@ -41,6 +41,7 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     ({ ctx }) => getLtxStudio(ctx),
   );
   const qwenForm = z.object({
+    projectId: uuid.nullable().optional(),
     workerId: uuid.nullable(),
     audioFileId: uuid.nullable(),
     audioUploadName: z.string().max(300).nullable(),
@@ -265,20 +266,20 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     if (!req.session) throw unauthorized();
     if (req.session.role !== 'OWNER') throw forbidden();
     const { id } = idParam.parse(req.params);
-    const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
-    const { upstream, filename } = await openQwenAudio(deps.db, req.session.orgId, id, range);
-    if (upstream.status >= 400 && upstream.status !== 416) {
+    const { upstream, filename } = await openQwenAudio(deps.db, req.session.orgId, id);
+    if (upstream.status >= 400) {
       throw new AppError(502, 'COMFY_AUDIO', 'The voice is not ready to play from that PC.');
     }
-    for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-      const v = upstream.headers.get(h);
-      if (v) reply.header(h, v);
-    }
-    reply.header('cache-control', 'private, no-store');
-    reply.header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    reply.status(upstream.status);
-    if (!upstream.body) return reply.send();
-    return reply.send(Readable.fromWeb(upstream.body as import('stream/web').ReadableStream));
+    const raw = Buffer.from(await upstream.arrayBuffer());
+    const playable = toPlayableAudio(filename, raw);
+    const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+    const sliced = sliceAudioRange(playable.body, range);
+    reply.header('content-type', playable.type);
+    reply.header('accept-ranges', 'bytes');
+    reply.header('cache-control', 'private, max-age=3600');
+    if (sliced.contentRange) reply.header('content-range', sliced.contentRange);
+    reply.header('content-length', String(sliced.body.length));
+    return reply.status(sliced.status).send(sliced.body);
   });
 
   app.get('/comfy/jobs/:id/video', async (req, reply) => {
@@ -294,8 +295,12 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
       const v = upstream.headers.get(h);
       if (v) reply.header(h, v);
     }
+    const download = (req.query as { download?: string }).download === '1';
     reply.header('cache-control', 'private, no-store');
-    reply.header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    reply.header(
+      'content-disposition',
+      `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
     reply.status(upstream.status);
     if (!upstream.body) return reply.send();
     return reply.send(Readable.fromWeb(upstream.body as import('stream/web').ReadableStream));

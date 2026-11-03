@@ -32,6 +32,7 @@ import {
   Td,
   useToast,
 } from '@/components/ui';
+import { FileDownload } from '@/components/file-download';
 import { SwipeDeleteRow } from '@/components/swipe-delete';
 import { del, post, put, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
@@ -66,6 +67,8 @@ export default function LibraryPage() {
 
 function Library() {
   const sp = useSearchParams();
+  const toast = useToast();
+  const [syncing, setSyncing] = useState(false);
   const [tab, setTab] = useState<'files' | 'duplicates' | 'assets'>(
     sp.get('file') || sp.get('linked') ? 'files' : 'assets',
   );
@@ -104,6 +107,30 @@ function Library() {
       <PageHeader
         title="Library"
         subtitle="Everything your scanner agents have indexed. Files stay where they are; this is a read-only catalogue."
+        actions={
+          <Button
+            variant="primary"
+            busy={syncing}
+            onClick={async () => {
+              setSyncing(true);
+              try {
+                const result = await post<{ roots: number }>('/library/sync');
+                toast.ok(
+                  result.roots
+                    ? `Sync started for ${result.roots} folder${result.roots === 1 ? '' : 's'}. New files show up as each PC reports them.`
+                    : 'No folders are set to scan.',
+                );
+                await refresh('/library', '/assets');
+              } catch (e) {
+                toast.error(e);
+              } finally {
+                setSyncing(false);
+              }
+            }}
+          >
+            Sync now
+          </Button>
+        }
       />
       <Async res={counts}>
         {(c) => (
@@ -294,9 +321,10 @@ function FilePage({
                           })
                         }
                       >
+                        <div className="flex items-stretch">
                         <button
                           type="button"
-                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2"
+                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2"
                           onClick={() => onOpen(f.id)}
                         >
                           {f.hasPreview ? (
@@ -371,6 +399,12 @@ function FilePage({
                             )}
                           </span>
                         </button>
+                        {f.effectiveAvailability === 'AVAILABLE' && (
+                          <span className="pr-2">
+                            <FileDownload href={`/api/v1/files/${f.id}/stream?download=1`} name={f.fileName} />
+                          </span>
+                        )}
+                        </div>
                       </SwipeDeleteRow>
                     </li>
                   );
@@ -626,6 +660,9 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
               ))}
             {!playable && file.hasPreview && (
               <img alt="" className="max-h-64 rounded-lg" src={`/api/v1/files/${id}/preview`} />
+            )}
+            {file.effectiveAvailability === 'AVAILABLE' && (
+              <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={file.fileName} />
             )}
 
             <Card>
@@ -1312,6 +1349,9 @@ function AssetDetail({ id, onClose }: { id: string; onClose: () => void }) {
                     {v.files.map((f: any) => (
                       <li key={f.id} className="flex items-center gap-2 text-xs">
                         <code className="min-w-0 flex-1 break-all">{f.displayPath ?? f.fileName}</code>
+                        {f.effectiveAvailability === 'AVAILABLE' && (
+                          <FileDownload href={`/api/v1/files/${f.id}/stream?download=1`} name={f.fileName ?? 'file'} />
+                        )}
                         <ActionButton
                           size="sm"
                           confirm="Unlink this file from the version? The file itself is untouched."

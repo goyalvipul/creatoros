@@ -4,6 +4,7 @@ import {
   baseName,
   canonicalPath,
   classifyMessage,
+  isClearCollaboration,
   computeProjectProgress,
   convertWithRate,
   deriveInvoiceStatus,
@@ -13,6 +14,7 @@ import {
   invoiceBalance,
   isInsideRoot,
   planFileOperation,
+  planPublishUpload,
   isPublished,
   isValidTimeZone,
   isVerifiedPublished,
@@ -240,6 +242,7 @@ describe('message screening', () => {
     expect(r.extracted.brandGuess).toBe('Acmeaudio');
     expect(r.extracted.compensation).toBe('FLAT_FEE');
     expect(r.extracted.missingTerms).not.toContain('amount');
+    expect(isClearCollaboration(r)).toBe(true);
   });
 
   it('does not treat newsletters or unrelated mail as collaborations', () => {
@@ -272,6 +275,8 @@ describe('message screening', () => {
     expect(r.extracted.missingTerms).toEqual(
       expect.arrayContaining(['amount', 'deadline', 'usage rights', 'deliverables']),
     );
+    expect(r.category).toBe('COLLABORATION');
+    expect(isClearCollaboration(r)).toBe(false);
   });
 });
 
@@ -416,6 +421,20 @@ describe('file operations', () => {
   });
 
   it('delete keeps the original path and has no destination', () => {
+    const uploaded = planPublishUpload({
+      fileName: 'ayi ayi final.mp4',
+      rootDisplayPath: 'D:\\ComfyUI\\output\\',
+      os: 'windows',
+    });
+    expect(uploaded.displayPath).toBe('D:\\ComfyUI\\output\\ayi ayi final.mp4');
+    expect(uploaded.canonicalPath).toBe('d:\\comfyui\\output\\ayi ayi final.mp4');
+    expect(() => planPublishUpload({ fileName: '../secret.mp4', rootDisplayPath: 'D:\\ComfyUI\\output', os: 'windows' })).toThrow(
+      /cannot contain/,
+    );
+    expect(() => planPublishUpload({ fileName: 'notes.txt', rootDisplayPath: 'D:\\ComfyUI\\output', os: 'windows' })).toThrow(
+      /mp4/,
+    );
+
     const planned = planFileOperation({ kind: 'DELETE', displayPath: from, os: 'windows', roots });
     expect(planned.fromPath).toBe(from);
     expect(planned.toPath).toBeNull();

@@ -6,7 +6,9 @@ Deeper detail, when you need it: `AGENTS.md` (short rules), `docs/PRODUCT_SPEC.m
 
 **Keep this file current.** If you change a screen, an API, a migration, a command, or what is actually running, update the matching section here in the same change. Do not leave the next agent reading yesterday's behavior.
 
-Last updated: 2026-10-25, on the Ubuntu host `guardobox`, working tree not yet committed.
+Last updated: 2026-11-03, on the Ubuntu host `guardobox`.
+
+UX work happens in the git worktree `/home/vipul/workspace/creatoros-ux` (branch `ux`), served on port 8082 by `compose.preview.yml`. This folder stays on `main` and keeps serving `https://os.goyalfamily.ca`. The preview uses the live API and database. Do not run the full compose file from the worktree, and do not add migrations on `ux`.
 
 ## 1. What this product is
 

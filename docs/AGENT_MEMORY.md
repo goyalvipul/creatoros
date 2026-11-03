@@ -1,6 +1,6 @@
 # Agent memory
 
-Map of Creator OS as of 2026-11-01. Read this before opening source. Update it in the same change when behavior, routes, or rebuild steps change. Longer briefing: `docs/AGENT_HANDOFF.md`. Intent: `docs/PRODUCT_SPEC.md`. Do not walk the repo to rediscover a line that is already here.
+Map of Creator OS as of 2026-11-01. Read this before opening source. Update it in the same change when behavior, routes, or rebuild steps change. Longer briefing: `docs/AGENT_HANDOFF.md`. Intent: `docs/PRODUCT_SPEC.md`. Owner-facing capability list: `docs/CAPABILITIES.md`. Do not walk the repo to rediscover a line that is already here.
 
 ## Working rules
 
@@ -49,7 +49,7 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 - Tabs: LTX, Audio, MiniMax H3, History, Settings. Last worker is remembered in `cos-ltx-worker`, `cos-qwen-worker`, `cos-h3-worker`.
 - Green or red dot is Comfy `/queue` plus our QUEUED/RUNNING jobs (`machineQueue`). Generate paints the dot busy immediately. Ready or Failed returns it to free on the next poll.
 - **Project** is on LTX, MiniMax, and Audio. The control is `ProjectPick` in the Comfy page. **New project…** posts `POST /projects` with `{ title, type: 'OTHER' }`. Empty project creates no Production or Publishing rows.
-- **Download** on a library file, an asset file, a linked publishing video, and a Comfy history clip saves the original bytes (`/files/:id/stream?download=1`, or `/comfy/jobs/:id/video?download=1` before the scan has a library row). The tile image is still a preview.
+- **Download** on a library file, an asset file, a linked publishing video, and a Comfy history clip saves the original bytes (`/files/:id/stream?download=1`, or `/comfy/jobs/:id/video?download=1` before the scan has a library row). The tile image is still a preview. In the installed phone app the file opens in the browser, so the app stays on the page. A same-window download leaves a black player with no way back.
 - **Publishing title:** the file name plays the original. **Upload** copies the chosen video, unchanged, into an ACTIVE scanned folder on a PC that is on, then links it. `POST /variants/:id/upload`. The scanner must include `/v1/upload` (rebuild with `pnpm agent:build`, copy the exe, restart the service, do not re-pair). An older agent reports that it needs the update. A name that already exists is left untouched.
 - One publishing row per project. `attachLtxVariantToProject` in `comfy.ts` uses the oldest `distribution_variants` row for that project (a Comfy-made row first). Later LTX, MiniMax, and voice files link onto that same asset version. The first clip creates the asset, version, and variant. A finished video is also inserted into `publish_items` (`linkPublishVideo`) so the publishing page can upload it. Voice files stay off that list. Voice jobs call `attachJobToProject` when they succeed. `linkRecentGeneratedOutputs` retries LTX, MiniMax, and `comfyui-qwen-tts` for 14 days, including a video that was scanned after the job finished.
 - Audio draft project column is migration `0028_qwen_project.sql`.
@@ -76,6 +76,17 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 ### Settings
 
 - PCs are added here. Windows tasks: owner saves a Task Scheduler name. Agent only queries that name, or `schtasks /End` then `/Run` on Restart. No general shell. Docker does not update the agent. Build `pnpm agent:build` where Go is installed (this Linux host has no Go), copy `apps/scanner-agent/dist/creatoros-agent-windows-amd64.exe` onto both PCs, restart the service, do not re-pair. Credentials stay in `C:\ProgramData\CreatorOS\agent`.
+
+## UX preview
+
+The live site stays this folder on `main`: `https://os.goyalfamily.ca`. UX edits go in the worktree `/home/vipul/workspace/creatoros-ux` on branch `ux`. That checkout runs only a second web container on port 8082 (`compose.preview.yml`). It uses the live API, database, and worker. Do not run `docker-compose.yml` from the worktree. Do not migrate on `ux`. Preview writes are real. Sign-in there is a separate cookie. `APP_BASE_URL` stays the public site.
+
+```bash
+cd /home/vipul/workspace/creatoros-ux
+docker compose -f compose.preview.yml up -d --build
+```
+
+Open `https://gaurdo-box.tail4c4d02.ts.net:8444` (Tailscale Serve to port 8082). Plain `http://100.108.120.8:8082` stalls ComfyUI because History starts every video at once over HTTP. Stop the preview with `docker compose -f compose.preview.yml stop` from that folder. Remove only the preview address with `tailscale serve --https=8444 off`. That leaves the live site on 8443.
 
 ## Rebuild
 

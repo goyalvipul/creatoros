@@ -126,6 +126,15 @@ function separators(p: string, os: PathOs): string {
   return p.split(other).join(sep);
 }
 
+/** A single mp4 file name. Slashes and Windows-forbidden characters are removed. */
+export function clipFileName(raw: string): string {
+  const cleaned = raw.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim();
+  const dot = cleaned.lastIndexOf('.');
+  const stem = (dot > 0 ? cleaned.slice(0, dot) : cleaned).replace(/\.+$/g, '').trim();
+  if (!stem) throw new TrimError('Enter a file name.');
+  return `${stem.slice(0, 80)}.mp4`;
+}
+
 export function trimFileName(sourceName: string, startMs: number, endMs: number, taken: Iterable<string>): string {
   const dot = sourceName.lastIndexOf('.');
   const raw = (dot > 0 ? sourceName.slice(0, dot) : sourceName).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim();
@@ -154,6 +163,10 @@ export function planTrimOutput(input: {
   durationMs: number | null;
   fps: number | null;
   takenNames: string[];
+  /** When set, this exact name is used instead of the generated trim name. */
+  requestedName?: string | null;
+  /** Remove the original after the new clip is in place. The same name replaces that path. */
+  replace?: boolean;
 }): {
   displayPath: string;
   canonicalPath: string;
@@ -162,6 +175,7 @@ export function planTrimOutput(input: {
   ext: string;
   startMs: number;
   endMs: number;
+  replaceOriginal: boolean;
 } {
   const range = validateTrimRange(input);
   const fromPath = input.displayPath.trim();
@@ -171,8 +185,31 @@ export function planTrimOutput(input: {
   if (!source) throw new TrimError('This file is outside the folders this machine is indexing.');
   const dir = dirName(fromPath);
   if (!dir) throw new TrimError('This file has no folder.');
-  const fileName = trimFileName(input.fileName || 'clip.mp4', range.startMs, range.endMs, input.takenNames);
+  const sourceName = (input.fileName || 'clip.mp4').trim();
+  const used = new Set(input.takenNames.map((name) => name.toLowerCase()));
+  const fileName = input.requestedName?.trim()
+    ? clipFileName(input.requestedName)
+    : trimFileName(sourceName, range.startMs, range.endMs, input.takenNames);
   if (extName(fileName) !== 'mp4') throw new TrimError('The new clip has to be an mp4.');
+  const sameFile = fileName.toLowerCase() === sourceName.toLowerCase();
+  if (sameFile && !input.replace) {
+    throw new TrimError('That name is the original file. Turn on Replace the original file, or choose another name.');
+  }
+  if (!sameFile && used.has(fileName.toLowerCase())) {
+    throw new TrimError('A file with that name is already in that folder.');
+  }
+  if (sameFile) {
+    return {
+      displayPath: fromPath,
+      canonicalPath: fromKey,
+      fileName,
+      rootId: source.id,
+      ext: 'mp4',
+      startMs: range.startMs,
+      endMs: range.endMs,
+      replaceOriginal: true,
+    };
+  }
   const displayPath = separators(dir, input.os).replace(/[\\/]+$/, '') + pathSeparator(input.os) + fileName;
   const key = canonicalPath(displayPath, input.os);
   if (key === fromKey) throw new TrimError('The new clip would replace the original.');
@@ -186,6 +223,7 @@ export function planTrimOutput(input: {
     ext: 'mp4',
     startMs: range.startMs,
     endMs: range.endMs,
+    replaceOriginal: Boolean(input.replace),
   };
 }
 

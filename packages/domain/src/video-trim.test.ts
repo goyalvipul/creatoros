@@ -55,6 +55,53 @@ describe('video trim', () => {
     expect(planned.fileName).toBe('take-trim-0000000-0000500-2.mp4');
   });
 
+  it('uses the name you typed, and the same name only when replace is on', () => {
+    const named = planTrimOutput({
+      displayPath: 'D:\\Mehak\\song.mp4',
+      fileName: 'song.mp4',
+      os: 'windows',
+      roots,
+      startMs: 0,
+      endMs: 1000,
+      durationMs: 4000,
+      fps: 30,
+      takenNames: ['song.mp4'],
+      requestedName: 'chorus',
+    });
+    expect(named.fileName).toBe('chorus.mp4');
+    expect(named.displayPath).toBe('D:\\Mehak\\chorus.mp4');
+    expect(named.replaceOriginal).toBe(false);
+    expect(() =>
+      planTrimOutput({
+        displayPath: 'D:\\Mehak\\song.mp4',
+        fileName: 'song.mp4',
+        os: 'windows',
+        roots,
+        startMs: 0,
+        endMs: 1000,
+        durationMs: 4000,
+        fps: 30,
+        takenNames: ['song.mp4'],
+        requestedName: 'song.mp4',
+      }),
+    ).toThrow(/Replace the original/);
+    const replaced = planTrimOutput({
+      displayPath: 'D:\\Mehak\\song.mp4',
+      fileName: 'song.mp4',
+      os: 'windows',
+      roots,
+      startMs: 0,
+      endMs: 1000,
+      durationMs: 4000,
+      fps: 30,
+      takenNames: ['song.mp4'],
+      requestedName: 'song.mp4',
+      replace: true,
+    });
+    expect(replaced.displayPath).toBe('D:\\Mehak\\song.mp4');
+    expect(replaced.replaceOriginal).toBe(true);
+  });
+
   it('puts the accurate cut after the input and the fast cut on a keyframe seek', () => {
     const accurate = accurateTrimArgs({ startMs: 1500, endMs: 3200, rotate: 90 });
     expect(accurate.indexOf('-ss')).toBeGreaterThan(accurate.indexOf('-i'));

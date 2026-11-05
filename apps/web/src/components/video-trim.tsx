@@ -62,6 +62,9 @@ export function VideoTrim({
   const [playing, setPlaying] = useState(false);
   const [selectionOnly, setSelectionOnly] = useState(false);
   const [mode, setMode] = useState<'ACCURATE' | 'FAST'>('ACCURATE');
+  const [clipName, setClipName] = useState('');
+  const [replaceFile, setReplaceFile] = useState(false);
+  const [playhead, setPlayhead] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<Edit | null>(null);
@@ -72,6 +75,8 @@ export function VideoTrim({
     void api<{ fileName: string; tech?: Probe }>(`/files/${fileId}`).then((file) => {
       if (gone || !file) return;
       setMeta({ name: file.fileName, probe: file.tech ?? {} });
+      const stem = file.fileName.replace(/\.[^.]+$/, '') || 'clip';
+      setClipName(`${stem}-trim`);
       const known = Number(file.tech?.durationMs);
       if (known > 0) {
         setDuration(known / 1000);
@@ -160,6 +165,13 @@ export function VideoTrim({
     window.addEventListener('pointerup', up);
   }
 
+  function seekTo(sec: number) {
+    const t = Math.min(duration || sec, Math.max(0, sec));
+    setPlayhead(t);
+    const video = videoRef.current;
+    if (video) video.currentTime = t;
+  }
+
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
@@ -192,6 +204,8 @@ export function VideoTrim({
           startMs: Math.round(start * 1000),
           endMs: Math.round(end * 1000),
           mode,
+          fileName: replaceFile ? meta?.name ?? clipName.trim() : clipName.trim() || null,
+          replaceOriginal: replaceFile,
           projectId: projectId ?? null,
           variantId: variantId ?? null,
         },
@@ -219,7 +233,9 @@ export function VideoTrim({
 
   const statusLine =
     edit?.status === 'SUCCEEDED'
-      ? `Saved ${edit.outputName ?? 'the new clip'}. The original was not changed.`
+      ? replaceFile
+        ? `Replaced the original with ${edit.outputName ?? 'this cut'}.`
+        : `Saved ${edit.outputName ?? 'the new clip'}. The original was not changed.`
       : edit?.status === 'FAILED' && /ffmpeg is not installed/i.test(edit.error ?? '')
         ? 'The scanner has no ffmpeg. This cut will be made here and the new file goes back to that PC.'
         : edit?.status === 'FAILED'
@@ -239,8 +255,16 @@ export function VideoTrim({
       footer={
         <>
           <Button onClick={() => { setStart(0); setEnd(duration); setSelectionOnly(false); }}>Reset trim</Button>
-          <Button variant="primary" busy={busy} disabled={!ready || edit?.status === 'PENDING' || edit?.status === 'RUNNING'} onClick={() => void save()}>
-            Save as New Clip
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!ready || !clipName.trim() || edit?.status === 'PENDING' || edit?.status === 'RUNNING'}
+            onClick={() => {
+              if (replaceFile && !window.confirm('Replace the original file with this cut? The current file is removed after the new one is saved.')) return;
+              void save();
+            }}
+          >
+            {replaceFile ? 'Replace this file' : 'Save as New Clip'}
           </Button>
         </>
       }
@@ -255,6 +279,7 @@ export function VideoTrim({
           src={`/api/v1/files/${fileId}/stream`}
           onLoadedMetadata={(e) => onLoaded(e.currentTarget)}
           onTimeUpdate={(e) => {
+            setPlayhead(e.currentTarget.currentTime);
             if (!selectionOnly) return;
             if (e.currentTarget.currentTime >= end) {
               e.currentTarget.pause();
@@ -266,7 +291,28 @@ export function VideoTrim({
           onPlay={() => setPlaying(true)}
         />
         <video ref={grabRef} className="hidden" preload="auto" src={`/api/v1/files/${fileId}/stream`} muted />
-        <div ref={barRef} className="relative h-16 select-none overflow-hidden rounded-lg bg-black">
+        <label className="grid gap-1 text-xs text-muted">
+          Play from {fmt(playhead)}
+          <input
+            aria-label="Play from"
+            className="w-full accent-current"
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.05}
+            value={Math.min(playhead, duration || 0)}
+            disabled={!duration}
+            onChange={(e) => seekTo(Number(e.target.value))}
+          />
+        </label>
+        <div
+          ref={barRef}
+          className="relative h-16 select-none overflow-hidden rounded-lg bg-black"
+          onPointerDown={(e) => {
+            if ((e.target as HTMLElement).closest('button')) return;
+            seekTo(seekRatio(e.clientX));
+          }}
+        >
           <div className="flex h-full">
             {frames.length
               ? frames.map((src, i) => (
@@ -280,6 +326,10 @@ export function VideoTrim({
               <div
                 className="absolute inset-y-0 border-y-2 border-white/80 bg-white/10"
                 style={{ left: `${(start / duration) * 100}%`, right: `${100 - (end / duration) * 100}%` }}
+              />
+              <div
+                className="pointer-events-none absolute inset-y-0 w-0.5 bg-white"
+                style={{ left: `${(playhead / duration) * 100}%` }}
               />
               <button
                 type="button"
@@ -343,6 +393,24 @@ export function VideoTrim({
           </label>
         </div>
         <p className="text-xs text-muted">
+          {mode === 'FAST'
+            ? 'Fast keyframe copies the original picture and sound, so it finishes sooner. The clip can start a little earlier than In, on the previous keyframe.'
+            : 'Accurate rebuilds the picture so the clip starts and ends on the times you set. It takes longer than a keyframe copy.'}
+        </p>
+        <label className="grid gap-1 text-sm">
+          <span className="text-xs text-muted">File name</span>
+          <input
+            className="w-full rounded-lg border border-border bg-panel2 px-2 py-1"
+            value={replaceFile ? (meta?.name?.replace(/\.[^.]+$/, '') ?? clipName) : clipName}
+            readOnly={replaceFile}
+            onChange={(e) => setClipName(e.target.value)}
+          />
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={replaceFile} onChange={(e) => setReplaceFile(e.target.checked)} />
+          Replace the original file
+        </label>
+        <p className="text-xs text-muted">
           {[
             meta?.probe.width && meta.probe.height ? `${meta.probe.width}×${meta.probe.height}` : picture ? `${picture.width}×${picture.height}` : null,
             meta?.probe.fps ? `${Math.round(meta.probe.fps)} fps` : null,
@@ -361,7 +429,9 @@ export function VideoTrim({
           </Notice>
         ) : null}
         <p className="text-xs text-muted">
-          Nothing is written until Save as New Clip. The original stays where it is. The new clip is saved in the same folder on that PC.
+          {replaceFile
+            ? 'Nothing is written until you confirm. This cut replaces the file you opened. The previous video is removed.'
+            : 'Nothing is written until Save as New Clip. The original stays where it is. The new clip is saved in the same folder on that PC.'}
         </p>
       </div>
     </Dialog>

@@ -349,6 +349,8 @@ export const videoEdits = pgTable(
     mode: videoEditMode('mode').notNull().default('ACCURATE'),
     startMs: integer('start_ms').notNull(),
     endMs: integer('end_ms').notNull(),
+    /** When true, the original file is removed after the new clip is on that PC. */
+    replaceOriginal: boolean('replace_original').notNull().default(false),
     outputDisplayPath: text('output_display_path').notNull(),
     outputCanonicalPath: text('output_canonical_path').notNull(),
     outputRootId: uuid('output_root_id')

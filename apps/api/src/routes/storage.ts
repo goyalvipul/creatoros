@@ -552,7 +552,7 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       method: 'POST',
       url: '/files/:id/trims',
       tag: 'Library',
-      summary: 'Save a new clip from this video. The original is not changed.',
+      summary: 'Save a clip from this video. The original is removed only when replace is chosen.',
       role: 'EDITOR',
       params: idParam,
       body: z.object({
@@ -561,6 +561,8 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
         mode: z.enum(['ACCURATE', 'FAST']).optional(),
         projectId: z.uuid().nullable().optional(),
         variantId: z.uuid().nullable().optional(),
+        fileName: z.string().trim().min(1).max(180).optional(),
+        replaceOriginal: z.boolean().optional(),
       }),
     },
     ({ ctx, params, body }) => requestVideoTrim(ctx, params.id, body),

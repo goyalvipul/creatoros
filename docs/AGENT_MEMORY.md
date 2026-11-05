@@ -42,7 +42,7 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 ## Library
 
 - **Sync now** on the Library header asks every ACTIVE scan root to scan on the agent’s next poll, then runs `syncFolderAssets` and `linkRecentGeneratedOutputs` so files already indexed are grouped and a finished video is added to its publishing list without waiting for the worker.
-- A saved trim is a new mp4 beside the original. The worker cuts it with ffmpeg and the scanner only receives the new file, because those PCs do not have ffmpeg. Edit video is on a library video, a finished LTX or MiniMax file, and a publishing preview. `POST /files/:id/trims`. The original is not changed. One trim runs at a time. Migration `0030_video_edits`. A trim that already failed because ffmpeg was missing is picked up again after the worker restarts.
+- A saved trim is cut by the worker with ffmpeg and uploaded back to the same folder. The editor can set the file name. **Replace the original file** removes the source after the new clip is on that PC; the same name is swapped onto the original path (the scanner still cannot overwrite in one write). Otherwise the original stays. Play from is a scrubber. Accurate rebuilds to the In and Out times. Fast keyframe copies and can start at the previous keyframe. This editor does not join two videos. `POST /files/:id/trims` with `fileName` and `replaceOriginal`. Migration `0032_video_trim_replace`. Rebuild `docker compose up -d --build --force-recreate migrate api worker` and the preview web.
 
 ## Comfy
 
@@ -104,4 +104,4 @@ Web image must be built with `API_INTERNAL_URL` set. `pnpm test:e2e` builds the 
 
 ## Migrations already added for Comfy
 
-`0024` H3 editor, `0025` H3 project, `0026` Windows tasks, `0027` Qwen clips, `0028` Qwen project. Journal idx matches the number. Next migration is `0031`. `0030` is video trims.
+`0024` H3 editor, `0025` H3 project, `0026` Windows tasks, `0027` Qwen clips, `0028` Qwen project. Journal idx matches the number. Next migration is `0033`. `0030` is video trims. `0031` is YouTube playlists and AI use. `0032` is trim replace.

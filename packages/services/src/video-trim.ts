@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import { fileInstances, sql, type Db } from '@creatoros/db';
-import { accurateTrimArgs, fastTrimArgs, trimDurationOk, TrimError, planTrimOutput, type PathOs } from '@creatoros/domain';
+import { accurateTrimArgs, canonicalPath, fastTrimArgs, trimDurationOk, TrimError, planTrimOutput, type PathOs } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { syncFolderAssets } from './assets';
 import { audit } from './audit';
@@ -114,7 +114,15 @@ export async function listVideoEdits(ctx: Ctx, fileId: string) {
 export async function requestVideoTrim(
   ctx: Ctx,
   fileId: string,
-  input: { startMs: number; endMs: number; mode?: 'ACCURATE' | 'FAST'; projectId?: string | null; variantId?: string | null },
+  input: {
+    startMs: number;
+    endMs: number;
+    mode?: 'ACCURATE' | 'FAST';
+    projectId?: string | null;
+    variantId?: string | null;
+    fileName?: string | null;
+    replaceOriginal?: boolean;
+  },
 ) {
   const file = await loadVideo(ctx, fileId);
   const probe = probeOf(file.tech);
@@ -145,6 +153,8 @@ export async function requestVideoTrim(
       durationMs: probe.durationMs,
       fps: probe.fps,
       takenNames: taken.map((row) => row.name),
+      requestedName: input.fileName,
+      replace: input.replaceOriginal,
     });
   } catch (e) {
     if (e instanceof TrimError) throw badRequest(e.message);
@@ -176,12 +186,13 @@ export async function requestVideoTrim(
       await ctx.db.execute(sql`
         insert into video_edits (
           org_id, device_id, source_file_instance_id, project_id, variant_id, mode,
-          start_ms, end_ms, output_display_path, output_canonical_path, output_root_id,
+          start_ms, end_ms, replace_original, output_display_path, output_canonical_path, output_root_id,
           source_probe, requested_by
         ) values (
           ${ctx.orgId}, ${file.deviceId}, ${file.id}, ${projectId}, ${input.variantId ?? null},
           ${input.mode ?? 'ACCURATE'}::video_edit_mode,
-          ${planned.startMs}, ${planned.endMs}, ${planned.displayPath}, ${planned.canonicalPath}, ${planned.rootId},
+          ${planned.startMs}, ${planned.endMs}, ${planned.replaceOriginal},
+          ${planned.displayPath}, ${planned.canonicalPath}, ${planned.rootId},
           ${JSON.stringify(probe)}::jsonb, ${ctx.userId}
         )
         returning id, status`),
@@ -193,6 +204,7 @@ export async function requestVideoTrim(
       endMs: planned.endMs,
       mode: input.mode ?? 'ACCURATE',
       outputPath: planned.displayPath,
+      replaceOriginal: planned.replaceOriginal,
     });
     return {
       id: created.id,
@@ -474,6 +486,7 @@ export async function runServerVideoTrims(db: Db, env: ServiceEnv): Promise<numb
     rootId: string;
     fps: number | null;
     rotate: number | null;
+    replaceOriginal: boolean;
   }>(
     await db.execute(sql`
       update video_edits e
@@ -494,6 +507,7 @@ export async function runServerVideoTrims(db: Db, env: ServiceEnv): Promise<numb
         e.source_file_instance_id as "sourceId", e.project_id as "projectId", e.variant_id as "variantId",
         e.start_ms as "startMs", e.end_ms as "endMs", e.output_display_path as "toPath",
         e.output_canonical_path as canonical, e.output_root_id as "rootId",
+        e.replace_original as "replaceOriginal",
         nullif(e.source_probe->>'fps', '')::float as fps,
         nullif(e.source_probe->>'rotation', '')::float as rotate`),
   );
@@ -559,8 +573,28 @@ export async function runServerVideoTrims(db: Db, env: ServiceEnv): Promise<numb
       await fail('The new clip was empty. The original was not changed.');
       return 1;
     }
-    await uploadTrim(db, env, edit, info.size, outputPath);
-    await storeTrimResult(db, edit, info.size, checked, actor);
+    const source = rowsOf<{ displayPath: string; size: number; pathOs: string }>(
+      await db.execute(sql`
+        select f.display_path as "displayPath", f.size::float8 as size, r.path_os as "pathOs"
+        from file_instances f join storage_roots r on r.id = f.root_id
+        where f.id = ${edit.sourceId}`),
+    )[0];
+    const os: PathOs = source?.pathOs === 'windows' ? 'windows' : 'posix';
+    const inPlace = Boolean(source && edit.replaceOriginal && sameTrimPath(edit.toPath, source.displayPath));
+    const uploadPath = inPlace ? siblingPath(source!.displayPath, `cos-trim-${edit.id.slice(0, 8)}.mp4`) : edit.toPath;
+    const uploadCanonical = inPlace ? canonicalPath(uploadPath, os) : edit.canonical;
+    await uploadTrim(db, env, { ...edit, toPath: uploadPath }, info.size, outputPath);
+    const savedId = await storeTrimResult(
+      db,
+      { ...edit, toPath: uploadPath, canonical: uploadCanonical },
+      info.size,
+      checked,
+      actor,
+      { complete: !edit.replaceOriginal },
+    );
+    if (edit.replaceOriginal && source) {
+      await replaceOriginalWithClip(db, edit, source, savedId, info.size, inPlace ? uploadPath : edit.toPath, os);
+    }
     return 1;
   } catch (e) {
     await fail((e as Error).message || 'The cut could not be saved.');
@@ -634,6 +668,7 @@ async function storeTrimResult(
   size: number,
   probe: Record<string, unknown>,
   actor: { db: Db; orgId: string; userId: null; actor: { type: 'system'; id: string } },
+  opts: { complete?: boolean } = {},
 ) {
   const fileName = edit.toPath.split(/[/\\]/).pop() || 'clip.mp4';
   const [row] = await db
@@ -699,13 +734,150 @@ async function storeTrimResult(
   }
   await db.execute(sql`
     update video_edits
-    set status = 'SUCCEEDED'::video_edit_status, progress_pct = 100, output_file_instance_id = ${row.id},
-        output_probe = ${JSON.stringify(probe)}::jsonb, error = null, finished_at = now(), updated_at = now()
+    set status = ${opts.complete === false ? 'RUNNING' : 'SUCCEEDED'}::video_edit_status,
+        progress_pct = ${opts.complete === false ? 90 : 100},
+        output_file_instance_id = ${row.id},
+        output_probe = ${JSON.stringify(probe)}::jsonb,
+        error = null,
+        finished_at = case when ${opts.complete === false} then null else now() end,
+        updated_at = now()
     where id = ${edit.id}`);
-  await syncFolderAssets(db, edit.orgId).catch(() => undefined);
-  await audit(actor, 'video.trim.finish', { type: 'file_instance', id: row.id }, undefined, {
+  if (opts.complete !== false) await syncFolderAssets(db, edit.orgId).catch(() => undefined);
+  await audit(actor, opts.complete === false ? 'video.trim.staged' : 'video.trim.finish', { type: 'file_instance', id: row.id }, undefined, {
     editId: edit.id,
     sourceId: edit.sourceId,
     displayPath: edit.toPath,
   });
+  return row.id;
+}
+
+function sameTrimPath(a: string, b: string) {
+  const key = (value: string) => value.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();
+  return key(a) === key(b);
+}
+
+function siblingPath(displayPath: string, fileName: string) {
+  const slash = Math.max(displayPath.lastIndexOf('/'), displayPath.lastIndexOf('\\'));
+  const sep = displayPath.includes('\\') ? '\\' : '/';
+  const dir = slash >= 0 ? displayPath.slice(0, slash) : '';
+  return dir ? `${dir}${sep}${fileName}` : fileName;
+}
+
+async function queueFileChange(
+  db: Db,
+  edit: { orgId: string; deviceId: string },
+  fileId: string,
+  kind: 'RENAME' | 'DELETE',
+  fromPath: string,
+  toPath: string | null,
+  size: number,
+) {
+  const created = rowsOf<{ id: string }>(
+    await db.execute(sql`
+      insert into file_operations (org_id, device_id, file_instance_id, kind, from_path, to_path, size_bytes)
+      values (
+        ${edit.orgId}, ${edit.deviceId}, ${fileId}, ${kind}::file_operation_kind,
+        ${fromPath}, ${toPath}, ${Math.max(0, Math.round(size))}
+      )
+      returning id`),
+  )[0];
+  if (!created) throw new Error('The PC could not be asked to change the file.');
+  return created.id;
+}
+
+async function waitFileChange(db: Db, editId: string, opId: string) {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const row = rowsOf<{ status: string; error: string | null }>(
+      await db.execute(sql`select status::text as status, error from file_operations where id = ${opId}`),
+    )[0];
+    if (row?.status === 'SUCCEEDED') return;
+    if (row?.status === 'FAILED' || row?.status === 'CANCELLED') {
+      throw new Error(row.error || 'The PC could not change the file.');
+    }
+    await db.execute(sql`update video_edits set updated_at = now() where id = ${editId} and status = 'RUNNING'`);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error('The PC did not finish changing the file.');
+}
+
+async function dropReplacedLinks(db: Db, orgId: string, sourceId: string) {
+  await db.execute(sql`delete from publish_items where org_id = ${orgId} and file_instance_id = ${sourceId}`);
+  await db.execute(sql`delete from asset_file_links where org_id = ${orgId} and file_instance_id = ${sourceId}`);
+}
+
+async function finishReplacedTrim(
+  db: Db,
+  edit: { id: string; orgId: string; toPath: string; canonical: string },
+  savedId: string,
+  note: string | null,
+) {
+  await db.execute(sql`
+    update video_edits
+    set status = 'SUCCEEDED'::video_edit_status, progress_pct = 100, output_file_instance_id = ${savedId},
+        output_display_path = ${edit.toPath}, output_canonical_path = ${edit.canonical},
+        error = ${note}, finished_at = now(), updated_at = now()
+    where id = ${edit.id}`);
+  await syncFolderAssets(db, edit.orgId).catch(() => undefined);
+}
+
+/**
+ * The scanner cannot overwrite a file in place. The new clip is uploaded beside it, then the PC
+ * renames the original aside, moves the clip onto the original path, and deletes the aside.
+ * A different name is uploaded directly and the original is deleted after that.
+ */
+async function replaceOriginalWithClip(
+  db: Db,
+  edit: { id: string; orgId: string; deviceId: string; sourceId: string; toPath: string; canonical: string },
+  source: { displayPath: string; size: number },
+  savedId: string,
+  newSize: number,
+  stagedPath: string,
+  os: PathOs,
+) {
+  const inPlace = sameTrimPath(edit.toPath, source.displayPath);
+  if (inPlace) {
+    const bak = siblingPath(source.displayPath, `cosbak-${edit.id.slice(0, 8)}.mp4`);
+    const aside = await queueFileChange(db, edit, edit.sourceId, 'RENAME', source.displayPath, bak, source.size);
+    try {
+      await waitFileChange(db, edit.id, aside);
+    } catch (e) {
+      throw new Error(`The new clip is next to the original, and the original was not replaced. ${(e as Error).message}`);
+    }
+    try {
+      const onto = await queueFileChange(db, edit, savedId, 'RENAME', stagedPath, source.displayPath, newSize);
+      await waitFileChange(db, edit.id, onto);
+    } catch (e) {
+      const back = await queueFileChange(db, edit, edit.sourceId, 'RENAME', bak, source.displayPath, source.size).catch(() => '');
+      if (back) await waitFileChange(db, edit.id, back).catch(() => undefined);
+      throw new Error(`The original was not replaced. ${(e as Error).message}`);
+    }
+    try {
+      const removed = await queueFileChange(db, edit, edit.sourceId, 'DELETE', bak, null, source.size);
+      await waitFileChange(db, edit.id, removed);
+      await dropReplacedLinks(db, edit.orgId, edit.sourceId);
+      await finishReplacedTrim(db, edit, savedId, null);
+    } catch (e) {
+      await finishReplacedTrim(
+        db,
+        edit,
+        savedId,
+        `The cut is in place of the original. The previous video is still on that PC as ${bak.split(/[/\\]/).pop()}. ${(e as Error).message}`.slice(0, 500),
+      );
+    }
+    return;
+  }
+  try {
+    const removed = await queueFileChange(db, edit, edit.sourceId, 'DELETE', source.displayPath, null, source.size);
+    await waitFileChange(db, edit.id, removed);
+    await dropReplacedLinks(db, edit.orgId, edit.sourceId);
+    await finishReplacedTrim(db, edit, savedId, null);
+  } catch (e) {
+    await finishReplacedTrim(
+      db,
+      { ...edit, toPath: stagedPath, canonical: canonicalPath(stagedPath, os) },
+      savedId,
+      `The new clip was saved. The original is still there. ${(e as Error).message}`.slice(0, 500),
+    );
+  }
 }

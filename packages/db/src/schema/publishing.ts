@@ -183,6 +183,13 @@ export const publishDrafts = pgTable(
       .default(sql`'{}'::text[]`),
     privacy: text('privacy'),
     contentForm: text('content_form'),
+    /** YouTube playlist ids chosen for this upload. The video is added when it is sent. */
+    playlistIds: text('playlist_ids')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** YES or NO. Sent as YouTube status.containsSyntheticMedia. */
+    aiUse: text('ai_use'),
     requestId: text('request_id'),
     /** When set and upload_state is SCHEDULED, the worker publishes at this instant. */
     scheduledAt: ts('scheduled_at'),

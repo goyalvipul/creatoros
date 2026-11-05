@@ -475,6 +475,8 @@ function SchedulePost({
   const [tags, setTags] = useState('');
   const [privacy, setPrivacy] = useState('');
   const [contentForm, setContentForm] = useState('');
+  const [playlistIds, setPlaylistIds] = useState<string[]>([]);
+  const [aiUse, setAiUse] = useState('');
   const [whenLocal, setWhenLocal] = useState('');
   const [seeded, setSeeded] = useState(false);
 
@@ -490,6 +492,8 @@ function SchedulePost({
       setTags((existing.hashtags ?? []).join(', '));
       setPrivacy(existing.privacy ?? '');
       setContentForm(existing.contentForm ?? '');
+      setPlaylistIds(existing.playlistIds ?? []);
+      setAiUse(existing.aiUse ?? '');
       setWhenLocal(wallClockInput(existing.scheduledAt, tz));
     }
     setSeeded(true);
@@ -543,6 +547,11 @@ function SchedulePost({
         setPrivacy={setPrivacy}
         contentForm={contentForm}
         setContentForm={setContentForm}
+        accountId={account.id}
+        playlistIds={playlistIds}
+        setPlaylistIds={setPlaylistIds}
+        aiUse={aiUse}
+        setAiUse={setAiUse}
       />
       <Field label="Publish at (your local time)">
         <Input type="datetime-local" required value={whenLocal} onChange={(e) => setWhenLocal(e.target.value)} />
@@ -553,7 +562,7 @@ function SchedulePost({
       <div className="mt-3">
         <ActionButton
           variant="primary"
-          disabled={!whenLocal || acct?.canPublish === false}
+          disabled={!whenLocal || acct?.canPublish === false || (account.platform === 'youtube' && !aiUse)}
           onAction={async () => {
             await post('/publishing/schedule', {
               itemId: (chosen ?? items[0]).id,
@@ -564,6 +573,8 @@ function SchedulePost({
               hashtags: parseTags(tags),
               privacy: privacy || null,
               contentForm: contentForm || null,
+              playlistIds,
+              aiUse: aiUse || null,
               plannedLocal: whenLocal.slice(0, 16),
               timezone: tz,
             });

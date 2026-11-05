@@ -82,13 +82,15 @@ export async function jobLtx(d: WorkerDeps) {
   const h3Queued = await submitQueuedH3(d.db, d.env);
   const h3 = await pollRunningH3(d.db, d.env);
   let trimsExpired = 0;
+  let trims = 0;
   try {
-    const { expireStaleVideoEdits } = await import('@creatoros/services');
+    const { expireStaleVideoEdits, runServerVideoTrims } = await import('@creatoros/services');
     trimsExpired = await expireStaleVideoEdits(d.db);
+    trims = await runServerVideoTrims(d.db, d.env);
   } catch (e) {
-    log(d, 'warn', 'trim expiry skipped', { err: String(e) });
+    log(d, 'warn', 'trim skipped', { err: String(e) });
   }
-  return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3, trimsExpired };
+  return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3, trimsExpired, trims };
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {

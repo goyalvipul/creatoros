@@ -53,6 +53,7 @@ export function VideoTrim({
   const videoRef = useRef<HTMLVideoElement>(null);
   const grabRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const [picture, setPicture] = useState<{ width: number; height: number; duration: number } | null>(null);
   const [meta, setMeta] = useState<{ name: string; probe: Probe } | null>(null);
   const [duration, setDuration] = useState(0);
   const [start, setStart] = useState(0);
@@ -83,7 +84,8 @@ export function VideoTrim({
   }, [fileId]);
 
   useEffect(() => {
-    if (!edit || (edit.status !== 'PENDING' && edit.status !== 'RUNNING')) return;
+    if (!edit || edit.status === 'SUCCEEDED' || edit.status === 'CANCELLED') return;
+    if (edit.status === 'FAILED' && !/ffmpeg is not installed/i.test(edit.error ?? '')) return;
     const timer = setInterval(() => {
       void api<{ edits: Edit[] }>(`/files/${fileId}/trims`).then((page) => {
         const next = page?.edits?.find((row) => row.id === edit.id);
@@ -96,9 +98,12 @@ export function VideoTrim({
   }, [edit, fileId]);
 
   const fps = meta?.probe.fps && meta.probe.fps > 1 ? meta.probe.fps : 30;
-  const portrait = (meta?.probe.height ?? 0) > (meta?.probe.width ?? 1);
+  const portrait = (meta?.probe.height ?? picture?.height ?? 0) > (meta?.probe.width ?? picture?.width ?? 1);
 
   function onLoaded(video: HTMLVideoElement) {
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      setPicture({ width: video.videoWidth, height: video.videoHeight, duration: Number.isFinite(video.duration) ? video.duration : 0 });
+    }
     if (!duration && video.duration && Number.isFinite(video.duration)) {
       setDuration(video.duration);
       setEnd(video.duration);
@@ -215,13 +220,15 @@ export function VideoTrim({
   const statusLine =
     edit?.status === 'SUCCEEDED'
       ? `Saved ${edit.outputName ?? 'the new clip'}. The original was not changed.`
-      : edit?.status === 'FAILED'
-        ? edit.error || 'The trim failed. The original was not changed.'
-        : edit?.status === 'RUNNING'
-          ? `Trimming on that PC… ${edit.progressPct}%`
-          : edit?.status === 'PENDING'
-            ? 'Waiting for that PC.'
-            : null;
+      : edit?.status === 'FAILED' && /ffmpeg is not installed/i.test(edit.error ?? '')
+        ? 'The scanner has no ffmpeg. This cut will be made here and the new file goes back to that PC.'
+        : edit?.status === 'FAILED'
+          ? edit.error || 'The trim failed. The original was not changed.'
+          : edit?.status === 'RUNNING'
+            ? `Cutting the clip… ${edit.progressPct}%`
+            : edit?.status === 'PENDING'
+              ? 'Waiting to cut this clip.'
+              : null;
 
   return (
     <Dialog
@@ -335,20 +342,18 @@ export function VideoTrim({
             </select>
           </label>
         </div>
-        {meta?.probe ? (
-          <p className="text-xs text-muted">
-            {[
-              meta.probe.width && meta.probe.height ? `${meta.probe.width}×${meta.probe.height}` : null,
-              meta.probe.fps ? `${meta.probe.fps} fps` : null,
-              meta.probe.codec,
-              meta.probe.hasAudio === false ? 'No audio' : meta.probe.audioCodec,
-              meta.probe.rotation ? `Rotated ${meta.probe.rotation}°` : null,
-              meta.probe.formatName,
-            ]
-              .filter(Boolean)
-              .join(' · ') || 'Waiting for the file details from the last scan.'}
-          </p>
-        ) : null}
+        <p className="text-xs text-muted">
+          {[
+            meta?.probe.width && meta.probe.height ? `${meta.probe.width}×${meta.probe.height}` : picture ? `${picture.width}×${picture.height}` : null,
+            meta?.probe.fps ? `${Math.round(meta.probe.fps)} fps` : null,
+            meta?.probe.codec,
+            meta?.probe.hasAudio === false ? 'No audio' : meta?.probe.audioCodec,
+            meta?.probe.rotation ? `Rotated ${meta.probe.rotation}°` : null,
+            picture ? fmt(picture.duration) : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'Reading the video…'}
+        </p>
         {statusLine ? <p className="text-sm">{statusLine}</p> : null}
         {error ? (
           <Notice tone="warn" title="Trim">
@@ -356,7 +361,7 @@ export function VideoTrim({
           </Notice>
         ) : null}
         <p className="text-xs text-muted">
-          Nothing is written until Save as New Clip. The new file is made on the same PC, next to the original.
+          Nothing is written until Save as New Clip. The original stays where it is. The new clip is saved in the same folder on that PC.
         </p>
       </div>
     </Dialog>

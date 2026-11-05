@@ -1,6 +1,8 @@
 'use client';
 
-import { Field, Input, Select, Textarea } from '@/components/ui';
+import { useEffect, useState } from 'react';
+import { Button, Field, Input, Select, Textarea } from '@/components/ui';
+import { ApiError, api, post } from '@/lib/api';
 
 const PRIVACY = [
   { id: 'PUBLIC', label: 'Public' },
@@ -43,6 +45,11 @@ export function PublishFields({
   setPrivacy,
   contentForm,
   setContentForm,
+  accountId,
+  playlistIds,
+  setPlaylistIds,
+  aiUse,
+  setAiUse,
 }: {
   platform: string;
   item?: { width?: number | null; height?: number | null; durationMs?: number | null } | null;
@@ -56,6 +63,11 @@ export function PublishFields({
   setPrivacy: (v: string) => void;
   contentForm: string;
   setContentForm: (v: string) => void;
+  accountId?: string;
+  playlistIds?: string[];
+  setPlaylistIds?: (v: string[]) => void;
+  aiUse?: string;
+  setAiUse?: (v: string) => void;
 }) {
   if (platform === 'youtube') {
     return (
@@ -94,6 +106,19 @@ export function PublishFields({
             ))}
           </Select>
         </Field>
+        {accountId && setPlaylistIds ? (
+          <YoutubePlaylists accountId={accountId} playlistIds={playlistIds ?? []} setPlaylistIds={setPlaylistIds} />
+        ) : null}
+        <Field label="AI use">
+          <Select required value={aiUse ?? ''} onChange={(e) => setAiUse?.(e.target.value)}>
+            <option value="">Choose…</option>
+            <option value="YES">Yes</option>
+            <option value="NO">No</option>
+          </Select>
+        </Field>
+        <p className="text-xs text-muted">
+          YouTube asks if the video uses altered or synthetic media. Yes and No are sent with the upload. Nothing is sent until you schedule or publish.
+        </p>
       </>
     );
   }
@@ -126,5 +151,121 @@ export function PublishFields({
     <Field label="Caption">
       <Textarea rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
     </Field>
+  );
+}
+
+function YoutubePlaylists({
+  accountId,
+  playlistIds,
+  setPlaylistIds,
+}: {
+  accountId: string;
+  playlistIds: string[];
+  setPlaylistIds: (v: string[]) => void;
+}) {
+  const [rows, setRows] = useState<{ id: string; title: string }[]>([]);
+  const [canCreate, setCanCreate] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [privacy, setPrivacy] = useState('UNLISTED');
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    let gone = false;
+    setLoading(true);
+    setError(null);
+    void api<{ playlists: { id: string; title: string }[]; canCreate: boolean }>(
+      `/social-accounts/${accountId}/youtube/playlists`,
+    )
+      .then((page) => {
+        if (gone || !page) return;
+        setRows(page.playlists ?? []);
+        setCanCreate(page.canCreate !== false);
+      })
+      .catch((e) => {
+        if (!gone) setError(e instanceof ApiError ? e.message : 'Playlists could not be loaded from YouTube.');
+      })
+      .finally(() => {
+        if (!gone) setLoading(false);
+      });
+    return () => {
+      gone = true;
+    };
+  }, [accountId]);
+
+  const shown = [
+    ...rows,
+    ...playlistIds.filter((id) => !rows.some((row) => row.id === id)).map((id) => ({ id, title: id })),
+  ];
+
+  async function create() {
+    const title = name.trim();
+    if (!title) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await post<{ id: string; title: string }>(`/social-accounts/${accountId}/youtube/playlists`, {
+        title,
+        privacy,
+      });
+      if (created?.id) {
+        setRows((cur) => (cur.some((row) => row.id === created.id) ? cur : [...cur, { id: created.id, title: created.title || title }]));
+        if (!playlistIds.includes(created.id)) setPlaylistIds([...playlistIds, created.id]);
+        setName('');
+      }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'YouTube did not create the playlist.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Field label="Playlists">
+        <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border bg-panel2 p-2">
+          {loading ? <p className="text-xs text-muted">Loading playlists from YouTube…</p> : null}
+          {!loading && shown.length === 0 ? <p className="text-xs text-muted">This channel has no playlists yet.</p> : null}
+          {shown.map((row) => (
+            <label key={row.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={playlistIds.includes(row.id)}
+                onChange={() =>
+                  setPlaylistIds(
+                    playlistIds.includes(row.id) ? playlistIds.filter((id) => id !== row.id) : [...playlistIds, row.id],
+                  )
+                }
+              />
+              <span className="truncate">{row.title}</span>
+            </label>
+          ))}
+        </div>
+      </Field>
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label="New playlist">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Playlist name" />
+        </Field>
+        <Field label="Playlist privacy">
+          <Select value={privacy} onChange={(e) => setPrivacy(e.target.value)}>
+            {PRIVACY.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Button size="sm" busy={creating} disabled={!name.trim() || !canCreate} onClick={() => void create()}>
+          Create
+        </Button>
+      </div>
+      {!canCreate ? (
+        <p className="text-xs text-muted">Creating a playlist needs the YouTube manage permission. Integrations → Enable comments, then reload.</p>
+      ) : (
+        <p className="text-xs text-muted">Create adds the playlist on YouTube now. The video is added to the checked playlists when you schedule or publish.</p>
+      )}
+      {error ? <p className="text-xs text-bad">{error}</p> : null}
+    </div>
   );
 }

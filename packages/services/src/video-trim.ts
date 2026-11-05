@@ -1,9 +1,17 @@
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { spawn } from 'node:child_process';
 import { fileInstances, sql, type Db } from '@creatoros/db';
-import { planTrimOutput, trimDurationOk, TrimError, type PathOs } from '@creatoros/domain';
+import { accurateTrimArgs, fastTrimArgs, trimDurationOk, TrimError, planTrimOutput, type PathOs } from '@creatoros/domain';
+import { openAgentFile } from './agent-file';
 import { syncFolderAssets } from './assets';
 import { audit } from './audit';
-import type { AuthedAgent } from './devices';
-import { badRequest, conflict, notFound, type Ctx } from './types';
+import { getDeviceSigningKey, signAgentFetch, type AuthedAgent } from './devices';
+import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const duplicate = (e: unknown) =>
@@ -214,50 +222,9 @@ export async function cancelVideoTrim(ctx: Ctx, editId: string) {
   return { ok: true };
 }
 
-/** One encode per PC. A second save stays pending until this one reports back. */
-export async function claimVideoEdits(db: Db, agent: AuthedAgent) {
-  return db.transaction(async (tx) => {
-    const rows = rowsOf<{
-      id: string;
-      mode: string;
-      fromPath: string;
-      toPath: string;
-      startMs: number;
-      endMs: number;
-      size: number | string;
-      rotate: number | null;
-    }>(
-      await tx.execute(sql`
-        update video_edits e
-        set status = 'RUNNING'::video_edit_status, started_at = coalesce(e.started_at, now()), updated_at = now()
-        where e.id = (
-          select id from video_edits
-          where device_id = ${agent.deviceId} and status = 'PENDING'
-            and not exists (
-              select 1 from video_edits r
-              where r.device_id = ${agent.deviceId} and r.status = 'RUNNING'
-            )
-          order by created_at
-          limit 1
-          for update skip locked
-        )
-        returning e.id, e.mode, e.start_ms as "startMs", e.end_ms as "endMs",
-          (select f.display_path from file_instances f where f.id = e.source_file_instance_id) as "fromPath",
-          e.output_display_path as "toPath",
-          (select f.size from file_instances f where f.id = e.source_file_instance_id) as size,
-          nullif(e.source_probe->>'rotation', '')::float as rotate`),
-    );
-    return rows.map((row) => ({
-      id: row.id,
-      mode: row.mode,
-      fromPath: row.fromPath,
-      toPath: row.toPath,
-      startMs: row.startMs,
-      endMs: row.endMs,
-      size: Number(row.size) || 0,
-      rotate: row.rotate ?? 0,
-    }));
-  });
+/** The scanner on these PCs does not have ffmpeg. The worker cuts the file and uploads the new clip. */
+export async function claimVideoEdits(_db: Db, _agent: AuthedAgent) {
+  return [];
 }
 
 export async function progressVideoEdit(db: Db, agent: AuthedAgent, input: { id: string; progressPct: number }) {
@@ -419,4 +386,326 @@ export async function expireStaleVideoEdits(db: Db) {
       returning id`),
   );
   return rows.length;
+}
+
+function fraction(rate: unknown): number | null {
+  const text = String(rate ?? '');
+  const [a, b] = text.split('/');
+  const n = Number(a);
+  const d = b == null ? 1 : Number(b);
+  if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0) return null;
+  const value = n / d;
+  return value > 0 && value < 240 ? value : null;
+}
+
+function probeFromFfprobe(raw: string): Record<string, unknown> {
+  const body = JSON.parse(raw) as {
+    streams?: {
+      codec_type?: string;
+      codec_name?: string;
+      width?: number;
+      height?: number;
+      avg_frame_rate?: string;
+      r_frame_rate?: string;
+      duration?: string;
+      disposition?: { attached_pic?: number };
+      tags?: { rotate?: string };
+      side_data_list?: { rotation?: number }[];
+    }[];
+    format?: { duration?: string; format_name?: string };
+  };
+  const video = (body.streams ?? []).find((stream) => stream.codec_type === 'video' && stream.disposition?.attached_pic !== 1);
+  const audio = (body.streams ?? []).find((stream) => stream.codec_type === 'audio');
+  const duration = Number(body.format?.duration ?? video?.duration);
+  let rotation = 0;
+  for (const side of video?.side_data_list ?? []) {
+    if (side.rotation) rotation = Number(side.rotation);
+  }
+  if (!rotation && video?.tags?.rotate) rotation = Number(video.tags.rotate) || 0;
+  return {
+    durationMs: Number.isFinite(duration) ? duration * 1000 : null,
+    fps: fraction(video?.avg_frame_rate) ?? fraction(video?.r_frame_rate),
+    width: video?.width ?? null,
+    height: video?.height ?? null,
+    codec: video?.codec_name ?? null,
+    audioCodec: audio?.codec_name ?? null,
+    hasAudio: Boolean(audio),
+    rotation,
+    formatName: body.format?.format_name ?? null,
+  };
+}
+
+function runProcess(bin: string, args: string[], onLine?: (line: string) => void): Promise<{ code: number; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let pending = '';
+    child.stdout?.on('data', (chunk: Buffer) => {
+      pending += chunk.toString('utf8');
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) onLine?.(line);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-800);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? 1, stderr }));
+  });
+}
+
+/**
+ * Cuts one saved trim on this machine, then uploads the new file into the same folder.
+ * The scanner is not asked to run ffmpeg. The original is only read.
+ */
+export async function runServerVideoTrims(db: Db, env: ServiceEnv): Promise<number> {
+  const claimed = rowsOf<{
+    id: string;
+    mode: 'ACCURATE' | 'FAST';
+    orgId: string;
+    deviceId: string;
+    sourceId: string;
+    projectId: string | null;
+    variantId: string | null;
+    startMs: number;
+    endMs: number;
+    toPath: string;
+    canonical: string;
+    rootId: string;
+    fps: number | null;
+    rotate: number | null;
+  }>(
+    await db.execute(sql`
+      update video_edits e
+      set status = 'RUNNING'::video_edit_status, error = null, progress_pct = 0,
+          started_at = coalesce(e.started_at, now()), updated_at = now()
+      where e.id = (
+        select id from video_edits
+        where (
+          status = 'PENDING'
+          or (status = 'FAILED' and error ilike '%ffmpeg is not installed%')
+        )
+          and not exists (select 1 from video_edits r where r.status = 'RUNNING')
+        order by created_at
+        limit 1
+        for update skip locked
+      )
+      returning e.id, e.mode, e.org_id as "orgId", e.device_id as "deviceId",
+        e.source_file_instance_id as "sourceId", e.project_id as "projectId", e.variant_id as "variantId",
+        e.start_ms as "startMs", e.end_ms as "endMs", e.output_display_path as "toPath",
+        e.output_canonical_path as canonical, e.output_root_id as "rootId",
+        nullif(e.source_probe->>'fps', '')::float as fps,
+        nullif(e.source_probe->>'rotation', '')::float as rotate`),
+  );
+  const edit = claimed[0];
+  if (!edit) return 0;
+  const actor = { db, orgId: edit.orgId, userId: null, actor: { type: 'system' as const, id: 'worker' } };
+  const fail = async (message: string) => {
+    await db.execute(sql`
+      update video_edits
+      set status = 'FAILED'::video_edit_status, error = ${message.slice(0, 500)}, finished_at = now(), updated_at = now()
+      where id = ${edit.id} and status = 'RUNNING'`);
+    await audit(actor, 'video.trim.fail', { type: 'file_instance', id: edit.sourceId }, undefined, {
+      editId: edit.id,
+      error: message.slice(0, 500),
+    });
+  };
+  const dir = await mkdtemp(join(tmpdir(), 'creatoros-trim-'));
+  const sourcePath = join(dir, 'source');
+  const outputPath = join(dir, 'clip.mp4');
+  try {
+    const opened = await openAgentFile(db, env, edit.orgId, edit.sourceId);
+    await pipeline(Readable.fromWeb(opened.body as import('node:stream/web').ReadableStream), createWriteStream(sourcePath));
+    const args = (edit.mode === 'FAST' ? fastTrimArgs({ startMs: edit.startMs, endMs: edit.endMs }) : accurateTrimArgs({ startMs: edit.startMs, endMs: edit.endMs, rotate: edit.rotate })).map(
+      (arg) => (arg === 'INPUT' ? sourcePath : arg === 'OUTPUT' ? outputPath : arg),
+    );
+    const span = (edit.endMs - edit.startMs) / 1000;
+    let lastPct = -1;
+    const encoded = await runProcess('ffmpeg', args, (line) => {
+      if (!line.startsWith('out_time_ms=') || span <= 0) return;
+      const usec = Number(line.slice('out_time_ms='.length));
+      if (!Number.isFinite(usec)) return;
+      const pct = Math.max(0, Math.min(99, Math.round(usec / 1_000_000 / span * 100)));
+      if (pct === lastPct) return;
+      lastPct = pct;
+      void db.execute(sql`
+        update video_edits set progress_pct = ${pct}, updated_at = now()
+        where id = ${edit.id} and status = 'RUNNING'`);
+    });
+    if (encoded.code !== 0) {
+      const detail = encoded.stderr.trim().split('\n').pop() || 'ffmpeg failed';
+      await fail(`The cut failed. The original was not changed. ${detail}`.slice(0, 500));
+      return 1;
+    }
+    const probeJson = await new Promise<string>((resolve, reject) => {
+      const child = spawn('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', outputPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        out += chunk.toString('utf8');
+      });
+      child.on('error', reject);
+      child.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error('The new clip could not be checked.'))));
+    });
+    const checked = probeFromFfprobe(probeJson);
+    const actualMs = num(checked.durationMs);
+    if (actualMs == null || !trimDurationOk(edit.mode, edit.endMs - edit.startMs, actualMs, edit.fps ?? num(checked.fps))) {
+      await fail('The new clip did not match the selected length, so it was not added.');
+      return 1;
+    }
+    const info = await stat(outputPath);
+    if (info.size < 1000) {
+      await fail('The new clip was empty. The original was not changed.');
+      return 1;
+    }
+    await uploadTrim(db, env, edit, info.size, outputPath);
+    await storeTrimResult(db, edit, info.size, checked, actor);
+    return 1;
+  } catch (e) {
+    await fail((e as Error).message || 'The cut could not be saved.');
+    return 1;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function uploadTrim(
+  db: Db,
+  env: ServiceEnv,
+  edit: { orgId: string; deviceId: string; rootId: string; toPath: string },
+  size: number,
+  outputPath: string,
+) {
+  const root = rowsOf<{ listenUrls: string[]; deviceName: string }>(
+    await db.execute(sql`
+      select d.listen_urls as "listenUrls", d.display_name as "deviceName"
+      from storage_roots r join devices d on d.id = r.device_id
+      where r.id = ${edit.rootId} and r.org_id = ${edit.orgId}`),
+  )[0];
+  if (!root) throw new Error('The folder for this clip is no longer indexed.');
+  const key = await getDeviceSigningKey(env, edit.deviceId, db);
+  if (!key) throw new Error('This PC cannot receive a file until its scanner is paired.');
+  const exp = Math.floor(Date.now() / 1000) + 60 * 60;
+  const sig = signAgentFetch(key, edit.rootId, edit.toPath, exp);
+  const loopback = env.processEnv.AGENT_LOOPBACK_HOST;
+  const urls = (root.listenUrls ?? []).map((u) => (loopback ? u.replace(/\/\/(127\.0\.0\.1|localhost)/, `//${loopback}`) : u));
+  if (!urls.length) throw new Error('The scanner has not reported an address the server can reach.');
+  let lastErr = '';
+  for (const base of urls) {
+    const u = `${base.replace(/\/$/, '')}/v1/upload?root=${encodeURIComponent(edit.rootId)}&path=${encodeURIComponent(edit.toPath)}&exp=${exp}&sig=${sig}`;
+    try {
+      const upstream = await fetch(u, {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
+        body: createReadStream(outputPath) as unknown as BodyInit,
+        duplex: 'half',
+      } as RequestInit);
+      const text = await upstream.text();
+      if (upstream.status === 409) throw new Error('A file with this name is already in that folder. The original was not changed.');
+      if (!upstream.ok) {
+        lastErr = text.trim() || `HTTP ${upstream.status}`;
+        continue;
+      }
+      return;
+    } catch (e) {
+      if ((e as Error).message.includes('already in that folder')) throw e;
+      lastErr = (e as Error).message;
+    }
+  }
+  throw new Error(`Could not copy the new clip onto ${root.deviceName} (${lastErr}). The original was not changed.`);
+}
+
+async function storeTrimResult(
+  db: Db,
+  edit: {
+    id: string;
+    orgId: string;
+    deviceId: string;
+    sourceId: string;
+    projectId: string | null;
+    variantId: string | null;
+    startMs: number;
+    endMs: number;
+    toPath: string;
+    canonical: string;
+    rootId: string;
+  },
+  size: number,
+  probe: Record<string, unknown>,
+  actor: { db: Db; orgId: string; userId: null; actor: { type: 'system'; id: string } },
+) {
+  const fileName = edit.toPath.split(/[/\\]/).pop() || 'clip.mp4';
+  const [row] = await db
+    .insert(fileInstances)
+    .values({
+      orgId: edit.orgId,
+      rootId: edit.rootId,
+      deviceId: edit.deviceId,
+      canonicalPath: edit.canonical,
+      displayPath: edit.toPath,
+      fileName,
+      ext: 'mp4',
+      size,
+      mtime: new Date(),
+      availability: 'AVAILABLE',
+      fileType: 'VIDEO',
+      mime: 'video/mp4',
+      probeState: 'INDEXED',
+      tech: { ...probe, trimOf: edit.sourceId, trimStartMs: edit.startMs, trimEndMs: edit.endMs },
+      stableObservations: 2,
+      previousInstanceId: edit.sourceId,
+    })
+    .onConflictDoNothing()
+    .returning({ id: fileInstances.id });
+  if (!row) throw new Error('A file is already indexed at the new clip path.');
+  await db.execute(sql`
+    insert into asset_file_links (org_id, asset_version_id, file_instance_id, link_reason, primary_preference)
+    select l.org_id, l.asset_version_id, ${row.id}, 'trim', false
+    from asset_file_links l
+    where l.org_id = ${edit.orgId} and l.file_instance_id = ${edit.sourceId}
+    on conflict (asset_version_id, file_instance_id) do nothing`);
+  await db.execute(sql`
+    insert into publish_items (org_id, variant_id, file_instance_id)
+    select p.org_id, p.variant_id, ${row.id}
+    from publish_items p
+    where p.org_id = ${edit.orgId} and p.file_instance_id = ${edit.sourceId}
+    on conflict (variant_id, file_instance_id) do nothing`);
+  if (edit.variantId) {
+    await db.execute(sql`
+      insert into publish_items (org_id, variant_id, file_instance_id)
+      select ${edit.orgId}, v.id, ${row.id}
+      from distribution_variants v
+      where v.id = ${edit.variantId} and v.org_id = ${edit.orgId}
+      on conflict (variant_id, file_instance_id) do nothing`);
+  }
+  if (edit.projectId) {
+    await db.execute(sql`
+      insert into publish_items (org_id, variant_id, file_instance_id)
+      select ${edit.orgId}, v.id, ${row.id}
+      from distribution_variants v
+      where v.org_id = ${edit.orgId} and v.project_id = ${edit.projectId}
+      order by v.created_at asc
+      limit 1
+      on conflict (variant_id, file_instance_id) do nothing`);
+    await db.execute(sql`
+      insert into asset_file_links (org_id, asset_version_id, file_instance_id, link_reason, primary_preference)
+      select ${edit.orgId}, v.asset_version_id, ${row.id}, 'trim', false
+      from distribution_variants v
+      where v.org_id = ${edit.orgId} and v.project_id = ${edit.projectId} and v.asset_version_id is not null
+      order by v.created_at asc
+      limit 1
+      on conflict (asset_version_id, file_instance_id) do nothing`);
+  }
+  await db.execute(sql`
+    update video_edits
+    set status = 'SUCCEEDED'::video_edit_status, progress_pct = 100, output_file_instance_id = ${row.id},
+        output_probe = ${JSON.stringify(probe)}::jsonb, error = null, finished_at = now(), updated_at = now()
+    where id = ${edit.id}`);
+  await syncFolderAssets(db, edit.orgId).catch(() => undefined);
+  await audit(actor, 'video.trim.finish', { type: 'file_instance', id: row.id }, undefined, {
+    editId: edit.id,
+    sourceId: edit.sourceId,
+    displayPath: edit.toPath,
+  });
 }

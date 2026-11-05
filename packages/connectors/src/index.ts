@@ -11,3 +11,4 @@ export * from './social';
 export * from './registry';
 export * from './meta/facebook';
 export * from './publish-upload';
+export * from './youtube-playlists';

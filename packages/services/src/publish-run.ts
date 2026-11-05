@@ -24,6 +24,7 @@ import {
 import { audit } from './audit';
 import { signMediaToken } from './crypto';
 import { openAgentFile } from './agent-file';
+import { placeVideoOnPlaylists } from './youtube-playlists';
 import { connectorContext, loadCredentials } from './integrations';
 import { AppError, badRequest, conflict, notFound, type Ctx } from './types';
 
@@ -97,7 +98,8 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const drafts = rowsOf<any>(
     await ctx.db.execute(sql`
       select d.id, d.item_id as "itemId", d.social_account_id as "accountId", d.title, d.caption, d.hashtags, d.privacy,
-             d.content_form as "contentForm", d.scheduled_at as "scheduledAt",
+             d.content_form as "contentForm", d.playlist_ids as "playlistIds", d.ai_use as "aiUse",
+             d.scheduled_at as "scheduledAt",
              d.upload_state as "uploadState", d.error, d.publication_id as "publicationId",
              r.canonical_url as url, r.state as "recordState"
       from publish_drafts d
@@ -154,6 +156,33 @@ export interface PublishRequest {
   hashtags?: string[];
   privacy?: 'PUBLIC' | 'UNLISTED' | 'PRIVATE' | 'SCHEDULED' | null;
   contentForm?: 'VIDEO' | 'SHORT' | null;
+  playlistIds?: string[];
+  aiUse?: 'YES' | 'NO' | null;
+}
+
+function cleanPlaylistIds(ids: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id) continue;
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw badRequest('That playlist is not a YouTube playlist.');
+    if (!out.includes(id)) out.push(id);
+    if (out.length > 20) throw badRequest('Choose at most 20 playlists.');
+  }
+  return out;
+}
+
+function youtubeChoices(
+  platform: string,
+  input: { playlistIds?: string[]; aiUse?: 'YES' | 'NO' | null },
+  existing?: { playlistIds: string[] | null; aiUse: string | null } | null,
+) {
+  if (platform !== 'youtube') return { playlistIds: [] as string[], aiUse: null as 'YES' | 'NO' | null };
+  const playlistIds =
+    input.playlistIds === undefined ? (existing?.playlistIds ?? []) : cleanPlaylistIds(input.playlistIds);
+  const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
+  if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this video uses AI.');
+  return { playlistIds, aiUse: ai };
 }
 
 /**
@@ -205,12 +234,15 @@ export async function requestPublish(
       'ALREADY_PUBLISHING',
     );
 
+  const extra = youtubeChoices(account.platform, input, existing);
   const values = {
     title: input.title?.trim() || null,
     caption: input.caption?.trim() || null,
     hashtags: (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
     privacy: input.privacy ?? null,
     contentForm: input.contentForm ?? null,
+    playlistIds: extra.playlistIds,
+    aiUse: extra.aiUse,
     requestId: input.requestId,
     uploadState: 'QUEUED',
     error: null,
@@ -377,9 +409,12 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
         actorUserId: ctx.userId,
       });
     }
+    const extra = youtubeChoices(account.platform, input, existing);
     const values = {
       ...text,
       contentForm: input.contentForm ?? null,
+      playlistIds: extra.playlistIds,
+      aiUse: extra.aiUse,
       requestId: input.requestId,
       uploadState: 'SCHEDULED',
       scheduledAt,
@@ -538,6 +573,7 @@ export async function executePublish(
         description: youtube!.description,
         tags: youtube!.tags,
         privacy,
+        containsSyntheticMedia: claimed.aiUse === 'YES' ? true : claimed.aiUse === 'NO' ? false : undefined,
         file,
       });
     } else if (account.platform === 'facebook') {
@@ -550,6 +586,17 @@ export async function executePublish(
         file,
       });
     } else return fail('FAILED', 'Publishing is not available for this platform.');
+
+    let playlistNote: string | null = null;
+    if (account.platform === 'youtube' && claimed.playlistIds.length) {
+      try {
+        const missed = await placeVideoOnPlaylists(token, result.externalId, claimed.playlistIds);
+        if (missed.length)
+          playlistNote = `The video is on YouTube. It was not added to every playlist. ${missed.join(' ')}`.slice(0, 500);
+      } catch (e) {
+        playlistNote = `The video is on YouTube. The playlists were not updated. ${(e as Error).message}`.slice(0, 500);
+      }
+    }
 
     const publishedFields = {
       provider: account.platform as 'youtube',
@@ -603,7 +650,7 @@ export async function executePublish(
     });
     await ctx.db
       .update(publishDrafts)
-      .set({ uploadState: 'PUBLISHED', publicationId: rec!.id, error: null, updatedAt: new Date() })
+      .set({ uploadState: 'PUBLISHED', publicationId: rec!.id, error: playlistNote, updatedAt: new Date() })
       .where(eq(publishDrafts.id, claimed.id));
     await audit(ctx, 'publish.uploaded', { type: 'publication', id: rec!.id }, undefined, {
       platform: account.platform,

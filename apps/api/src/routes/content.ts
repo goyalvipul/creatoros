@@ -64,6 +64,8 @@ import {
   listVariants,
   requestPublish,
   schedulePublish,
+  listAccountPlaylists,
+  createAccountPlaylist,
   unlinkPublishFile,
   markPublishedManual,
   publishingMatrix,
@@ -259,6 +261,31 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       await archiveSocialAccount(ctx, params.id);
       return { ok: true };
     },
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/social-accounts/:id/youtube/playlists',
+      tag: 'Publishing',
+      summary: 'Playlists on the connected YouTube channel',
+      params: idParam,
+    },
+    ({ ctx, params }) => listAccountPlaylists(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/social-accounts/:id/youtube/playlists',
+      tag: 'Publishing',
+      summary: 'Create a playlist on the connected YouTube channel',
+      status: 201,
+      params: idParam,
+      body: z.object({
+        title: z.string().trim().min(1).max(150),
+        privacy: z.enum(['PUBLIC', 'UNLISTED', 'PRIVATE']).optional(),
+      }),
+    },
+    ({ ctx, params, body }) => createAccountPlaylist(ctx, params.id, body),
   );
   // ================================================================ ideas
   const ideaFields = {
@@ -980,6 +1007,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         hashtags: z.array(z.string().max(100)).max(30).optional(),
         privacy: z.enum(PRIVACY).nullable().optional(),
         contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
+        playlistIds: z.array(z.string().max(80)).max(20).optional(),
+        aiUse: z.enum(['YES', 'NO']).nullable().optional(),
       }),
     },
     ({ ctx, body }) => requestPublish(ctx, body, { enqueue: deps.enqueue }),
@@ -1000,6 +1029,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         hashtags: z.array(z.string().max(100)).max(30).optional(),
         privacy: z.enum(PRIVACY).nullable().optional(),
         contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
+        playlistIds: z.array(z.string().max(80)).max(20).optional(),
+        aiUse: z.enum(['YES', 'NO']).nullable().optional(),
         plannedLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/),
         timezone: z.string().max(64).optional(),
       }),

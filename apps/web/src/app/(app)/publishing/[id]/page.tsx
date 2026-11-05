@@ -349,6 +349,8 @@ function PublishDialog({
   const [tags, setTags] = useState((draft?.hashtags ?? []).join(', '));
   const [privacy, setPrivacy] = useState(draft?.privacy ?? '');
   const [contentForm, setContentForm] = useState(draft?.contentForm ?? '');
+  const [playlistIds, setPlaylistIds] = useState<string[]>(draft?.playlistIds ?? []);
+  const [aiUse, setAiUse] = useState(draft?.aiUse ?? '');
   const platform = account.platform as string;
   return (
     <FormDialog
@@ -366,6 +368,8 @@ function PublishDialog({
           hashtags: parseTags(tags),
           privacy: privacy || null,
           contentForm: contentForm || null,
+          playlistIds,
+          aiUse: aiUse || null,
         });
         await refresh(`/variants/${variantId}/publish`, '/publishing/matrix');
       }}
@@ -386,6 +390,11 @@ function PublishDialog({
         setPrivacy={setPrivacy}
         contentForm={contentForm}
         setContentForm={setContentForm}
+        accountId={account.id}
+        playlistIds={playlistIds}
+        setPlaylistIds={setPlaylistIds}
+        aiUse={aiUse}
+        setAiUse={setAiUse}
       />
     </FormDialog>
   );

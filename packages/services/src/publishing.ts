@@ -232,11 +232,34 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
     ))
       published.set(`${r.variantId}:${r.accountId}`, r.n);
   }
+  const previews = new Map<string, string[]>();
+  if (ids.length) {
+    const idList = sql.join(
+      ids.map((i) => sql`${i}::uuid`),
+      sql`, `,
+    );
+    for (const r of rowsOf<{ variantId: string; fileInstanceId: string }>(
+      await ctx.db.execute(sql`
+        select variant_id as "variantId", file_instance_id as "fileInstanceId"
+        from (
+          select variant_id, file_instance_id,
+                 row_number() over (partition by variant_id order by created_at) as n
+          from publish_items
+          where variant_id in (${idList})
+        ) s
+        where n <= 4`),
+    )) {
+      const list = previews.get(r.variantId) ?? [];
+      list.push(r.fileInstanceId);
+      previews.set(r.variantId, list);
+    }
+  }
   return {
     accounts,
     rows: variants.map((v) => ({
       ...v,
       attached: attached.get(v.id) ?? 0,
+      previews: previews.get(v.id) ?? [],
       cells: accounts.map((a) => ({
         accountId: a.id,
         ...(cells.get(`${v.id}:${a.id}`) ?? { state: 'NOT_PLANNED', recordId: null }),

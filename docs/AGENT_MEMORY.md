@@ -42,7 +42,7 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 ## Library
 
 - **Sync now** on the Library header asks every ACTIVE scan root to scan on the agent’s next poll, then runs `syncFolderAssets` and `linkRecentGeneratedOutputs` so files already indexed are grouped and a finished video is added to its publishing list without waiting for the worker.
-- A saved trim is a new mp4 beside the original, written by the scanner on that PC. Edit video is on a library video, a finished LTX or MiniMax file, and a publishing preview. `POST /files/:id/trims`. The original is not changed. One trim runs per PC. Migration `0030_video_edits`. The scanner must include trim (`pnpm agent:build`, copy the exe, restart, do not re-pair). An older scanner leaves the trim waiting.
+- A saved trim is a new mp4 beside the original. The worker cuts it with ffmpeg and the scanner only receives the new file, because those PCs do not have ffmpeg. Edit video is on a library video, a finished LTX or MiniMax file, and a publishing preview. `POST /files/:id/trims`. The original is not changed. One trim runs at a time. Migration `0030_video_edits`. A trim that already failed because ffmpeg was missing is picked up again after the worker restarts.
 
 ## Comfy
 
@@ -51,6 +51,7 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 - Green or red dot is Comfy `/queue` plus our QUEUED/RUNNING jobs (`machineQueue`). Generate paints the dot busy immediately. Ready or Failed returns it to free on the next poll.
 - **Project** is on LTX, MiniMax, and Audio. The control is `ProjectPick` in the Comfy page. **New project…** posts `POST /projects` with `{ title, type: 'OTHER' }`. Empty project creates no Production or Publishing rows.
 - **Download** on a library file, an asset file, a linked publishing video, and a Comfy history clip saves the original bytes (`/files/:id/stream?download=1`, or `/comfy/jobs/:id/video?download=1` before the scan has a library row). The tile image is still a preview. In the installed phone app the file opens in the browser, so the app stays on the page. A same-window download leaves a black player with no way back.
+- **YouTube form:** Playlists load from the connected channel (`GET /social-accounts/:id/youtube/playlists`). Create adds the playlist on YouTube immediately (`POST` the same path) and needs `youtube.force-ssl` (Integrations → Enable comments). Checked playlists receive the video only when it is sent. AI use Yes/No is `publish_drafts.ai_use` and is sent as `status.containsSyntheticMedia`. Migration `0031_youtube_playlist_ai`. Rebuild `docker compose up -d --build --force-recreate migrate api`. The preview form also needs `cd /home/vipul/workspace/creatoros-ux && docker compose -f compose.preview.yml up -d --build`.
 - **Publishing title:** the file name plays the original. **Upload** copies the chosen video, unchanged, into an ACTIVE scanned folder on a PC that is on, then links it. `POST /variants/:id/upload`. The scanner must include `/v1/upload` (rebuild with `pnpm agent:build`, copy the exe, restart the service, do not re-pair). An older agent reports that it needs the update. A name that already exists is left untouched.
 - One publishing row per project. `attachLtxVariantToProject` in `comfy.ts` uses the oldest `distribution_variants` row for that project (a Comfy-made row first). Later LTX, MiniMax, and voice files link onto that same asset version. The first clip creates the asset, version, and variant. A finished video is also inserted into `publish_items` (`linkPublishVideo`) so the publishing page can upload it. Voice files stay off that list. Voice jobs call `attachJobToProject` when they succeed. `linkRecentGeneratedOutputs` retries LTX, MiniMax, and `comfyui-qwen-tts` for 14 days, including a video that was scanned after the job finished.
 - Audio draft project column is migration `0028_qwen_project.sql`.
@@ -91,7 +92,7 @@ Publishing live preview is one social frame (handle, title, caption on a Shorts 
 
 ## Rebuild
 
-Download, playback on a title, publishing upload, and video trim: `docker compose up -d --build --force-recreate migrate api worker web`
+Download, playback on a title, publishing upload, and video trim: `docker compose up -d --build --force-recreate api worker`
 
 The upload also needs a new scanner on each Windows PC: `pnpm agent:build`, copy `apps/scanner-agent/dist/creatoros-agent-windows-amd64.exe`, restart the service, do not re-pair.
 

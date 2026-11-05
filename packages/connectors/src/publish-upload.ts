@@ -177,6 +177,8 @@ export async function uploadYoutubeVideo(
     description: string;
     tags: string[];
     privacy: 'public' | 'unlisted' | 'private';
+    /** YouTube status.containsSyntheticMedia. Omitted when the owner has not chosen. */
+    containsSyntheticMedia?: boolean;
     file: UploadBytes;
   },
 ): Promise<UploadResult> {
@@ -193,7 +195,12 @@ export async function uploadYoutubeVideo(
       },
       body: JSON.stringify({
         snippet: { title: input.title, description: input.description, tags: input.tags },
-        status: { privacyStatus: input.privacy },
+        status: {
+          privacyStatus: input.privacy,
+          ...(typeof input.containsSyntheticMedia === 'boolean'
+            ? { containsSyntheticMedia: input.containsSyntheticMedia }
+            : {}),
+        },
       }),
     },
   );

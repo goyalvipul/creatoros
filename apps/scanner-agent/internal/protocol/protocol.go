@@ -168,6 +168,32 @@ type FileOpResult struct {
 	ToPath string `json:"toPath,omitempty"`
 }
 
+// VideoEdit is one saved trim. The agent writes a new file and leaves the source alone.
+type VideoEdit struct {
+	ID       string  `json:"id"`
+	Mode     string  `json:"mode"`
+	FromPath string  `json:"fromPath"`
+	ToPath   string  `json:"toPath"`
+	StartMs  int     `json:"startMs"`
+	EndMs    int     `json:"endMs"`
+	Size     int64   `json:"size"`
+	Rotate   float64 `json:"rotate"`
+}
+
+type VideoEditProgress struct {
+	ID          string `json:"id"`
+	ProgressPct int    `json:"progressPct"`
+}
+
+type VideoEditResult struct {
+	ID     string          `json:"id"`
+	OK     bool            `json:"ok"`
+	Error  string          `json:"error,omitempty"`
+	ToPath string          `json:"toPath,omitempty"`
+	Size   int64           `json:"size,omitempty"`
+	Probe  *Probe          `json:"probe,omitempty"`
+}
+
 // WindowsTask is one Task Scheduler name the owner saved. The agent only queries or restarts that name.
 type WindowsTask struct {
 	ID       string `json:"id"`

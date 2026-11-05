@@ -42,6 +42,7 @@ Business logic stays in `packages/services`. Routes use `makeRouter`. UI calls `
 ## Library
 
 - **Sync now** on the Library header asks every ACTIVE scan root to scan on the agent’s next poll, then runs `syncFolderAssets` and `linkRecentGeneratedOutputs` so files already indexed are grouped and a finished video is added to its publishing list without waiting for the worker.
+- A saved trim is a new mp4 beside the original, written by the scanner on that PC. Edit video is on a library video, a finished LTX or MiniMax file, and a publishing preview. `POST /files/:id/trims`. The original is not changed. One trim runs per PC. Migration `0030_video_edits`. The scanner must include trim (`pnpm agent:build`, copy the exe, restart, do not re-pair). An older scanner leaves the trim waiting.
 
 ## Comfy
 
@@ -86,11 +87,11 @@ cd /home/vipul/workspace/creatoros-ux
 docker compose -f compose.preview.yml up -d --build
 ```
 
-Open `https://gaurdo-box.tail4c4d02.ts.net:8444` (Tailscale Serve to port 8082). Plain `http://100.108.120.8:8082` stalls ComfyUI because History starts every video at once over HTTP. Stop the preview with `docker compose -f compose.preview.yml stop` from that folder. Remove only the preview address with `tailscale serve --https=8444 off`. That leaves the live site on 8443.
+Publishing live preview is one social frame (handle, title, caption on a Shorts or Reel; title under a widescreen YouTube video). The picture fills the frame with no player bar and no file name. The header theme toggle sets `cos-theme`. Dark mode on the preview is warm charcoal; notes and publishing stickies stay paper-colored. Create Studio follows that theme, with a draggable split between the form and the preview. That width is stored in `cos-studio-split` and restored on refresh for every studio tab. LTX has a Run on list for the PC that executes the job. The LTX form is kept in the browser (`cos-ltx-studio`) so image, audio, and trim remain after leaving Create Studio. The studio tab bar does not choose a PC. Frame size and upscale size are dropdowns; Custom opens width and height. The LTX audio card plays the chosen file from its icon through the same-origin file stream, and the trim sets the start and length sent with generation. Video playback uses one stream. When a file has no saved thumbnail, the list takes one still from that file, one file at a time. Fullscreen on the studio preview shows a close button at the top right. The LTX and MiniMax preview sits in a phone frame with a thin edge and shows the whole picture. Recent-result cards under that preview use a hand cursor. A later clip on a busy PC says Waiting in the queue. Edit video saves a new clip beside the original once the live API is rebuilt. MiniMax Length, Join, Size, and Mode stay in a grid so the menus do not stretch apart. Type and brand on a production card open as wrapped pills, the same way an invoice status does. The Collaborations inbox keeps mailbox, reply state, and search on one row. Open `https://gaurdo-box.tail4c4d02.ts.net:8444` (Tailscale Serve to port 8082). Plain `http://100.108.120.8:8082` stalls ComfyUI because History starts every video at once over HTTP. Stop the preview with `docker compose -f compose.preview.yml stop` from that folder. Remove only the preview address with `tailscale serve --https=8444 off`. That leaves the live site on 8443.
 
 ## Rebuild
 
-Download, playback on a title, and publishing upload: `docker compose up -d --build --force-recreate api web`
+Download, playback on a title, publishing upload, and video trim: `docker compose up -d --build --force-recreate migrate api worker web`
 
 The upload also needs a new scanner on each Windows PC: `pnpm agent:build`, copy `apps/scanner-agent/dist/creatoros-agent-windows-amd64.exe`, restart the service, do not re-pair.
 
@@ -102,4 +103,4 @@ Web image must be built with `API_INTERNAL_URL` set. `pnpm test:e2e` builds the 
 
 ## Migrations already added for Comfy
 
-`0024` H3 editor, `0025` H3 project, `0026` Windows tasks, `0027` Qwen clips, `0028` Qwen project. Journal idx matches the number. Next migration is `0029`.
+`0024` H3 editor, `0025` H3 project, `0026` Windows tasks, `0027` Qwen clips, `0028` Qwen project. Journal idx matches the number. Next migration is `0031`. `0030` is video trims.

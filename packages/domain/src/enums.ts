@@ -81,6 +81,12 @@ export type FileOperationKind = (typeof FILE_OPERATION_KIND)[number];
 export const FILE_OPERATION_STATUS = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type FileOperationStatus = (typeof FILE_OPERATION_STATUS)[number];
 
+/** A saved trim. The original file is never replaced. */
+export const VIDEO_EDIT_STATUS = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
+export type VideoEditStatus = (typeof VIDEO_EDIT_STATUS)[number];
+export const VIDEO_EDIT_MODE = ['ACCURATE', 'FAST'] as const;
+export type VideoEditMode = (typeof VIDEO_EDIT_MODE)[number];
+
 export const PROBE_STATE = ['PENDING', 'STILL_WRITING', 'PROBING', 'INDEXED', 'PROBE_FAILED'] as const;
 export type ProbeState = (typeof PROBE_STATE)[number];
 

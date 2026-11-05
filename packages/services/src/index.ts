@@ -13,6 +13,7 @@ export * from './publish-run';
 export * from './publish-upload';
 export * from './agent-file';
 export * from './file-ops';
+export * from './video-trim';
 export * from './crm';
 export * from './actions';
 export * from './integrations';

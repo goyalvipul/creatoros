@@ -23,7 +23,10 @@ import {
   getDeviceSigningKey,
   cancelFileOperation,
   claimFileOperations,
+  claimVideoEdits,
   finishFileOperation,
+  finishVideoEdit,
+  progressVideoEdit,
   agentWindowsTasks,
   reportWindowsTask,
   finishWindowsTaskRestart,
@@ -46,6 +49,9 @@ import {
   requestFileOperation,
   requestScan,
   requestLibrarySync,
+  requestVideoTrim,
+  listVideoEdits,
+  cancelVideoTrim,
   revokeDevice,
   rotateAgentToken,
   setFileMarks,
@@ -203,6 +209,39 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       }),
     },
     ({ agent, body }) => finishFileOperation(db, agent, body),
+  );
+  agentRoute(
+    {
+      method: 'GET',
+      url: '/agents/video-edits',
+      summary: 'One saved video trim for this PC',
+    },
+    ({ agent }) => claimVideoEdits(db, agent),
+  );
+  agentRoute(
+    {
+      method: 'POST',
+      url: '/agents/video-edits/progress',
+      summary: 'Report trim progress',
+      body: z.object({ id: z.uuid(), progressPct: z.number().min(0).max(100) }),
+    },
+    ({ agent, body }) => progressVideoEdit(db, agent, body),
+  );
+  agentRoute(
+    {
+      method: 'POST',
+      url: '/agents/video-edits/result',
+      summary: 'Report a finished trim',
+      body: z.object({
+        id: z.uuid(),
+        ok: z.boolean(),
+        error: z.string().max(500).optional(),
+        toPath: z.string().max(4096).optional(),
+        size: z.number().optional(),
+        probe: z.record(z.string(), z.unknown()).optional(),
+      }),
+    },
+    ({ agent, body }) => finishVideoEdit(db, agent, body),
   );
   agentRoute(
     { method: 'POST', url: '/agents/token/rotate', summary: 'Rotate the device token' },
@@ -497,6 +536,45 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       ]),
     },
     ({ ctx, params, body }) => requestFileOperation(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/files/:id/trims',
+      tag: 'Library',
+      summary: 'Saved trims of this video',
+      params: idParam,
+    },
+    ({ ctx, params }) => listVideoEdits(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/files/:id/trims',
+      tag: 'Library',
+      summary: 'Save a new clip from this video. The original is not changed.',
+      role: 'EDITOR',
+      params: idParam,
+      body: z.object({
+        startMs: z.number().int().min(0).max(6 * 60 * 60 * 1000),
+        endMs: z.number().int().min(1).max(6 * 60 * 60 * 1000),
+        mode: z.enum(['ACCURATE', 'FAST']).optional(),
+        projectId: z.uuid().nullable().optional(),
+        variantId: z.uuid().nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => requestVideoTrim(ctx, params.id, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/video-edits/:id/cancel',
+      tag: 'Library',
+      summary: 'Cancel a trim the PC has not started',
+      role: 'EDITOR',
+      params: idParam,
+    },
+    ({ ctx, params }) => cancelVideoTrim(ctx, params.id),
   );
   route(
     {

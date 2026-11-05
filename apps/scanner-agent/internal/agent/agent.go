@@ -2,7 +2,7 @@
 //
 // The agent is outbound-first: it pulls its configuration, pushes observations and heartbeats, and only exposes a
 // small signed streaming endpoint. Scanning never writes. Disk changes are an owner upload of one new file into
-// an indexed folder, or one confirmed rename, move, or delete inside an indexed folder.
+// an indexed folder, one confirmed rename, move, or delete, or one saved trim that writes a new file beside the source.
 // If the server is down it keeps scanning into the durable spool and
 // replays when the server returns; if it is revoked it goes idle and never touches the disk again.
 package agent
@@ -77,6 +77,7 @@ type Agent struct {
 	cl    *client.Client
 	spool *spool.Spool
 	tools probe.Tools
+	trimBusy atomic.Bool
 
 	mu     sync.RWMutex
 	pcfg   protocol.Config

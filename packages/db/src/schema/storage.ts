@@ -24,6 +24,8 @@ import {
   fileKind,
   fileOperationKind,
   fileOperationStatus,
+  videoEditMode,
+  videoEditStatus,
   hashMode,
   previewStatus,
   probeState,
@@ -327,6 +329,50 @@ export const fileOperations = pgTable(
       .on(t.fileInstanceId)
       .where(sql`${t.status} in ('PENDING', 'RUNNING')`),
     index('file_operations_device_status_idx').on(t.deviceId, t.status),
+  ],
+);
+
+/** One saved trim. The agent on the PC that holds the source writes a new file. The original is not changed. */
+export const videoEdits = pgTable(
+  'video_edits',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    deviceId: uuid('device_id')
+      .notNull()
+      .references(() => devices.id),
+    sourceFileInstanceId: uuid('source_file_instance_id')
+      .notNull()
+      .references(() => fileInstances.id),
+    projectId: uuid('project_id').references((): AnyPgColumn => creativeProjects.id, { onDelete: 'set null' }),
+    variantId: uuid('variant_id'),
+    mode: videoEditMode('mode').notNull().default('ACCURATE'),
+    startMs: integer('start_ms').notNull(),
+    endMs: integer('end_ms').notNull(),
+    outputDisplayPath: text('output_display_path').notNull(),
+    outputCanonicalPath: text('output_canonical_path').notNull(),
+    outputRootId: uuid('output_root_id')
+      .notNull()
+      .references(() => storageRoots.id),
+    outputFileInstanceId: uuid('output_file_instance_id').references((): AnyPgColumn => fileInstances.id, {
+      onDelete: 'set null',
+    }),
+    status: videoEditStatus('status').notNull().default('PENDING'),
+    progressPct: integer('progress_pct').notNull().default(0),
+    error: text('error'),
+    sourceProbe: jsonb('source_probe').$type<Record<string, unknown>>().notNull().default({}),
+    outputProbe: jsonb('output_probe').$type<Record<string, unknown>>().notNull().default({}),
+    requestedBy: uuid('requested_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+    startedAt: ts('started_at'),
+    finishedAt: ts('finished_at'),
+  },
+  (t) => [
+    index('video_edits_device_status_idx').on(t.deviceId, t.status),
+    uniqueIndex('video_edits_open_path_uq')
+      .on(t.outputRootId, t.outputCanonicalPath)
+      .where(sql`${t.status} in ('PENDING', 'RUNNING')`),
   ],
 );
 

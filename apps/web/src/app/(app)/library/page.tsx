@@ -33,6 +33,7 @@ import {
   useToast,
 } from '@/components/ui';
 import { FileDownload } from '@/components/file-download';
+import { VideoTrim } from '@/components/video-trim';
 import { SwipeDeleteRow } from '@/components/swipe-delete';
 import { del, post, put, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
@@ -626,6 +627,7 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const toast = useToast();
   const [tags, setTags] = useState<string | null>(null);
   const [linking, setLinking] = useState(false);
+  const [trim, setTrim] = useState(false);
   const f = res.data;
   const playable =
     f && (f.fileType === 'VIDEO' || f.fileType === 'AUDIO') && f.effectiveAvailability === 'AVAILABLE';
@@ -662,7 +664,14 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
               <img alt="" className="max-h-64 rounded-lg" src={`/api/v1/files/${id}/preview`} />
             )}
             {file.effectiveAvailability === 'AVAILABLE' && (
-              <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={file.fileName} />
+              <div className="flex flex-wrap gap-2">
+                <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={file.fileName} />
+                {file.fileType === 'VIDEO' ? (
+                  <Button size="sm" onClick={() => setTrim(true)}>
+                    Edit video
+                  </Button>
+                ) : null}
+              </div>
             )}
 
             <Card>
@@ -875,6 +884,7 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
         )}
       </Async>
       {linking && <LinkToAsset fileId={id} onClose={() => setLinking(false)} onLinked={reload} />}
+      {trim ? <VideoTrim fileId={id} onClose={() => setTrim(false)} /> : null}
     </Dialog>
   );
 }

@@ -73,6 +73,7 @@ func (a *Agent) enrichLoop(ctx context.Context) {
 		if !a.authBad.Load() {
 			a.pollFileOps(ctx)
 			a.pollWindowsTasks(ctx)
+			a.pollTrims(ctx)
 		}
 		busy := false
 		if !a.authBad.Load() && a.spool.Depth() < 2000 {

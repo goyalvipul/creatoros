@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, api, del, post, put, refresh, useApi } from '@/lib/api';
 import { FileDownload } from '@/components/file-download';
+import { VideoTrim } from '@/components/video-trim';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
 import { ago } from '@/lib/format';
 
@@ -293,6 +294,7 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
   const ltx = useApi<Studio>('/comfy/ltx');
   const h3 = useApi<{ jobs: Studio['jobs'] }>('/comfy/h3');
   const [openFile, setOpenFile] = useState<string | null>(null);
+  const [trimFile, setTrimFile] = useState<{ id: string; projectId: string | null } | null>(null);
   const clips = [...(ltx.data?.jobs ?? []).map((job) => ({ ...job, kind: 'LTX' as const })), ...(h3.data?.jobs ?? []).map((job) => ({ ...job, kind: 'MiniMax' as const }))]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 10);
@@ -382,6 +384,11 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
                           Open {f.assetTitle ? `${f.assetTitle} / ` : ''}{f.fileName ?? 'library file'}
                         </Button>
                         {f.fileId ? <FileDownload href={`/api/v1/files/${f.fileId}/stream?download=1`} name={f.fileName ?? 'video.mp4'} /> : null}
+                        {f.fileId ? (
+                          <Button size="sm" onClick={() => setTrimFile({ id: f.fileId!, projectId: job.projectId ?? null })}>
+                            Edit video
+                          </Button>
+                        ) : null}
                       </span>
                     ))}
                   </div>
@@ -396,6 +403,7 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
         })}
       </ul>
       {openFile ? <LibraryFileOnPage id={openFile} onClose={() => setOpenFile(null)} /> : null}
+      {trimFile ? <VideoTrim fileId={trimFile.id} projectId={trimFile.projectId} onClose={() => setTrimFile(null)} /> : null}
     </>
   );
 }
@@ -1191,6 +1199,7 @@ function LibraryFileOnPage({ id, onClose }: { id: string; onClose: () => void })
     effectiveAvailability?: string;
     copyPaths?: { local?: string | null };
   }>(`/files/${id}`);
+  const [trim, setTrim] = useState(false);
   const file = res.data;
   return (
     <Dialog open onClose={onClose} title={file?.fileName ?? 'Library file'} wide>
@@ -1207,8 +1216,16 @@ function LibraryFileOnPage({ id, onClose }: { id: string; onClose: () => void })
             ) : null}
             <p className="break-all text-xs text-muted">{row.copyPaths?.local || row.displayPath || 'Path is on the PC that holds this file.'}</p>
             {row.effectiveAvailability === 'AVAILABLE' ? (
-              <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={row.fileName} />
+              <div className="flex flex-wrap gap-2">
+                <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={row.fileName} />
+                {row.fileType === 'VIDEO' ? (
+                  <Button size="sm" onClick={() => setTrim(true)}>
+                    Edit video
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
+            {trim ? <VideoTrim fileId={id} onClose={() => setTrim(false)} /> : null}
           </div>
         )}
       </Async>

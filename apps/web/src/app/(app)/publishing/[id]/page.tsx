@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { FileDownload } from '@/components/file-download';
+import { VideoTrim } from '@/components/video-trim';
 import {
   ActionButton,
   Async,
@@ -30,6 +31,7 @@ export default function PublishTitlePage() {
   const [linkOpen, setLinkOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [play, setPlay] = useState<{ id: string; fileName: string; online: boolean } | null>(null);
+  const [trimId, setTrimId] = useState<string | null>(null);
   const [form, setForm] = useState<{ item: any; account: any; draft?: any } | null>(null);
 
   return (
@@ -174,7 +176,12 @@ export default function PublishTitlePage() {
       {play && (
         <Dialog open onClose={() => setPlay(null)} title={play.fileName} wide>
           {play.online ? (
-            <video className="max-h-80 w-full rounded-lg bg-black" controls autoPlay preload="metadata" src={`/api/v1/files/${play.id}/stream`} />
+            <div className="space-y-3">
+              <video className="max-h-80 w-full rounded-lg bg-black object-contain" controls autoPlay preload="metadata" src={`/api/v1/files/${play.id}/stream`} />
+              <Button size="sm" onClick={() => { setTrimId(play.id); setPlay(null); }}>
+                Edit video
+              </Button>
+            </div>
           ) : (
             <Notice tone="info" title="That PC is off">
               The video plays when the machine that holds it is back on. It is not missing.
@@ -182,6 +189,7 @@ export default function PublishTitlePage() {
           )}
         </Dialog>
       )}
+      {trimId && id ? <VideoTrim fileId={trimId} variantId={id} onClose={() => setTrimId(null)} /> : null}
       {form && id && (
         <PublishDialog
           variantId={id}

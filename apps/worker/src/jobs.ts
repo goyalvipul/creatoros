@@ -81,7 +81,14 @@ export async function jobLtx(d: WorkerDeps) {
   const qwen = await pollRunningQwen(d.db, d.env);
   const h3Queued = await submitQueuedH3(d.db, d.env);
   const h3 = await pollRunningH3(d.db, d.env);
-  return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3 };
+  let trimsExpired = 0;
+  try {
+    const { expireStaleVideoEdits } = await import('@creatoros/services');
+    trimsExpired = await expireStaleVideoEdits(d.db);
+  } catch (e) {
+    log(d, 'warn', 'trim expiry skipped', { err: String(e) });
+  }
+  return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3, trimsExpired };
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {

@@ -69,7 +69,7 @@ export interface ConnectorCapabilities {
   write: boolean;
   incrementalSync: boolean;
   /** Fine grained flags the UI uses to enable/disable buttons. */
-  flags: Record<string, boolean>;
+  flags: Record<string, boolean | string | null>;
   /** Why something is not possible (approval needed, scope missing…). Shown verbatim to the owner. */
   blockers: string[];
   /** Human steps required before the connector can work. */
@@ -154,4 +154,11 @@ export interface NormalizedPost {
   thumbnailUrl: string | null;
   accountExternalId: string | null;
   raw?: unknown;
+}
+
+/** One labelled slice from a platform audience report. The value is whatever that report returns (people or a percentage). */
+export interface DemographicSlice {
+  dimension: string;
+  label: string;
+  value: number;
 }

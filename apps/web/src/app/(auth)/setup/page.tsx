@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { CheckCircle2, Circle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { BrandLogo, BrandSplash } from '@/components/brand-mark';
 import { post, put, refresh, useApi } from '@/lib/api';
 import { ago, copy, title as titleCase } from '@/lib/format';
 import { useRoots } from '@/lib/options';
@@ -16,7 +17,6 @@ import {
   Notice,
   Options,
   Select,
-  Spinner,
   StateBadge,
   useToast,
   ActionButton,
@@ -65,7 +65,7 @@ export default function SetupPage() {
   }, [me.data, router]);
 
   if (status.isLoading || (status.data?.initialized && me.isLoading))
-    return <Spinner label="Loading setup" />;
+    return <BrandSplash label="Loading setup" />;
   if (status.error) return <ErrorNote error={status.error} retry={() => void status.mutate()} />;
 
   const signedIn = Boolean(me.data);
@@ -141,9 +141,7 @@ export default function SetupPage() {
 function Header() {
   return (
     <div className="mb-5 text-center">
-      <div className="mx-auto mb-3 grid size-12 place-items-center rounded-xl bg-accent text-sm font-extrabold text-accentfg">
-        C/OS
-      </div>
+      <BrandLogo className="mx-auto mb-3 h-16" />
       <h1 className="text-2xl font-semibold">Welcome to Creator OS</h1>
       <p className="mt-1 text-sm text-muted">
         Set up takes a few minutes. Every step can be skipped and finished later from Settings.

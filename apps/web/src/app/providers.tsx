@@ -9,9 +9,12 @@ import { flushOutbox, onOutboxSynced } from '@/lib/outbox';
 export function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        /* installability is a bonus, never a requirement */
-      });
+      // v=6 is a new address. Cloudflare is still serving the old worker at /sw.js.
+      navigator.serviceWorker
+        .register('/sw.js?v=6', { scope: '/', updateViaCache: 'none' })
+        .catch(() => {
+          /* the installed app is a bonus, never a requirement */
+        });
     }
     onOutboxSynced((path) => {
       const top = `/${path.split('/').filter(Boolean)[0] ?? ''}`;

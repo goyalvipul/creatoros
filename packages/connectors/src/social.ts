@@ -12,7 +12,7 @@ import {
 } from './types';
 import { http } from './http';
 import { generatePkce, randomState } from './pkce';
-import type { Provider } from '@creatoros/domain';
+import { oauthScopes, type Provider } from '@creatoros/domain';
 
 const iso = (ctx: ConnectorContext) => new Date(ctx.now()).toISOString();
 
@@ -316,31 +316,34 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
     const hasClient = Boolean(ctx.config.clientKey && ctx.config.clientSecret && ctx.config.redirectUri);
     const connected = Boolean(ctx.credentials.accessToken || ctx.credentials.refreshToken);
     const list = connected && (ctx.credentials.scopes ?? []).includes('video.list');
+    const scopes = ctx.credentials.scopes ?? [];
+    const publish = connected && scopes.includes('video.publish');
+    const inbox = connected && scopes.includes('video.upload');
     return {
       provider: 'tiktok',
       state: !hasClient ? 'NOT_CONFIGURED' : !connected ? 'NOT_CONFIGURED' : 'ACTIVE',
       read: list,
       write: false,
       incrementalSync: list,
-      flags: { listVideos: list, directPost: false, readDirectMessages: false },
+      flags: { appConfigured: hasClient, listVideos: list, directPost: publish, inboxUpload: inbox, readDirectMessages: false },
       blockers: [
-        'Direct posting needs the Content Posting API audit; until approved only private posts are possible. Creator OS shows this as manual / requires approval.',
-        'TikTok DMs cannot be read through any public API.',
-        ...(hasClient ? [] : ['TikTok developer app not configured (client key/secret/redirect).']),
+        'TikTok only puts a permission on this login when Connect asks for it. A product enabled in the portal does not appear until you reconnect and check it.',
+        'Direct messages cannot be read through a public API.',
+        ...(hasClient ? [] : ['The server has no TikTok client key and client secret yet.']),
       ],
       setupSteps: [
-        'Register an app at developers.tiktok.com and add the Login Kit + Display API products.',
-        'Request the user.info.basic and video.list scopes and add the redirect URI shown in Integrations.',
-        'Enter client key/secret in Integrations → TikTok and press Connect.',
+        'In the TikTok Developer Portal, add Login Kit, Display API, and Content Posting if you want to publish.',
+        'Register the login redirect shown on this card. Put the client key and client secret in the server environment.',
+        'Press Connect and check only the permissions this TikTok app already has. One permission the app does not have makes the whole login fail.',
       ],
     };
   }
-  async connect(ctx: ConnectorContext): Promise<ConnectResult> {
+  async connect(ctx: ConnectorContext, input: Record<string, unknown> = {}): Promise<ConnectResult> {
     if (!ctx.config.clientKey || !ctx.config.redirectUri)
       return { status: 'NOT_CONFIGURED', steps: (await this.getCapabilities(ctx)).setupSteps };
     const pkce = generatePkce();
     const state = randomState();
-    const scopes = ['user.info.basic', 'video.list'];
+    const scopes = Array.isArray(input.scopes) ? oauthScopes('tiktok', input.scopes as string[]) : ['user.info.basic', 'video.list'];
     const u = new URL('https://www.tiktok.com/v2/auth/authorize/');
     u.searchParams.set('client_key', ctx.config.clientKey);
     u.searchParams.set('scope', scopes.join(','));
@@ -379,6 +382,24 @@ export class TikTokConnector implements Connector<NormalizedPost, TikTokVideo> {
     };
   }
   async disconnect() {}
+  async profile(ctx: ConnectorContext): Promise<{ openId: string | null; displayName: string | null; avatarUrl: string | null }> {
+    const token = ctx.credentials.accessToken;
+    if (!token) throw new ConnectorError('NOT_CONFIGURED', 'TikTok account not connected.');
+    const { data } = await http<any>(ctx, 'https://open.tiktokapis.com/v2/user/info/', {
+      headers: { authorization: `Bearer ${token}` },
+      query: { fields: 'open_id,display_name,avatar_url' },
+      maxAttempts: 1,
+    });
+    const err = data?.error;
+    if (err?.code && err.code !== 'ok')
+      throw new ConnectorError('BAD_REQUEST', String(err.message || 'TikTok did not return the profile.'));
+    const user = data?.data?.user ?? {};
+    return {
+      openId: typeof user.open_id === 'string' ? user.open_id : (ctx.credentials.principal ?? null),
+      displayName: typeof user.display_name === 'string' ? user.display_name : null,
+      avatarUrl: typeof user.avatar_url === 'string' ? user.avatar_url : null,
+    };
+  }
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
     if (!ctx.credentials.refreshToken)
       throw new ConnectorError('AUTH_EXPIRED', 'No TikTok refresh token; reconnect.');

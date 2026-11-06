@@ -22,6 +22,8 @@ import { parseInstagramWebhookEntry, type ConnectorContext } from '@creatoros/co
 import {
   WORKFLOW_MODE,
   evaluateCondition,
+  evaluateGroups,
+  usesOrGroups,
   renderTemplate,
   sensitiveTopics,
   validateDefinition,
@@ -38,6 +40,7 @@ import { triageThread } from './crm';
 import {
   PLATFORM_NAMES,
   accountSettings,
+  sourceOf,
   createOutboundDraft,
   ingestSocialEvent,
   sendOutbound,
@@ -102,9 +105,10 @@ async function checkScope(db: Db, orgId: string, connectionIds: string[]) {
         )})`,
       ),
     );
-  if (rows.length !== unique.length || rows.some((r) => r.provider !== 'instagram'))
+  const allowed = new Set(['instagram', 'facebook', 'youtube']);
+  if (rows.length !== unique.length || rows.some((r) => !allowed.has(r.provider)))
     throw badRequest(
-      'Every selected account must be one of your connected social accounts.',
+      'Every selected account must be a connected Instagram, Facebook, or YouTube account.',
       undefined,
       'INVALID_ACCOUNT_SCOPE',
     );
@@ -501,9 +505,16 @@ export async function executeWorkflow(
       });
   };
 
+  const orGroups = usesOrGroups(def.steps);
   try {
+    if (orGroups) {
+      const grouped = evaluateGroups(def.steps, match);
+      for (const t of grouped.trace) add(t.step, t.type, t.pass ? 'PASS' : 'FAIL', t.reason);
+      if (!grouped.pass) throw new Stop('SKIPPED', 'no condition group matched');
+    }
     for (const step of def.steps) {
       if (step.kind === 'condition') {
+        if (orGroups) continue;
         const r = evaluateCondition(step.condition, match);
         add(step.id, step.condition.type, r.pass ? 'PASS' : 'FAIL', r.reason);
         if (!r.pass) throw new Stop('SKIPPED', `condition "${step.condition.type}" not met`);
@@ -513,7 +524,7 @@ export async function executeWorkflow(
       const ctxT = {
         senderDisplayName: ev.senderName,
         accountUsername: username,
-        platformName: PLATFORM_NAMES.INSTAGRAM!,
+        platformName: PLATFORM_NAMES[sourceOf(conn)] ?? conn.provider,
         messageText: ev.text,
         conversationId: ev.threadId ?? 'simulated',
         receivedAt: ev.receivedAt,
@@ -1084,8 +1095,10 @@ export async function listExecutions(
   return rowsOf<any>(
     await ctx.db.execute(sql`
       select e.id, e.workflow_id as "workflowId", w.name as "workflowName", e.version_number as "version", e.status, e.outcome, e.is_simulation as "isSimulation",
-             e.thread_id as "threadId", e.connection_id as "connectionId", e.started_at as "startedAt", e.finished_at as "finishedAt", e.error
+             e.thread_id as "threadId", e.connection_id as "connectionId", e.started_at as "startedAt", e.finished_at as "finishedAt", e.error,
+             c.provider as platform
       from workflow_executions e join workflows w on w.id = e.workflow_id
+      left join provider_connections c on c.id = e.connection_id
       where ${sql.join(where, sql` and `)} order by e.started_at desc limit ${Math.min(q.limit ?? 100, 300)}`),
   );
 }

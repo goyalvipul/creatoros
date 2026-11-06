@@ -17,7 +17,7 @@ First action: inspect project, establish Docker/Node/Go availability, write ledg
 
 ---
 
-# CREATOR OS — AUTHORITATIVE END-TO-END PRODUCT AND IMPLEMENTATION SPECIFICATION
+# CREATOR OS — AUTHORITATIVE END-TO-END PRODUCT AND IMPLEMENTATION SPECIFICATION (Application renamed to: Kemokem)
 Version: 1.0 | Date: 2026-10-16 | Product: Creator OS | Deployment: private, self-hosted, multi-machine, installable PWA
 
 ## 0. BINDING RULES FOR THE IMPLEMENTING AGENT

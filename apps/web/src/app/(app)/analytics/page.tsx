@@ -7,7 +7,6 @@ import {
   Badge,
   Button,
   Card,
-  CardTitle,
   EmptyState,
   Field,
   FormDialog,
@@ -16,11 +15,9 @@ import {
   PageHeader,
   Provenance,
   Select,
-  Stat,
-  Table,
   Tabs,
-  Td,
 } from '@/components/ui';
+import { AnalyticsBoard } from '@/components/analytics-board';
 import { patch, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
 
@@ -36,121 +33,49 @@ const METRICS = [
 ];
 const statusTone = { ON_TRACK: 'ok', AHEAD: 'ok', BEHIND: 'warn', AT_RISK: 'bad' } as const;
 
+const VIEWS = ['overview', 'content', 'audience', 'platforms', 'recommendations', 'goals', 'health', 'kit'] as const;
+
 export default function AnalyticsPage() {
-  const [tab, setTab] = useState<'overview' | 'goals'>('overview');
+  const [tab, setTab] = useState<(typeof VIEWS)[number]>('overview');
+  const [platform, setPlatform] = useState('');
+  const res = useApi<any>('/analytics', { query: platform ? { platform } : {} });
   return (
     <>
       <PageHeader
         title="Analytics"
-        subtitle="Only numbers that exist. Every figure shows whether the platform confirmed it or you entered it."
+        subtitle="Stored platform numbers only. A missing permission stays visible instead of becoming a zero."
       />
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <label className="text-sm text-muted" htmlFor="analytics-platform">Platform</label>
+        <Select id="analytics-platform" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+          <option value="">All</option>
+          <option value="instagram">Instagram</option>
+          <option value="facebook">Facebook</option>
+          <option value="youtube">YouTube</option>
+        </Select>
+      </div>
       <Tabs
         tabs={[
           { id: 'overview', label: 'Overview' },
+          { id: 'content', label: 'Content' },
+          { id: 'audience', label: 'Audience' },
+          { id: 'platforms', label: 'Platforms' },
+          { id: 'recommendations', label: 'Recommendations' },
           { id: 'goals', label: 'Goals' },
+          { id: 'health', label: 'Data health' },
+          { id: 'kit', label: 'Media kit' },
         ]}
         value={tab}
         onChange={setTab}
       />
-      {tab === 'overview' ? <Overview /> : <Goals />}
+      {tab === 'goals' ? (
+        <Goals />
+      ) : (
+        <Async res={res}>
+          {(a) => <AnalyticsBoard tab={tab} detail={a.detail} detailError={a.detailError} />}
+        </Async>
+      )}
     </>
-  );
-}
-
-function Overview() {
-  const res = useApi<any>('/analytics');
-  return (
-    <Async res={res}>
-      {(a) => {
-        const platforms = Object.entries(a.byPlatform ?? {}) as [string, any][];
-        const days = Object.entries(a.byDay ?? {}).sort(([x], [y]) => x.localeCompare(y)) as [string, any][];
-        const max = Math.max(1, ...days.map(([, v]) => v.verified + v.manual));
-        return (
-          <div className="space-y-5">
-            <section aria-label="Totals" className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Stat label="Posts published (30 days)" value={a.totals.published} />
-              <Stat label="Confirmed by platform" value={a.totals.verified} tone="ok" />
-              <Stat label="Marked by you" value={a.totals.manual} />
-              <Stat label="Posts with view data" value={a.totals.postsWithViewData} />
-            </section>
-            {a.totals.published === 0 ? (
-              <EmptyState title="No published posts in this period">
-                Mark a planned post as published in Publishing, or connect YouTube to import real statistics.
-              </EmptyState>
-            ) : (
-              <>
-                <Card>
-                  <CardTitle>Posts per day</CardTitle>
-                  <div
-                    className="flex h-28 items-end gap-1"
-                    role="img"
-                    aria-label="Bar chart of posts per day"
-                  >
-                    {days.map(([d, v]) => (
-                      <div
-                        key={d}
-                        className="flex min-w-3 flex-1 flex-col justify-end"
-                        title={`${d}: ${v.verified} verified, ${v.manual} manual`}
-                      >
-                        <div className="bg-accent/50" style={{ height: `${(100 * v.manual) / max}%` }} />
-                        <div className="bg-ok" style={{ height: `${(100 * v.verified) / max}%` }} />
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs text-muted">
-                    <span className="mr-1 inline-block size-2 bg-ok" /> platform-confirmed{' '}
-                    <span className="mx-1 inline-block size-2 bg-accent/50" /> marked by you
-                  </p>
-                </Card>
-                <Card>
-                  <CardTitle>By platform</CardTitle>
-                  <Table head={['Platform', 'Confirmed', 'Marked by you', 'Views']}>
-                    {platforms.map(([p, v]) => (
-                      <tr key={p}>
-                        <Td className="font-medium">{titleCase(p)}</Td>
-                        <Td>{v.verified}</Td>
-                        <Td>{v.manual}</Td>
-                        <Td>{v.views != null ? v.views.toLocaleString() : '—'}</Td>
-                      </tr>
-                    ))}
-                  </Table>
-                </Card>
-                <Card>
-                  <CardTitle>Top posts</CardTitle>
-                  <ul className="divide-y divide-border">
-                    {a.topPosts.map((p: any) => (
-                      <li key={p.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-medium">
-                            {p.url ? (
-                              <a className="hover:underline" href={p.url} target="_blank" rel="noreferrer">
-                                {p.title ?? p.url}
-                              </a>
-                            ) : (
-                              p.title
-                            )}
-                          </div>
-                          <div className="text-xs text-muted">{titleCase(p.platform)}</div>
-                        </div>
-                        <div className="tabular-nums">
-                          {p.views != null ? `${p.views.toLocaleString()} views` : '—'}
-                        </div>
-                        <Provenance value={p.statsProvenance} />
-                      </li>
-                    ))}
-                  </ul>
-                </Card>
-              </>
-            )}
-            {a.notes?.map((n: string) => (
-              <p key={n} className="text-xs text-muted">
-                {n}
-              </p>
-            ))}
-          </div>
-        );
-      }}
-    </Async>
   );
 }
 

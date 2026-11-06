@@ -288,6 +288,13 @@ export function installCore(app: FastifyInstance, deps: AppDeps) {
   });
 
   // Keep the raw bytes: agent requests are signed over the exact body.
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (req, body, done) => {
+    (req as any).rawBody = body;
+    const params = new URLSearchParams(typeof body === 'string' ? body : '');
+    const out: Record<string, string> = {};
+    for (const [key, value] of params) out[key] = value;
+    done(null, out);
+  });
   app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     (req as any).rawBody = body;
     if (!body) return done(null, undefined);

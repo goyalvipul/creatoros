@@ -2,6 +2,7 @@
 
 import clsx from 'clsx';
 import { COUNT_DEFINITIONS } from '@creatoros/domain';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { Copy, FileVideo, Film, FileAudio, FileImage, File as FileIcon, Plus, Search } from 'lucide-react';
@@ -34,6 +35,8 @@ import {
 } from '@/components/ui';
 import { FileDownload } from '@/components/file-download';
 import { VideoTrim } from '@/components/video-trim';
+import { SizedFrame, VideoThumb } from '@/components/video-thumb';
+import { uxV5 } from '@/components/ux-v5-flag';
 import { SwipeDeleteRow } from '@/components/swipe-delete';
 import { del, post, put, refresh, useApi } from '@/lib/api';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
@@ -83,6 +86,7 @@ function Library() {
   const [linked, setLinked] = useState(sp.get('linked') ?? '');
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [openFile, setOpenFile] = useState<string | null>(sp.get('file'));
+  const [fileView, setFileView] = useState<'table' | 'gallery'>('table');
   const counts = useApi<any>('/library/counts', { refreshInterval: 30_000 });
   const roots = useRoots();
 
@@ -164,15 +168,27 @@ function Library() {
         )}
       </Async>
 
-      <Tabs
-        tabs={[
-          { id: 'assets', label: 'Assets' },
-          { id: 'files', label: 'Files' },
-          { id: 'duplicates', label: 'Duplicates' },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Tabs
+          tabs={[
+            { id: 'assets', label: 'Assets' },
+            { id: 'files', label: 'Files' },
+            { id: 'duplicates', label: 'Duplicates' },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+        {uxV5() && tab === 'files' && (
+          <div className="mb-4 flex rounded-lg border border-border p-0.5" role="group" aria-label="File layout">
+            <Button size="sm" variant={fileView === 'table' ? 'primary' : 'ghost'} onClick={() => setFileView('table')}>
+              Table
+            </Button>
+            <Button size="sm" variant={fileView === 'gallery' ? 'primary' : 'ghost'} onClick={() => setFileView('gallery')}>
+              Gallery
+            </Button>
+          </div>
+        )}
+      </div>
 
       {tab === 'files' && (
         <>
@@ -239,6 +255,7 @@ function Library() {
               filters={filters}
               cursor={c}
               first={i === 0}
+              view={uxV5() ? fileView : 'table'}
               onOpen={setOpenFile}
               onMore={(n) => setCursors((cs) => (cs.length === i + 1 ? [...cs, n] : cs))}
               last={i === cursors.length - 1}
@@ -261,6 +278,7 @@ function FilePage({
   onOpen,
   onMore,
   onAttach,
+  view = 'table',
 }: {
   filters: Record<string, unknown>;
   cursor?: string;
@@ -269,6 +287,7 @@ function FilePage({
   onOpen: (id: string) => void;
   onMore: (c: string) => void;
   onAttach?: (file: any) => void;
+  view?: 'table' | 'gallery';
 }) {
   const res = useApi<{ items: any[]; nextCursor: string | null }>('/library', {
     query: { ...filters, cursor, limit: 50 },
@@ -296,14 +315,19 @@ function FilePage({
             {page.items.length > 0 && (
               <ul
                 className={clsx(
-                  'divide-y divide-border overflow-hidden rounded-xl border border-border bg-panel',
-                  !first && 'mt-px',
+                  view === 'gallery' ? 'flex flex-wrap items-start gap-3' : 'divide-y divide-border overflow-hidden rounded-xl border border-border bg-panel',
+                  !first && view !== 'gallery' && 'mt-px',
+                  !first && view === 'gallery' && 'mt-3',
                 )}
               >
                 {page.items.map((f) => {
                   const Icon = kindIcon[f.fileType as keyof typeof kindIcon] ?? FileIcon;
-                  const platforms = ['youtube', 'instagram', 'tiktok'] as const;
+                  const platforms = ['youtube', 'instagram', 'facebook', 'tiktok'] as const;
                   const tags: { name?: string }[] = Array.isArray(f.tags) ? f.tags : [];
+                  const published = new Set(
+                    (Array.isArray(f.publishedPlatforms) ? f.publishedPlatforms : []).map((name: string) => String(name).toLowerCase()),
+                  );
+                  const places = (Array.isArray(f.places) ? f.places : []) as { kind?: string; id: string; title: string }[];
                   const hasMark = (platform: string) =>
                     tags.some((t) => t.name?.toLowerCase() === `uploaded:${platform}`);
                   const isExtra = tags.some((t) => t.name?.toLowerCase() === 'extra');
@@ -322,25 +346,56 @@ function FilePage({
                           })
                         }
                       >
-                        <div className="flex items-stretch">
+                        <div className={clsx(view === 'gallery' ? 'w-max overflow-hidden rounded-xl border border-border bg-panel' : 'flex items-stretch')}>
                         <button
                           type="button"
-                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2"
+                          className={clsx(
+                            'min-w-0 text-left hover:bg-panel2',
+                            view === 'gallery' ? 'grid w-max gap-2 p-2' : 'flex flex-1 items-center gap-3 px-3 py-2.5',
+                          )}
                           onClick={() => onOpen(f.id)}
                         >
-                          {f.hasPreview ? (
-                            <img
-                              src={`/api/v1/files/${f.id}/preview`}
-                              alt=""
-                              className="size-10 shrink-0 rounded object-cover"
-                              loading="lazy"
-                            />
+                          {f.fileType === 'VIDEO' || f.fileType === 'IMAGE' ? (
+                            view === 'gallery' ? (
+                              <SizedFrame
+                                fileId={f.id}
+                                kind={f.fileType}
+                                online={f.effectiveAvailability === 'AVAILABLE'}
+                              />
+                            ) : (
+                              <span className="relative inline-block size-16 shrink-0 overflow-hidden rounded bg-panel2">
+                                {f.fileType === 'IMAGE' && f.effectiveAvailability === 'AVAILABLE' ? (
+                                  <img
+                                    alt=""
+                                    src={`/api/v1/files/${f.id}/stream`}
+                                    className="size-16 object-cover"
+                                  />
+                                ) : f.fileType === 'VIDEO' ? (
+                                  <VideoThumb
+                                    fileId={f.id}
+                                    online={f.effectiveAvailability === 'AVAILABLE'}
+                                    interactive={false}
+                                    compact
+                                    className="size-16"
+                                  />
+                                ) : (
+                                  <span className="grid size-16 place-items-center text-muted">
+                                    <Icon className="size-5" />
+                                  </span>
+                                )}
+                              </span>
+                            )
                           ) : (
-                            <span className="grid size-10 shrink-0 place-items-center rounded bg-panel2 text-muted">
+                            <span
+                              className={clsx(
+                                'grid shrink-0 place-items-center rounded bg-panel2 text-muted',
+                                view === 'gallery' ? 'size-16' : 'size-10',
+                              )}
+                            >
                               <Icon className="size-5" />
                             </span>
                           )}
-                          <span className="min-w-0 flex-1">
+                          <span className={clsx('min-w-0', view === 'gallery' ? 'w-full overflow-hidden' : 'flex-1')}>
                             <span className="block truncate text-sm font-medium">{f.fileName}</span>
                             <span className="block truncate text-xs text-muted">
                               {f.deviceName} · {f.rootLabel} · {bytes(f.size)} · {when(f.mtime, tz, false)}
@@ -356,50 +411,67 @@ function FilePage({
                                       : '1:1'}
                                 </Badge>
                               )}
-                              {platforms.map((p) => (
-                                <button
-                                  key={p}
-                                  type="button"
-                                  className={`rounded border px-2 py-1 text-xs ${
-                                    hasMark(p)
-                                      ? 'border-accent bg-accent text-white'
-                                      : 'border-border bg-panel2 text-muted hover:border-accent'
-                                  }`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    put(`/library/marks`, {
-                                      fileInstanceId: f.id,
-                                      tag: `uploaded:${p}`,
-                                      on: !hasMark(p),
-                                    })
-                                      .then(() => refresh('/library'))
-                                      .catch((err) => console.error(err));
-                                  }}
-                                  title="Manual mark: I uploaded it"
-                                >
-                                  {p}
-                                </button>
-                              ))}
+                              {platforms.map((p) => {
+                                const posted = published.has(p);
+                                const on = posted || hasMark(p);
+                                const className = `rounded border px-2 py-1 text-xs ${
+                                  on ? 'border-accent bg-accent text-white' : 'border-border bg-panel2 text-muted hover:border-accent'
+                                }`;
+                                if (posted) {
+                                  return (
+                                    <span key={p} className={className} title="Published">
+                                      {p}
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <button
+                                    key={p}
+                                    type="button"
+                                    className={className}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      put(`/library/marks`, {
+                                        fileInstanceId: f.id,
+                                        tag: `uploaded:${p}`,
+                                        on: !hasMark(p),
+                                      })
+                                        .then(() => refresh('/library'))
+                                        .catch((err) => console.error(err));
+                                    }}
+                                    title="Manual mark: I uploaded it"
+                                  >
+                                    {p}
+                                  </button>
+                                );
+                              })}
                               {isExtra && <Badge tone="warn">Extra</Badge>}
                             </span>
                           </span>
-                          <span className="flex shrink-0 flex-col items-end gap-1">
+                        </button>
+                        <span className="flex shrink-0 flex-col items-end gap-1 px-2 py-2">
                             <StateBadge state={f.effectiveAvailability} />
                             {f.otherCopies > 0 && <Badge tone="info">{f.otherCopies + 1} copies</Badge>}
-                            {onAttach && f.fileType === 'VIDEO' && (
+                            {places.map((place) => (
+                              <Link
+                                key={`${place.kind}-${place.id}`}
+                                href={place.kind === 'project' ? `/production/${place.id}` : `/publishing/${place.id}`}
+                                className="max-w-36 truncate rounded border border-accent bg-accent px-2 py-1 text-xs text-white"
+                                title={place.title}
+                              >
+                                {place.title}
+                              </Link>
+                            ))}
+                            {onAttach && f.fileType === 'VIDEO' && places.length === 0 && (
                               <button
                                 type="button"
                                 className="rounded border border-border px-2 py-1 text-xs hover:border-accent"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onAttach(f);
-                                }}
+                                onClick={() => onAttach(f)}
                               >
                                 Add to title
                               </button>
                             )}
-                          </span>
-                        </button>
+                        </span>
                         {f.effectiveAvailability === 'AVAILABLE' && (
                           <span className="pr-2">
                             <FileDownload href={`/api/v1/files/${f.id}/stream?download=1`} name={f.fileName} />
@@ -649,20 +721,15 @@ function FileDetail({ id, onClose }: { id: string; onClose: () => void }) {
                     : 'This file cannot be opened right now.'}
               </Notice>
             )}
+            {file.fileType === 'IMAGE' && (
+              <SizedFrame fileId={id} kind="IMAGE" online={file.effectiveAvailability === 'AVAILABLE'} />
+            )}
             {playable &&
               (file.fileType === 'VIDEO' ? (
-                <video
-                  className="max-h-80 w-full rounded-lg bg-black"
-                  controls
-                  preload="metadata"
-                  src={`/api/v1/files/${id}/stream`}
-                />
+                <SizedFrame fileId={id} kind="VIDEO" online={file.effectiveAvailability === 'AVAILABLE'} interactive />
               ) : (
                 <audio className="w-full" controls preload="metadata" src={`/api/v1/files/${id}/stream`} />
               ))}
-            {!playable && file.hasPreview && (
-              <img alt="" className="max-h-64 rounded-lg" src={`/api/v1/files/${id}/preview`} />
-            )}
             {file.effectiveAvailability === 'AVAILABLE' && (
               <div className="flex flex-wrap gap-2">
                 <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={file.fileName} />

@@ -6,6 +6,10 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { useMe } from '@/components/shell';
+import { uxV5 } from '@/components/ux-v5-flag';
+import { ActivityList, PublishStat, VariantBoard } from '@/components/publish-board';
+import { VideoThumb } from '@/components/video-thumb';
+import { PlatformLogo } from '@/components/platform-logo';
 import {
   ActionButton,
   Async,
@@ -27,7 +31,7 @@ import {
   StateBadge,
   Tabs,
 } from '@/components/ui';
-import { PublishFields, parseTags } from '@/components/publish-fields';
+import { PublishFields, publishHashtags, publishPrivacy } from '@/components/publish-fields';
 import { del, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { VARIANT_TYPES, useAccounts } from '@/lib/options';
@@ -45,6 +49,8 @@ const cellTone: Record<string, string> = {
 /** Convert a datetime-local input value to the "plannedLocal" string the API expects (wall-clock in the owner's time zone). */
 const localStamp = (v: string) => (v.length === 16 ? `${v}:00` : v);
 
+type DeskTab = 'variants' | 'matrix' | 'queue' | 'calendar' | 'published' | 'unmatched';
+
 export default function PublishingPage() {
   return (
     <Suspense fallback={<Spinner />}>
@@ -58,12 +64,15 @@ function Publishing() {
   const tz = me.data?.organization?.timezone;
   const router = useRouter();
   const sp = useSearchParams();
-  const [tab, setTabState] = useState<'matrix' | 'unmatched'>(
-    sp.get('tab') === 'unmatched' ? 'unmatched' : 'matrix',
+  const initial = sp.get('tab');
+  const [tab, setTabState] = useState<DeskTab>(
+    initial === 'matrix' || initial === 'queue' || initial === 'calendar' || initial === 'published' || initial === 'unmatched'
+      ? initial
+      : 'variants',
   );
-  const setTab = (next: 'matrix' | 'unmatched') => {
+  const setTab = (next: DeskTab) => {
     setTabState(next);
-    router.replace(next === 'unmatched' ? '/publishing?tab=unmatched' : '/publishing');
+    router.replace(next === 'variants' ? '/publishing' : `/publishing?tab=${next}`);
   };
   const [brandId, setBrandId] = useState('');
   const catalog = useApi<any[]>('/catalog');
@@ -77,7 +86,7 @@ function Publishing() {
     <>
       <PageHeader
         title="Publishing"
-        subtitle="Which title is going to which account. Schedule a cell to send that video at the date and time you set."
+        subtitle="Start with a variant. Open its videos only when you need them. Schedule any file independently."
         actions={
           <>
             <Select
@@ -102,7 +111,11 @@ function Publishing() {
       />
       <Tabs
         tabs={[
-          { id: 'matrix', label: 'Plan' },
+          { id: 'variants', label: 'Variants' },
+          { id: 'matrix', label: 'Matrix' },
+          { id: 'queue', label: 'Queue' },
+          { id: 'calendar', label: 'Calendar' },
+          { id: 'published', label: 'Published' },
           {
             id: 'unmatched',
             label: 'To match',
@@ -114,6 +127,71 @@ function Publishing() {
         value={tab}
         onChange={setTab}
       />
+
+      <Async res={matrix}>
+        {(m) => {
+          const attached = (m.rows as any[]).reduce((n, r) => n + Number(r.attached ?? 0), 0);
+          const scheduled = (m.activity ?? []).filter((a: any) => a.uploadState === 'SCHEDULED').length;
+          return (
+            <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <PublishStat label="Publishing variants" value={m.rows.length} />
+              <PublishStat label="Attached videos" value={attached} />
+              <PublishStat label="Scheduled posts" value={scheduled} />
+              <PublishStat label="Unmatched imports" value={unmatched.data?.length ?? 0} />
+            </div>
+          );
+        }}
+      </Async>
+
+      {tab === 'variants' && (
+        <Async res={matrix}>
+          {(m) => <VariantBoard rows={m.rows} accounts={m.accounts} tz={tz} />}
+        </Async>
+      )}
+
+      {tab === 'queue' && (
+        <Async res={matrix}>
+          {(m) => (
+            <ActivityList
+              tz={tz}
+              empty="Nothing is queued or scheduled"
+              rows={(m.activity ?? []).filter((a: any) => a.uploadState !== 'PUBLISHED')}
+            />
+          )}
+        </Async>
+      )}
+
+      {tab === 'calendar' && (
+        <Async res={matrix}>
+          {(m) => (
+            <div className="space-y-3">
+              <p className="text-sm text-muted">
+                Times already saved on these variants. The full month, including other plans, is on the calendar.
+              </p>
+              <Link href="/calendar" className="text-sm text-accent hover:underline">
+                Open calendar
+              </Link>
+              <ActivityList
+                tz={tz}
+                empty="No scheduled posts on these variants"
+                rows={(m.activity ?? []).filter((a: any) => a.uploadState === 'SCHEDULED')}
+              />
+            </div>
+          )}
+        </Async>
+      )}
+
+      {tab === 'published' && (
+        <Async res={matrix}>
+          {(m) => (
+            <ActivityList
+              tz={tz}
+              empty="Nothing has been published from these variants yet"
+              rows={(m.activity ?? []).filter((a: any) => a.uploadState === 'PUBLISHED')}
+            />
+          )}
+        </Async>
+      )}
 
       {tab === 'matrix' && (
         <Async res={matrix}>
@@ -142,8 +220,8 @@ function Publishing() {
                       <th className="px-3 py-2 text-left font-medium">Content</th>
                       {m.accounts.map((a: any) => (
                         <th key={a.id} className="px-3 py-2 text-left font-medium">
-                          <div>{titleCase(a.platform)}</div>
-                          <div className="font-normal">{a.handle}</div>
+                          <PlatformLogo platform={a.platform} className="size-6" />
+                          <div className="mt-1 font-normal">{a.handle}</div>
                         </th>
                       ))}
                       <th className="w-12 px-2 py-2" />
@@ -230,9 +308,9 @@ function Publishing() {
           }
         >
           {(rows) => (
-            <ul className="space-y-2">
-              {rows.map((r) => (
-                <MatchRow key={r.id} row={r} plans={matrix.data?.rows ?? []} />
+            <ul className={uxV5() ? 'post-wall' : 'space-y-2'}>
+              {rows.map((r, i) => (
+                <MatchRow key={r.id} row={r} plans={matrix.data?.rows ?? []} tint={i} />
               ))}
             </ul>
           )}
@@ -251,29 +329,41 @@ function Publishing() {
   );
 }
 
-function MatchRow({ row, plans }: { row: any; plans: { id: string; title: string }[] }) {
+const POST_NOTES = ['#fff0ca', '#e6eddf', '#f8e2dd'];
+
+function MatchRow({ row, plans, tint = 0 }: { row: any; plans: { id: string; title: string }[]; tint?: number }) {
   const [variantId, setVariantId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const platform = titleCase(String(row.platform ?? 'platform'));
-  const link = async () => {
-    if (!variantId) return;
+  const link = async (id: string) => {
+    setVariantId(id);
+    if (!id) return;
     setBusy(true);
     setError(null);
     try {
-      await post(`/publications/${row.id}/link-variant`, { variantId });
+      await post(`/publications/${row.id}/link-variant`, { variantId: id });
       await refresh('/publications/unmatched', '/publishing/matrix');
     } catch (e) {
       setError(e);
+      setVariantId('');
     } finally {
       setBusy(false);
     }
   };
+  const sticky = uxV5();
   return (
-    <li className="rounded-xl border border-border bg-panel p-3 text-sm">
-      <div className="font-medium">{row.title ?? 'Untitled post'}</div>
-      <div className="text-xs text-muted">
-        {platform} {row.handle} · {row.publishedAt ? when(row.publishedAt) : ''}
+    <li
+      className={sticky ? 'post-note rounded-2xl p-5 text-sm text-[#1c1916]' : 'rounded-xl border border-border bg-panel p-3 text-sm'}
+      style={sticky ? { ['--note' as string]: POST_NOTES[tint % POST_NOTES.length], backgroundColor: POST_NOTES[tint % POST_NOTES.length] } : undefined}
+    >
+      <div className={sticky ? 'font-serif text-xl leading-snug tracking-tight' : 'font-medium'}>{row.title ?? 'Untitled post'}</div>
+      {row.fileInstanceId ? (
+        <VideoThumb fileId={row.fileInstanceId} interactive={false} className="mt-2 w-full" />
+      ) : null}
+      <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
+        <PlatformLogo platform={String(row.platform ?? '')} className="size-4" />
+        <span>{row.handle}{row.publishedAt ? ` · ${when(row.publishedAt)}` : ''}</span>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
         {row.fileInstanceId ? (
@@ -290,23 +380,21 @@ function MatchRow({ row, plans }: { row: any; plans: { id: string; title: string
           <span className="text-muted">No video link was stored for this post.</span>
         ) : null}
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="mt-2">
         <Select
           aria-label={`Plan for ${row.title ?? 'this post'}`}
-          className="min-w-48 flex-1"
+          className="w-full max-w-56"
+          disabled={busy || plans.length === 0}
           value={variantId}
-          onChange={(e) => setVariantId(e.target.value)}
+          onChange={(e) => void link(e.target.value)}
         >
-          <option value="">{plans.length ? 'Choose a plan' : 'No plans for this brand'}</option>
+          <option value="">{busy ? 'Linking…' : plans.length ? 'Choose a plan' : 'No plans for this brand'}</option>
           {plans.map((p) => (
             <option key={p.id} value={p.id}>
               {p.title}
             </option>
           ))}
         </Select>
-        <Button variant="primary" disabled={!variantId} busy={busy} onClick={() => void link()}>
-          Link to plan
-        </Button>
       </div>
       {error ? <ErrorNote error={error} /> : null}
     </li>
@@ -562,7 +650,7 @@ function SchedulePost({
       <div className="mt-3">
         <ActionButton
           variant="primary"
-          disabled={!whenLocal || acct?.canPublish === false || (account.platform === 'youtube' && !aiUse)}
+          disabled={!whenLocal || acct?.canPublish === false || (account.platform === 'youtube' && !aiUse) || (account.platform === 'threads' && !aiUse) || (account.platform === 'tiktok' && !privacy)}
           onAction={async () => {
             await post('/publishing/schedule', {
               itemId: (chosen ?? items[0]).id,
@@ -570,8 +658,8 @@ function SchedulePost({
               requestId: crypto.randomUUID(),
               title: title.trim() || null,
               caption: caption.trim() || null,
-              hashtags: parseTags(tags),
-              privacy: privacy || null,
+              hashtags: publishHashtags(account.platform, tags),
+              privacy: publishPrivacy(account.platform, privacy),
               contentForm: contentForm || null,
               playlistIds,
               aiUse: aiUse || null,

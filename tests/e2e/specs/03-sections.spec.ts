@@ -47,5 +47,11 @@ test('PWA: manifest, icons, service worker script and offline page are served', 
   const sw = await request.get('/sw.js');
   expect(sw.ok()).toBe(true);
   expect(sw.headers()['content-type']).toContain('javascript');
+  const worker = await sw.text();
+  expect(worker).not.toContain('cache.put');
+  expect(worker).not.toContain('respondWith');
+  expect(worker).not.toContain("addEventListener('fetch'");
+  expect(worker).not.toContain('addEventListener("fetch"');
+  expect(worker).toContain('skipWaiting');
   expect((await request.get('/offline.html')).ok()).toBe(true);
 });

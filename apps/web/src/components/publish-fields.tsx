@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Field, Input, Select, Textarea } from '@/components/ui';
 import { ApiError, api, post } from '@/lib/api';
+import { THREADS_REPLIES, TIKTOK_PRIVACY, threadsTextUnits, tiktokCaption, tiktokInteractionForm, tiktokInteractions } from '@creatoros/domain';
 
 const PRIVACY = [
   { id: 'PUBLIC', label: 'Public' },
@@ -29,6 +30,19 @@ export function parseTags(tags: string): string[] {
     .split(/[,\s]+/)
     .map((t) => t.replace(/^#/, ''))
     .filter(Boolean);
+}
+
+export function publishHashtags(platform: string, tags: string): string[] {
+  if (platform === 'threads') {
+    const topic = tags.trim().replace(/^#/, '');
+    return topic ? [topic] : [];
+  }
+  return parseTags(tags);
+}
+
+export function publishPrivacy(platform: string, privacy: string): string | null {
+  if (platform === 'threads') return privacy || 'everyone';
+  return privacy || null;
 }
 
 /** The same boxes the live Publish dialog asks for, by platform. */
@@ -125,14 +139,66 @@ export function PublishFields({
   if (platform === 'instagram') {
     return (
       <>
-        <Field label="Caption">
+        <Field label="Post title (optional)">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="Caption / description">
           <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
         </Field>
         <Field label="Hashtags">
           <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="music, newrelease" />
         </Field>
-        <p className="text-xs text-muted">Posted as a Reel.</p>
+        <p className="text-xs text-muted">Posted as a Reel. The title is kept with the draft. The caption is what Instagram shows.</p>
       </>
+    );
+  }
+  if (platform === 'threads') {
+    const units = threadsTextUnits(caption);
+    return (
+      <>
+        <Field label="Post text">
+          <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Optional with a photo or video" />
+        </Field>
+        <p className={units > 500 ? 'text-xs text-bad' : 'text-xs text-muted'}>
+          {units} / 500. Threads counts an emoji as more than one character. A JPEG, PNG, MP4, or MOV is posted with this text. A video can be at most 5 minutes.
+        </p>
+        <Field label="Topic">
+          <Input value={tags.replace(/^#/, '')} onChange={(e) => setTags(e.target.value.replace(/[#\s]/g, ''))} placeholder="newsong" />
+        </Field>
+        <p className="text-xs text-muted">One topic, with no spaces, period, or &. Leave it blank for no topic.</p>
+        <Field label="Who can reply">
+          <Select required value={privacy || 'everyone'} onChange={(e) => setPrivacy(e.target.value)}>
+            {THREADS_REPLIES.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="AI label">
+          <Select required value={aiUse ?? ''} onChange={(e) => setAiUse?.(e.target.value)}>
+            <option value="">Choose…</option>
+            <option value="YES">Yes, label this as AI</option>
+            <option value="NO">No</option>
+          </Select>
+        </Field>
+        <p className="text-xs text-muted">Yes asks Threads to show the AI info label. A link card is only available on a text-only post, so this file post does not attach one.</p>
+      </>
+    );
+  }
+  if (platform === 'tiktok') {
+    return (
+      <TikTokFields
+        accountId={accountId}
+        caption={caption}
+        setCaption={setCaption}
+        tags={tags}
+        setTags={setTags}
+        privacy={privacy}
+        setPrivacy={setPrivacy}
+        contentForm={contentForm}
+        setContentForm={setContentForm}
+      />
     );
   }
   if (platform === 'facebook') {
@@ -151,6 +217,119 @@ export function PublishFields({
     <Field label="Caption">
       <Textarea rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
     </Field>
+  );
+}
+
+function TikTokFields({
+  accountId,
+  caption,
+  setCaption,
+  tags,
+  setTags,
+  privacy,
+  setPrivacy,
+  contentForm,
+  setContentForm,
+}: {
+  accountId?: string;
+  caption: string;
+  setCaption: (v: string) => void;
+  tags: string;
+  setTags: (v: string) => void;
+  privacy: string;
+  setPrivacy: (v: string) => void;
+  contentForm: string;
+  setContentForm: (v: string) => void;
+}) {
+  const flags = tiktokInteractions(contentForm);
+  const [options, setOptions] = useState<{
+    privacyOptions: string[];
+    commentDisabled: boolean;
+    duetDisabled: boolean;
+    stitchDisabled: boolean;
+  } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const length = tiktokCaption(caption, parseTags(tags)).length;
+  const choices = TIKTOK_PRIVACY.filter((row) => !options?.privacyOptions.length || options.privacyOptions.includes(row.id));
+
+  useEffect(() => {
+    if (!contentForm || contentForm === 'VIDEO' || contentForm === 'SHORT') setContentForm('comments,duet,stitch');
+    // Once, so clearing every box later stays cleared.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+    let gone = false;
+    void api<{ privacyOptions: string[]; commentDisabled: boolean; duetDisabled: boolean; stitchDisabled: boolean }>(
+      `/social-accounts/${accountId}/tiktok/creator`,
+    )
+      .then((page) => {
+        if (gone || !page) return;
+        setOptions(page);
+        const allowed = page.privacyOptions ?? [];
+        if (allowed.length === 1) setPrivacy(allowed[0] ?? '');
+        else if (privacy && allowed.length && !allowed.includes(privacy)) setPrivacy('');
+        const next = tiktokInteractions(contentForm);
+        setContentForm(
+          tiktokInteractionForm({
+            comments: page.commentDisabled ? false : next.comments,
+            duet: page.duetDisabled ? false : next.duet,
+            stitch: page.stitchDisabled ? false : next.stitch,
+          }),
+        );
+      })
+      .catch((e) => {
+        if (!gone) setNotice(e instanceof ApiError ? e.message : 'TikTok did not return who can watch this video.');
+      });
+    return () => {
+      gone = true;
+    };
+    // Load once per account. Later checkbox edits must not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
+
+  const toggle = (key: 'comments' | 'duet' | 'stitch') => {
+    setContentForm(tiktokInteractionForm({ ...flags, [key]: !flags[key] }));
+  };
+
+  return (
+    <>
+      <Field label="Caption">
+        <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
+      </Field>
+      <Field label="Hashtags">
+        <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song, mehak" />
+      </Field>
+      <p className={length > 2200 ? 'text-xs text-bad' : 'text-xs text-muted'}>{length} / 2200, including hashtags. TikTok shows this as the video caption.</p>
+      <Field label="Who can watch">
+        <Select required value={choices.some((row) => row.id === privacy) ? privacy : ''} onChange={(e) => setPrivacy(e.target.value)}>
+          <option value="">Choose…</option>
+          {choices.map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <p className="text-xs text-muted">An app TikTok has not audited is often allowed to post as Only me. The list is what TikTok returns for this account.</p>
+      {notice ? <p className="text-xs text-warn">{notice}</p> : null}
+      <div className="flex flex-wrap gap-4 text-sm">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={flags.comments && !options?.commentDisabled} disabled={options?.commentDisabled} onChange={() => toggle('comments')} />
+          Comments
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={flags.duet && !options?.duetDisabled} disabled={options?.duetDisabled} onChange={() => toggle('duet')} />
+          Duet
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={flags.stitch && !options?.stitchDisabled} disabled={options?.stitchDisabled} onChange={() => toggle('stitch')} />
+          Stitch
+        </label>
+      </div>
+      <p className="text-xs text-muted">A box TikTok turns off for this account stays off. Nothing is sent until you schedule or publish.</p>
+    </>
   );
 }
 

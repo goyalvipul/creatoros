@@ -98,7 +98,13 @@ export const actionSchema = z.discriminatedUnion('type', [
 export type Action = z.infer<typeof actionSchema>;
 
 export const stepSchema = z.union([
-  z.object({ kind: z.literal('condition'), id: z.string().min(1).max(40), condition: conditionSchema }),
+  z.object({
+    kind: z.literal('condition'),
+    id: z.string().min(1).max(40),
+    /** Conditions in the same group must all match. Different groups are alternatives. Missing means group 1. */
+    group: z.number().int().min(1).max(20).optional(),
+    condition: conditionSchema,
+  }),
   z.object({ kind: z.literal('action'), id: z.string().min(1).max(40), action: actionSchema }),
 ]);
 export type Step = z.infer<typeof stepSchema>;
@@ -304,6 +310,43 @@ export function evaluateCondition(c: Condition, e: EventForMatch): { pass: boole
       return { pass: ok, reason: `category ${e.category} (${(e.confidence ?? 0).toFixed(2)})` };
     }
   }
+}
+
+/** True when the workflow has more than one condition group, so a match in any group is enough. */
+export function usesOrGroups(steps: Step[]): boolean {
+  const ids = new Set<number>();
+  for (const s of steps) if (s.kind === 'condition') ids.add(s.group ?? 1);
+  return ids.size > 1;
+}
+
+/**
+ * Every condition is checked. A group passes when all of its conditions pass.
+ * The workflow passes when any group passes. No conditions means it passes.
+ */
+export function evaluateGroups(
+  steps: Step[],
+  event: EventForMatch,
+): { pass: boolean; trace: { step: string; type: string; pass: boolean; reason: string }[] } {
+  const groups = new Map<number, Extract<Step, { kind: 'condition' }>[]>();
+  for (const s of steps) {
+    if (s.kind !== 'condition') continue;
+    const g = s.group ?? 1;
+    const list = groups.get(g) ?? [];
+    list.push(s);
+    groups.set(g, list);
+  }
+  const trace: { step: string; type: string; pass: boolean; reason: string }[] = [];
+  let pass = groups.size === 0;
+  for (const [, list] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+    let ok = true;
+    for (const step of list) {
+      const r = evaluateCondition(step.condition, event);
+      trace.push({ step: step.id, type: step.condition.type, pass: r.pass, reason: r.reason });
+      if (!r.pass) ok = false;
+    }
+    if (ok) pass = true;
+  }
+  return { pass, trace };
 }
 
 const EMOJI = /\p{Extended_Pictographic}/u;

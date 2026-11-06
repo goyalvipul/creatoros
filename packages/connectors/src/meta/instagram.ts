@@ -10,9 +10,11 @@ import {
   type NormalizedPost,
   type RateLimitBudget,
   type SyncResult,
+  type DemographicSlice,
 } from '../types';
 import { http } from '../http';
 import { randomState } from '../pkce';
+import { oauthScopes } from '@creatoros/domain';
 
 /**
  * Instagram API with Instagram Login (professional accounts, no Facebook Page needed).
@@ -25,6 +27,7 @@ export const INSTAGRAM_SCOPES = {
   publish: 'instagram_business_content_publish',
   comments: 'instagram_business_manage_comments',
   messages: 'instagram_business_manage_messages',
+  insights: 'instagram_business_manage_insights',
 } as const;
 export const INSTAGRAM_ALL_SCOPES: string[] = Object.values(INSTAGRAM_SCOPES);
 
@@ -194,7 +197,7 @@ export function instagramCapabilityMatrix(granted: string[]) {
   const flags = {
     profile: has(INSTAGRAM_SCOPES.basic),
     importMedia: has(INSTAGRAM_SCOPES.basic),
-    insights: has(INSTAGRAM_SCOPES.basic),
+    insights: has(INSTAGRAM_SCOPES.insights),
     publish: has(INSTAGRAM_SCOPES.basic) && has(INSTAGRAM_SCOPES.publish),
     comments: has(INSTAGRAM_SCOPES.basic) && has(INSTAGRAM_SCOPES.comments),
     messages: has(INSTAGRAM_SCOPES.basic) && has(INSTAGRAM_SCOPES.messages),
@@ -281,10 +284,15 @@ export class InstagramLoginConnector implements Connector<NormalizedPost, IgMedi
   async connect(ctx: ConnectorContext, input: Record<string, any> = {}): Promise<ConnectResult> {
     const client = this.client(ctx);
     if (!client) return { status: 'NOT_CONFIGURED', steps: (await this.getCapabilities(ctx)).setupSteps };
-    const scopes: string[] = [INSTAGRAM_SCOPES.basic];
-    if (input.publish !== false) scopes.push(INSTAGRAM_SCOPES.publish);
-    if (input.comments !== false) scopes.push(INSTAGRAM_SCOPES.comments);
-    if (input.messages !== false) scopes.push(INSTAGRAM_SCOPES.messages);
+    const scopes: string[] = Array.isArray(input.scopes)
+      ? oauthScopes('instagram', input.scopes)
+      : [INSTAGRAM_SCOPES.basic];
+    if (!Array.isArray(input.scopes)) {
+      if (input.publish !== false) scopes.push(INSTAGRAM_SCOPES.publish);
+      if (input.comments !== false) scopes.push(INSTAGRAM_SCOPES.comments);
+      if (input.messages !== false) scopes.push(INSTAGRAM_SCOPES.messages);
+      if (input.insights !== false) scopes.push(INSTAGRAM_SCOPES.insights);
+    }
     const state = randomState();
     return {
       status: 'REDIRECT',
@@ -622,6 +630,258 @@ export async function listInstagramMediaPage(
     })),
     after: data?.paging?.next ? (data?.paging?.cursors?.after ?? null) : null,
   };
+}
+
+/**
+ * Metrics that are valid together for one media type.
+ * A photo rejects `views`, and one rejected metric makes Instagram reject the whole request.
+ * Core is requested together. Optional metrics are requested on their own.
+ */
+export function instagramInsightPlan(
+  mediaType: string | null,
+  productType: string | null,
+): { core: string[]; optional: string[] } {
+  const product = (productType ?? '').toUpperCase();
+  const type = (mediaType ?? '').toUpperCase();
+  if (product === 'STORY') {
+    return {
+      core: ['views', 'reach', 'replies', 'shares'],
+      optional: ['navigation', 'follows', 'profile_visits'],
+    };
+  }
+  if (product === 'REELS' || (type === 'VIDEO' && product !== 'FEED' && product !== 'AD')) {
+    return {
+      core: ['views', 'reach', 'saved', 'shares', 'likes', 'comments', 'total_interactions'],
+      optional: ['ig_reels_avg_watch_time', 'ig_reels_video_view_total_time'],
+    };
+  }
+  if (type === 'VIDEO') {
+    return {
+      core: ['views', 'reach', 'saved', 'shares', 'likes', 'comments', 'total_interactions'],
+      optional: ['follows', 'profile_visits'],
+    };
+  }
+  return {
+    core: ['reach', 'saved', 'shares', 'likes', 'comments', 'total_interactions'],
+    optional: ['follows', 'profile_visits', 'profile_activity'],
+  };
+}
+
+/** Media insights. `views` replaced play_count / impressions. Requires instagram_business_manage_insights. */
+export async function fetchInstagramMediaInsights(
+  ctx: ConnectorContext,
+  mediaId: string,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<Record<string, number | null>> {
+  const metric = 'views,reach,saved,shares';
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(mediaId)}/insights`, {
+    headers: bearer(ctx),
+    query: { metric },
+    maxAttempts: 3,
+  });
+  return parseInsightValues(data);
+}
+
+export interface InstagramMediaRecord {
+  mediaType: string | null;
+  productType: string | null;
+  likes: number | null;
+  comments: number | null;
+  insights: Record<string, number | null>;
+  /** Set when Instagram refused a metric. Likes from the media object are still returned. */
+  insightNote: string | null;
+}
+
+async function instagramInsightCall(
+  ctx: ConnectorContext,
+  mediaId: string,
+  metrics: string[],
+  version: string,
+  attempts: number,
+): Promise<Record<string, number | null>> {
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(mediaId)}/insights`, {
+    headers: bearer(ctx),
+    query: { metric: metrics.join(',') },
+    maxAttempts: attempts,
+  });
+  return parseInsightValues(data);
+}
+
+/** Ask for a metric list. If Instagram rejects the list, ask for each metric on its own. */
+async function instagramInsightsResilient(
+  ctx: ConnectorContext,
+  mediaId: string,
+  metrics: string[],
+  version: string,
+): Promise<{ values: Record<string, number | null>; missing: string[] }> {
+  if (metrics.length === 0) return { values: {}, missing: [] };
+  try {
+    return { values: await instagramInsightCall(ctx, mediaId, metrics, version, 2), missing: [] };
+  } catch (e) {
+    if (!(e instanceof ConnectorError)) throw e;
+    const values: Record<string, number | null> = {};
+    const missing: string[] = [];
+    for (const metric of metrics) {
+      try {
+        Object.assign(values, await instagramInsightCall(ctx, mediaId, [metric], version, 1));
+      } catch (err) {
+        if (!(err instanceof ConnectorError)) throw err;
+        missing.push(metric);
+      }
+    }
+    return { values, missing };
+  }
+}
+
+/**
+ * Likes and comments come from the media object (`instagram_business_basic`).
+ * Views, reach, saves and watch time come from insights, using only metrics that media type accepts.
+ */
+export async function fetchInstagramMediaRecord(
+  ctx: ConnectorContext,
+  mediaId: string,
+  opts: { insights?: boolean } = {},
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<InstagramMediaRecord> {
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/${encodeURIComponent(mediaId)}`, {
+    headers: bearer(ctx),
+    query: { fields: 'id,media_type,media_product_type,like_count,comments_count' },
+    maxAttempts: 2,
+  });
+  const mediaType = typeof data?.media_type === 'string' ? data.media_type : null;
+  const productType = typeof data?.media_product_type === 'string' ? data.media_product_type : null;
+  const likes = typeof data?.like_count === 'number' ? data.like_count : null;
+  const comments = typeof data?.comments_count === 'number' ? data.comments_count : null;
+  if (opts.insights === false) {
+    return { mediaType, productType, likes, comments, insights: {}, insightNote: null };
+  }
+  const plan = instagramInsightPlan(mediaType, productType);
+  const core = await instagramInsightsResilient(ctx, mediaId, plan.core, version);
+  const optional: Record<string, number | null> = {};
+  for (const metric of plan.optional) {
+    try {
+      Object.assign(optional, await instagramInsightCall(ctx, mediaId, [metric], version, 1));
+    } catch (e) {
+      if (!(e instanceof ConnectorError)) throw e;
+    }
+  }
+  const insights = { ...core.values, ...optional };
+  const insightNote =
+    core.missing.length > 0 ? `Instagram did not return ${core.missing.join(', ')} for this post.` : null;
+  return { mediaType, productType, likes, comments, insights, insightNote };
+}
+
+/** Account totals for Instagram's own last-28-days window. Not a lifetime total. */
+export async function fetchInstagramAccountWindow(
+  ctx: ConnectorContext,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<Record<string, number | null>> {
+  const metrics = ['reach', 'views', 'accounts_engaged', 'total_interactions'];
+  const call = async (metric: string) => {
+    const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/insights`, {
+      headers: bearer(ctx),
+      query: { metric, period: 'days_28', metric_type: 'total_value' },
+      maxAttempts: 2,
+    });
+    return parseInsightValues(data);
+  };
+  try {
+    const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/insights`, {
+      headers: bearer(ctx),
+      query: { metric: metrics.join(','), period: 'days_28', metric_type: 'total_value' },
+      maxAttempts: 2,
+    });
+    return parseInsightValues(data);
+  } catch (e) {
+    if (!(e instanceof ConnectorError)) throw e;
+    const out: Record<string, number | null> = {};
+    let failed = 0;
+    for (const metric of metrics) {
+      try {
+        Object.assign(out, await call(metric));
+      } catch (err) {
+        if (!(err instanceof ConnectorError)) throw err;
+        failed += 1;
+      }
+    }
+    if (failed === metrics.length) throw e;
+    return out;
+  }
+}
+
+/** Day-level follower_count. The API only returns the recent window it supports, not an invented history. */
+export async function fetchInstagramFollowerSeries(
+  ctx: ConnectorContext,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<{ end: number | null; days: { date: string; value: number }[] }> {
+  const { data } = await http<any>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/insights`, {
+    headers: bearer(ctx),
+    query: { metric: 'follower_count', period: 'day' },
+    maxAttempts: 3,
+  });
+  const row = (data?.data ?? []).find((r: { name?: string }) => r.name === 'follower_count');
+  const days = (row?.values ?? [])
+    .map((v: { value?: number; end_time?: string }) =>
+      typeof v.value === 'number' && v.end_time ? { date: v.end_time.slice(0, 10), value: v.value } : null,
+    )
+    .filter(Boolean) as { date: string; value: number }[];
+  const end = days.length ? days[days.length - 1]!.value : null;
+  return { end, days };
+}
+
+/** One breakdown from follower_demographics. An empty list means Meta returned no rows, not a zero audience. */
+export function parseInstagramDemographicPayload(data: unknown, dimension: string): DemographicSlice[] {
+  const rows = (data as { data?: { total_value?: { breakdowns?: { results?: { dimension_values?: string[]; value?: number }[] }[] } }[] })
+    ?.data ?? [];
+  const out: DemographicSlice[] = [];
+  for (const row of rows) {
+    for (const breakdown of row?.total_value?.breakdowns ?? []) {
+      for (const result of breakdown.results ?? []) {
+        const label = (result.dimension_values ?? []).filter(Boolean).join(' · ');
+        if (!label || typeof result.value !== 'number' || !Number.isFinite(result.value)) continue;
+        out.push({ dimension, label, value: result.value });
+      }
+    }
+  }
+  return out;
+}
+
+/** Age, gender and country. Each breakdown is its own request. A missing breakdown is omitted. */
+export async function fetchInstagramDemographics(
+  ctx: ConnectorContext,
+  version = DEFAULT_GRAPH_VERSION,
+): Promise<DemographicSlice[]> {
+  const slices: DemographicSlice[] = [];
+  let lastError: unknown;
+  for (const dimension of ['age', 'gender', 'country']) {
+    try {
+      const { data } = await http<unknown>(ctx, `${INSTAGRAM_GRAPH}/${version}/me/insights`, {
+        headers: bearer(ctx),
+        query: {
+          metric: 'follower_demographics',
+          period: 'lifetime',
+          metric_type: 'total_value',
+          timeframe: 'this_month',
+          breakdown: dimension,
+        },
+        maxAttempts: 2,
+      });
+      slices.push(...parseInstagramDemographicPayload(data, dimension));
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (slices.length === 0 && lastError instanceof ConnectorError) throw lastError;
+  return slices;
+}
+
+function parseInsightValues(data: any): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  for (const row of data?.data ?? []) {
+    const raw = row?.total_value?.value ?? row?.values?.[0]?.value;
+    out[String(row.name)] = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+  }
+  return out;
 }
 
 export interface IgComment {

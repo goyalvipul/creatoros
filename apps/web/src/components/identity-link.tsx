@@ -22,7 +22,7 @@ export function IdentityLink({ connectionId, identity }: { connectionId: string;
   if (!identity) return null;
   if (identity.status === 'LINKED')
     return (
-      <p className="mt-2 text-xs text-muted">
+      <p className="mt-2 break-words text-xs text-muted">
         Linked to {identity.linked.brand ? `${identity.linked.brand} › ` : ''}
         {identity.linked.channel} › @{identity.linked.handle}
       </p>

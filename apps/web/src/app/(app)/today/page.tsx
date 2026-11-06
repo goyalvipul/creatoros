@@ -6,6 +6,7 @@ import { Check, Clock, Pin, PinOff, Plus, RotateCcw, X } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { useMe } from '@/components/shell';
+import { uxV5 } from '@/components/ux-v5-flag';
 import {
   ActionButton,
   Async,
@@ -90,7 +91,7 @@ function Today() {
   return (
     <>
       <PageHeader
-        title="Inbox & Today"
+        title={uxV5() ? 'Inbox & Tasks' : 'Inbox & Today'}
         subtitle="Everything that needs a decision, in priority order. Nothing is sent or posted from here without your confirmation."
         actions={
           <>
@@ -352,6 +353,13 @@ function Today() {
             >
               Notifications
             </CardTitle>
+            {uxV5() && (
+              <p className="mb-2 text-xs text-muted">
+                <Link href="/notifications" className="text-accent hover:underline">
+                  Open the full list
+                </Link>
+              </p>
+            )}
             <Async res={notes} empty={<p className="text-sm text-muted">No notifications.</p>}>
               {(rows) => (
                 <ul className="space-y-2">

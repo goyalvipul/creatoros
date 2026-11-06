@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { attachmentHeaders } from '../attachment';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -296,11 +297,12 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
       if (v) reply.header(h, v);
     }
     const download = (req.query as { download?: string }).download === '1';
-    reply.header('cache-control', 'private, no-store');
-    reply.header(
-      'content-disposition',
-      `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
-    );
+    if (download) {
+      for (const [key, value] of Object.entries(attachmentHeaders(filename))) reply.header(key, value);
+    } else {
+      reply.header('cache-control', 'private, no-store');
+      reply.header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    }
     reply.status(upstream.status);
     if (!upstream.body) return reply.send();
     return reply.send(Readable.fromWeb(upstream.body as import('stream/web').ReadableStream));

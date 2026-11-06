@@ -1,6 +1,8 @@
 'use client';
 
 import { richHtmlToText } from '@creatoros/domain';
+import { ContentPlayground } from '@/components/content-playground';
+import { uxV5 } from '@/components/ux-v5-flag';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Lightbulb, Plus } from 'lucide-react';
@@ -32,6 +34,10 @@ function preview(idea: { conceptDetail?: string | null; pitch?: string | null })
 }
 
 export default function ContentPage() {
+  return uxV5() ? <ContentPlayground /> : <ContentList />;
+}
+
+function ContentList() {
   const router = useRouter();
   const [status, setStatus] = useState('');
   const [brandId, setBrandId] = useState('');
@@ -52,7 +58,11 @@ export default function ContentPage() {
     <>
       <PageHeader
         title="Content ideas"
-        subtitle="Capture first, decide later. Approved ideas become production projects with a checklist."
+        subtitle={
+          uxV5()
+            ? 'Write the idea here first. Make a project is the step that creates a Production project. Saving an idea does not start one.'
+            : 'Capture first, decide later. Approved ideas become production projects with a checklist.'
+        }
         actions={
           <Button variant="primary" onClick={() => router.push('/content/new')}>
             <Plus className="size-4" /> {resume ? 'Resume writing' : 'New idea'}

@@ -6,12 +6,14 @@ type Conn = typeof providerConnections.$inferSelect;
 type Acct = typeof socialAccounts.$inferSelect;
 
 /** Providers whose connections must map to exactly one Channels > social account to import posts. */
-const PLATFORM_OF: Record<string, 'instagram' | 'facebook' | 'youtube' | 'tiktok'> = {
+const PLATFORM_OF: Record<string, 'instagram' | 'facebook' | 'youtube' | 'tiktok' | 'threads' | 'snapchat'> = {
   instagram: 'instagram',
   facebook: 'facebook',
   meta: 'instagram',
   youtube: 'youtube',
   tiktok: 'tiktok',
+  threads: 'threads',
+  snapchat: 'snapchat',
 };
 
 export const needsAccountLink = (provider: string) => provider in PLATFORM_OF;
@@ -25,11 +27,13 @@ export function connectionIdentity(conn: Conn) {
   if (!platform) return null;
   const cfg = (conn.config ?? {}) as Record<string, any>;
   const verifiedId =
-    conn.provider === 'instagram' || conn.provider === 'facebook'
+    conn.provider === 'instagram' || conn.provider === 'facebook' || conn.provider === 'threads'
       ? (conn.principalHint ?? null)
-      : conn.provider === 'youtube'
-        ? (cfg.youtube?.channelId ?? null)
-        : null;
+        : conn.provider === 'youtube'
+          ? (cfg.youtube?.channelId ?? null)
+          : conn.provider === 'snapchat'
+            ? (conn.principalHint ?? null)
+            : null;
   const username = typeof cfg.username === 'string' && cfg.username ? cfg.username : null;
   return { platform, verifiedId, username };
 }
@@ -139,7 +143,13 @@ async function applyLink(ctx: Ctx, conn: Conn, acct: Acct, how: 'AUTO_VERIFIED_I
       verifiedLink: Boolean(id.verifiedId),
       profileUrl:
         acct.profileUrl ??
-        (id.username && id.platform === 'instagram' ? `https://www.instagram.com/${id.username}/` : null),
+        (id.username && id.platform === 'instagram'
+          ? `https://www.instagram.com/${id.username}/`
+          : id.username && id.platform === 'threads'
+            ? `https://www.threads.net/@${id.username.replace(/^@/, '')}`
+            : id.username && id.platform === 'snapchat'
+              ? `https://www.snapchat.com/add/${id.username.replace(/^@/, '')}`
+              : null),
       capabilityFlags: { ...(acct.capabilityFlags ?? {}), oauthConnected: true },
       updatedAt: new Date(),
     })

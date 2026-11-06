@@ -18,3 +18,7 @@ export * from './triage';
 export * from './trends';
 export * from './invoice-extract';
 export * from './rich-html';
+export * from './analytics';
+export * from './oauth-permissions';
+export * from './threads-post';
+export * from './tiktok-post';

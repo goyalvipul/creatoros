@@ -6,6 +6,8 @@ import {
   isSafeRegex,
   renderTemplate,
   sensitiveTopics,
+  evaluateGroups,
+  usesOrGroups,
   validateDefinition,
   type EventForMatch,
 } from './workflow';
@@ -44,6 +46,17 @@ describe('workflow conditions', () => {
     expect(evaluateCondition({ type: 'emoji', mode: 'none' }, ev({ text: 'love this' })).pass).toBe(true);
     expect(evaluateCondition({ type: 'emoji', mode: 'includes', emojis: ['❤️', '🔥'] }, ev({ text: '🔥' })).pass).toBe(true);
     expect(evaluateCondition({ type: 'emoji', mode: 'includes', emojis: ['❤️'] }, ev({ text: '🔥' })).pass).toBe(false);
+  });
+  it('lets any condition group pass when groups are alternatives', () => {
+    const steps = [
+      cond('c1', { type: 'emoji', mode: 'includes', emojis: ['❤️'] }),
+      { ...cond('c2', { type: 'keyword_any', keywords: ['collab'] }), group: 2 },
+    ];
+    expect(usesOrGroups(steps)).toBe(true);
+    expect(evaluateGroups(steps, ev({ text: 'hello' })).pass).toBe(false);
+    expect(evaluateGroups(steps, ev({ text: 'love ❤️' })).pass).toBe(true);
+    expect(evaluateGroups(steps, ev({ text: 'paid collab' })).pass).toBe(true);
+    expect(usesOrGroups([cond('c1', { type: 'emoji', mode: 'any' })])).toBe(false);
   });
   it('evaluates hours in the account time zone, including DST and overnight windows', () => {
     // 20:00 UTC in July = 13:00 PDT

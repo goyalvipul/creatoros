@@ -1,9 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, post, refresh } from '@/lib/api';
 import { canOpen, navFor } from './nav';
+import { uxV5 } from './ux-v5-flag';
 import { Badge, Dialog, Field, FormDialog, Input, Select, Textarea, useToast } from './ui';
 import { dateInput, title as titleCase } from '@/lib/format';
 
@@ -194,7 +196,25 @@ export function QuickAdd({ open, onClose, role }: { open: boolean; onClose: () =
   };
 
   return (
-    <FormDialog open={open} onClose={onClose} title="Quick add" submitLabel="Add" onSubmit={submit}>
+    <FormDialog open={open} onClose={onClose} title={uxV5() ? 'What do you want to start?' : 'Quick add'} submitLabel="Add" onSubmit={submit}>
+      {uxV5() && (
+        <div className="grid grid-cols-2 gap-2">
+          {[
+            ['/content', 'Capture an idea'],
+            ['/today', 'Open tasks'],
+            ['/publishing', 'Compose a post'],
+            ['/production', 'New project'],
+            ['/library', 'Upload media'],
+            ['/collaborations', 'Collaborations'],
+          ]
+            .filter(([href]) => canOpen(role, href))
+            .map(([href, label]) => (
+            <Link key={href} href={href} onClick={onClose} className="rounded-[11px] border border-border px-3 py-3 text-sm font-semibold hover:bg-panel2">
+              {label}
+            </Link>
+          ))}
+        </div>
+      )}
       <Field label="What are you adding?">
         <Select value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
           <option value="idea">Content idea</option>

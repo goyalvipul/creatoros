@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { eq, providerConnections, socialAccounts, sql } from '@creatoros/db';
+import { eq, providerConnections, socialAccounts, sql, workflowExecutions } from '@creatoros/db';
 import {
+  activateWorkflow,
   createBrand,
   createChannel,
   createSocialAccount,
+  createWorkflow,
   encryptJson,
   listSocialAccounts,
   listSocialThreads,
@@ -211,5 +213,107 @@ describe('YouTube comments in Socials', () => {
       w.g.overrides,
     );
     expect(w.g.writes).toHaveLength(1);
+  });
+
+  it('accepts a Facebook Page and a YouTube channel, and runs only for a comment newer than the first import', async () => {
+    const w = await world([READ, COMMENTS], { linked: true });
+    const [page] = await h.db
+      .insert(providerConnections)
+      .values({
+        orgId: w.org.ctx.orgId,
+        provider: 'facebook',
+        label: 'Mehak Thakur',
+        principalHint: '1125',
+        state: 'ACTIVE',
+        scopes: ['pages_manage_engagement'],
+        encryptedTokenRef: encryptJson({ accessToken: 'ptok' }, w.org.ctx.env.encryptionKey),
+        config: { pageName: 'Mehak Thakur', username: 'Mehak Thakur' },
+      })
+      .returning();
+    const commentWorkflow = {
+      schemaVersion: 1,
+      trigger: { event: 'COMMENT_RECEIVED' },
+      steps: [{ kind: 'action', id: 'a1', action: { type: 'draft_reply', template: 'Hi' } }],
+    };
+    const pageWf: any = await createWorkflow(w.org.ctx, {
+      name: 'Page comments',
+      mode: 'DRAFT_ONLY',
+      connectionIds: [page!.id],
+      definition: commentWorkflow,
+    });
+    expect(pageWf.connectionIds).toEqual([page!.id]);
+    await expect(
+      createWorkflow(w.org.ctx, {
+        name: 'Missing',
+        mode: 'DRAFT_ONLY',
+        connectionIds: ['00000000-0000-4000-8000-000000000000'],
+        definition: commentWorkflow,
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_ACCOUNT_SCOPE' });
+
+    let pass = 0;
+    const fetchImpl = async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname.endsWith('/channels'))
+        return json({
+          items: [
+            {
+              id: w.channelId,
+              snippet: { title: 'Mehak' },
+              contentDetails: { relatedPlaylists: { uploads: 'UU' } },
+            },
+          ],
+        });
+      if (u.pathname.endsWith('/commentThreads')) {
+        pass += 1;
+        return json({
+          items:
+            pass === 1
+              ? []
+              : [
+                  {
+                    snippet: {
+                      videoId: 'vid9',
+                      totalReplyCount: 0,
+                      topLevelComment: {
+                        id: 'UgNew',
+                        snippet: {
+                          videoId: 'vid9',
+                          textOriginal: 'heart this',
+                          authorDisplayName: 'Fan',
+                          authorChannelId: { value: 'UCfan' },
+                          publishedAt: new Date().toISOString(),
+                        },
+                      },
+                    },
+                  },
+                ],
+        });
+      }
+      if (u.pathname.endsWith('/videos')) return json({ items: [] });
+      return json({}, 404);
+    };
+    const overrides = { fetch: fetchImpl as any, sleep: async () => {} };
+    const yt: any = await createWorkflow(w.org.ctx, {
+      name: 'YouTube comments',
+      mode: 'DRAFT_ONLY',
+      connectionIds: [w.conn.id],
+      definition: commentWorkflow,
+    });
+    await activateWorkflow(w.org.ctx, yt.id);
+    await syncSocialAccount(w.org.ctx, w.conn.id, overrides);
+    const before = await h.db
+      .select()
+      .from(workflowExecutions)
+      .where(eq(workflowExecutions.workflowId, yt.id));
+    expect(before).toHaveLength(0);
+    await syncSocialAccount(w.org.ctx, w.conn.id, overrides);
+    const after = await h.db
+      .select()
+      .from(workflowExecutions)
+      .where(eq(workflowExecutions.workflowId, yt.id));
+    expect(after).toHaveLength(1);
+    expect(after[0]!.status).toBe('COMPLETED');
+    await h.db.delete(providerConnections).where(eq(providerConnections.id, page!.id));
   });
 });

@@ -17,12 +17,26 @@ import {
   AppError,
   addDeliverable,
   analytics,
+  analyticsDetail,
+  syncAnalytics,
+  getMediaKit,
+  saveMediaKit,
+  setMediaKitPublished,
+  publicMediaKit,
+  addMediaKitInquiry,
+  listRecommendations,
+  generateRecommendations,
+  startExperiment,
   briefing,
   changeDealStage,
   completeAction,
   completeOAuth,
   receiveFacebookWebhook,
   receiveInstagramWebhook,
+  receiveTikTokWebhook,
+  deauthorizeThreads,
+  deleteThreadsData,
+  threadsDeletionStatus,
   verifyMetaHandshake,
   connectorContext,
   convertOpportunityToDeal,
@@ -1102,7 +1116,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       tag: 'Integrations',
       summary: 'Begin OAuth (PKCE). Returns the consent URL; nothing is connected until you approve.',
       role: 'OWNER',
-      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram', 'facebook']) }),
+      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram', 'facebook', 'tiktok', 'threads', 'snapchat']) }),
       body: z.object({
         publish: z.boolean().optional(),
         comments: z.boolean().optional(),
@@ -1114,6 +1128,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         send: z.boolean().optional(),
         analytics: z.boolean().optional(),
         loginHint: z.string().max(254).optional(),
+        scopes: z.array(z.string().max(80)).max(20).optional(),
       }),
     },
     ({ ctx, params, body }) => startOAuth(ctx, params.provider, body, ov()),
@@ -1125,10 +1140,13 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         state: z.string().max(500),
         code: z.string().max(2000).optional(),
         error: z.string().max(200).optional(),
+        error_description: z.string().max(500).optional(),
+        error_message: z.string().max(500).optional(),
       })
       .parse(req.query);
     try {
-      const r: any = await completeOAuth(db, env, q, ov());
+      const denied = [q.error, q.error_description, q.error_message].filter(Boolean).join(': ');
+      const r: any = await completeOAuth(db, env, { state: q.state, code: q.code, error: denied || undefined }, ov());
       // Only the provider name goes in the URL; tokens never leave the server.
       return reply.redirect(
         `${env.appBaseUrl}/integrations?connected=${encodeURIComponent(r?.provider ?? '')}`,
@@ -1147,6 +1165,49 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   // Instagram Login has its own redirect URI, separate from the Google one and from the webhook.
   app.get('/integrations/meta/instagram/callback', oauthCallbackSchema, oauthCallback);
   app.get('/integrations/meta/facebook/callback', oauthCallbackSchema, oauthCallback);
+  app.get('/integrations/tiktok/callback', oauthCallbackSchema, oauthCallback);
+  app.get('/integrations/threads/callback', oauthCallbackSchema, oauthCallback);
+  app.get('/integrations/snapchat/callback', oauthCallbackSchema, oauthCallback);
+
+  const threadsSignedRequest = (req: any) => {
+    const body = req.body as { signed_request?: string } | undefined;
+    const fromBody = typeof body?.signed_request === 'string' ? body.signed_request : '';
+    if (fromBody) return fromBody;
+    const raw = typeof req.rawBody === 'string' ? req.rawBody : '';
+    return new URLSearchParams(raw).get('signed_request') ?? '';
+  };
+  app.post(
+    '/integrations/threads/deauthorize',
+    { bodyLimit: 16 * 1024, schema: { tags: ['Integrations'], summary: 'Threads uninstall callback' } },
+    async (req, reply) => {
+      const result = await deauthorizeThreads(db, env, threadsSignedRequest(req));
+      if (!result.configured) return reply.code(404).send({ error: { code: 'NOT_CONFIGURED', message: 'Threads is not configured.' } });
+      if (!result.valid) return reply.code(400).send({ error: { code: 'INVALID_SIGNATURE', message: 'Threads signature was not valid.' } });
+      return reply.code(200).send({ data: { received: true } });
+    },
+  );
+  app.post(
+    '/integrations/threads/data-deletion',
+    { bodyLimit: 16 * 1024, schema: { tags: ['Integrations'], summary: 'Threads data-deletion callback' } },
+    async (req, reply) => {
+      const result = await deleteThreadsData(db, env, threadsSignedRequest(req));
+      if (!result.configured) return reply.code(404).send({ error: { code: 'NOT_CONFIGURED', message: 'Threads is not configured.' } });
+      if (!result.valid || !('body' in result)) return reply.code(400).send({ error: { code: 'INVALID_SIGNATURE', message: 'Threads signature was not valid.' } });
+      return reply.code(200).send(result.body);
+    },
+  );
+  app.get(
+    '/integrations/threads/data-deletion',
+    { schema: { tags: ['Integrations'], summary: 'Threads data-deletion status' } },
+    async (req, reply) => {
+      const code = z.object({ code: z.string().max(80).optional() }).parse(req.query).code ?? '';
+      const status = code ? await threadsDeletionStatus(db, code) : null;
+      const text = status
+        ? 'This Threads data-deletion request is complete. Any stored Threads login and imported Threads posts for that login were removed. Files on your computers were not deleted.'
+        : 'This confirmation code was not issued by Kemokem.';
+      return reply.type('text/html; charset=utf-8').send(`<!doctype html><meta charset="utf-8"><title>Threads data deletion</title><p>${text}</p>`);
+    },
+  );
 
   // Meta webhooks: separate from OAuth. Handshake echoes hub.challenge; deliveries are HMAC-verified over the raw body.
   app.get(
@@ -1249,6 +1310,33 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
             hasSignature: Boolean(req.headers['x-hub-signature-256']),
           },
           'facebook webhook rejected',
+        );
+        throw e;
+      }
+    },
+  );
+  // TikTok has no handshake. The signature is checked against the raw body; the worker applies the stored event.
+  app.post(
+    '/integrations/tiktok/webhook',
+    { bodyLimit: 256 * 1024, schema: { tags: ['Integrations'], summary: 'TikTok webhook delivery (signed)' } },
+    async (req, reply) => {
+      const raw = typeof req.rawBody === 'string' || Buffer.isBuffer(req.rawBody) ? req.rawBody : '';
+      try {
+        const r = await receiveTikTokWebhook(db, env, raw, req.headers['tiktok-signature'] as string | undefined);
+        req.log.info(
+          { received: r.received, stored: r.stored, duplicates: r.duplicates },
+          'tiktok webhook accepted',
+        );
+        return reply.header('cache-control', 'no-store').send({ data: r, meta: {}, error: null });
+      } catch (e) {
+        req.log.warn(
+          {
+            code: (e as any)?.code,
+            status: (e as any)?.status,
+            bytes: Buffer.byteLength(raw),
+            hasSignature: Boolean(req.headers['tiktok-signature']),
+          },
+          'tiktok webhook rejected',
         );
         throw e;
       }
@@ -1370,9 +1458,129 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         brandId: uuid.optional(),
         socialAccountId: uuid.optional(),
         platform: z.string().max(20).optional(),
+        song: z.string().max(120).optional(),
+        contentType: z.string().max(40).optional(),
+        campaignId: uuid.optional(),
       }),
     },
-    ({ ctx, query }) => analytics(ctx, query),
+    async ({ ctx, query }) => {
+      const base = await analytics(ctx, query);
+      try {
+        const detail = await analyticsDetail(ctx, query, base.timezone);
+        return { ...base, detail };
+      } catch (e) {
+        const msg = (e as Error).message ?? '';
+        if (/does not exist/i.test(msg))
+          return { ...base, detail: null, detailError: 'Run the latest database migration to open the analytics dashboard.' };
+        throw e;
+      }
+    },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/analytics/sync',
+      tag: 'Insights',
+      summary: 'Refresh stored platform metrics. Skips an account synced in the last 15 minutes unless force is set.',
+      role: 'OWNER',
+      body: z.object({ socialAccountId: uuid.optional(), force: z.boolean().optional() }),
+    },
+    ({ ctx, body }) => syncAnalytics(ctx, body),
+  );
+  route(
+    { method: 'GET', url: '/analytics/recommendations', tag: 'Insights', summary: 'Stored analytics recommendations' },
+    ({ ctx }) => listRecommendations(ctx),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/analytics/recommendations',
+      tag: 'Insights',
+      summary: 'Build recommendations from stored metrics. A model runs only when ANALYTICS_AI_BASE_URL is set.',
+      role: 'OWNER',
+    },
+    ({ ctx }) => generateRecommendations(ctx),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/analytics/recommendations/:id/experiment',
+      tag: 'Insights',
+      summary: 'Turn one recommendation into an internal task. It is not marked proven.',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => startExperiment(ctx, params.id),
+  );
+  route(
+    { method: 'GET', url: '/media-kit', tag: 'Insights', summary: 'Owner media kit draft', role: 'OWNER' },
+    ({ ctx }) => getMediaKit(ctx),
+  );
+  route(
+    {
+      method: 'PUT',
+      url: '/media-kit',
+      tag: 'Insights',
+      summary: 'Save the media kit. Follower numbers are filled from verified snapshots, not from this request.',
+      role: 'OWNER',
+      body: z.object({
+        slug: z.string().max(40).optional(),
+        artistName: z.string().max(120).optional(),
+        positioning: z.string().max(280).optional(),
+        bio: z.string().max(4000).optional(),
+        photos: z.array(z.object({ url: z.string().url().max(500), alt: z.string().max(120) })).max(8).optional(),
+        showFollowers: z.boolean().optional(),
+        showTopContent: z.boolean().optional(),
+        collaborations: z.array(z.object({ name: z.string().max(160), note: z.string().max(280) })).max(12).optional(),
+        contactEmail: z.string().email().nullable().optional(),
+      }),
+    },
+    ({ ctx, body }) => saveMediaKit(ctx, body),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/media-kit/publish',
+      tag: 'Insights',
+      summary: 'Publish the sanitized media kit',
+      role: 'OWNER',
+      body: z.object({ published: z.boolean() }),
+    },
+    ({ ctx, body }) => setMediaKitPublished(ctx, body.published),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/public/media-kits/:slug',
+      tag: 'Insights',
+      summary: 'Public media kit. Only the published projection.',
+      role: 'public',
+      params: z.object({ slug: z.string().min(1).max(40) }),
+      rateLimit: { max: 60, timeWindow: '1 minute' },
+    },
+    async ({ params }) => {
+      const kit = await publicMediaKit(db, params.slug);
+      if (!kit) throw new AppError(404, 'NOT_FOUND', 'This media kit is not published.');
+      return kit;
+    },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/public/media-kits/:slug/inquiries',
+      tag: 'Insights',
+      summary: 'Public inquiry. Creates an internal task and stores the message.',
+      role: 'public',
+      params: z.object({ slug: z.string().min(1).max(40) }),
+      body: z.object({
+        name: z.string().trim().min(1).max(120),
+        email: z.string().trim().email().max(200),
+        message: z.string().trim().min(8).max(4000),
+      }),
+      rateLimit: { max: 5, timeWindow: '1 minute' },
+    },
+    ({ params, body }) =>
+      addMediaKitInquiry({ db, env: config.env, now: () => deps.now?.() ?? new Date() }, params.slug, body),
   );
   route(
     {

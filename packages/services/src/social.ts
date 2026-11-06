@@ -125,7 +125,7 @@ export function instagramCapabilities(conn: Conn, env: ServiceEnv) {
       replyComments: need(YT_COMMENTS_SCOPE),
       webhooks: 'UNSUPPORTED' as CapabilityStatus, // polling only
       publishing: 'NOT_IMPLEMENTED' as CapabilityStatus,
-      insights: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      insights: need('https://www.googleapis.com/auth/youtube.readonly'),
       mentions: 'NOT_IMPLEMENTED' as CapabilityStatus,
     };
   if (conn.provider === 'facebook')
@@ -139,7 +139,7 @@ export function instagramCapabilities(conn: Conn, env: ServiceEnv) {
         ? 'AVAILABLE'
         : 'NOT_CONFIGURED') as CapabilityStatus,
       publishing: 'NOT_IMPLEMENTED' as CapabilityStatus,
-      insights: 'NOT_IMPLEMENTED' as CapabilityStatus,
+      insights: need(FACEBOOK_SCOPES.readEngagement),
       mentions: 'NOT_IMPLEMENTED' as CapabilityStatus,
     };
   const webhooks: CapabilityStatus = readInstagramClientConfig(env.processEnv)?.webhookVerifyToken
@@ -155,7 +155,7 @@ export function instagramCapabilities(conn: Conn, env: ServiceEnv) {
       live && granted.includes(INSTAGRAM_SCOPES.publish)
         ? ('NOT_IMPLEMENTED' as const)
         : need(INSTAGRAM_SCOPES.publish),
-    insights: 'NOT_IMPLEMENTED' as CapabilityStatus,
+    insights: need('instagram_business_manage_insights'),
     mentions: 'NOT_IMPLEMENTED' as CapabilityStatus,
   };
 }

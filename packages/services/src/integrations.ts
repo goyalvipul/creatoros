@@ -17,7 +17,13 @@ import {
   exchangeInstagramCode,
   fetchInstagramProfile,
   getConnector,
+  tiktokConnector,
+  snapchatConnector,
   instagramCapabilityMatrix,
+  exchangeThreadsCode,
+  fetchThreadsProfile,
+  readThreadsClientConfig,
+  threadsCapabilityMatrix,
   readGoogleClientConfig,
   readInstagramClientConfig,
   refreshInstagramToken,
@@ -71,6 +77,25 @@ export function connectorContext(
     config: {
       googleClient: readGoogleClientConfig(env.processEnv, conn?.provider ?? provider) ?? undefined,
       instagramClient: readInstagramClientConfig(env.processEnv) ?? undefined,
+      threadsClient: readThreadsClientConfig(env.processEnv, env.appBaseUrl) ?? undefined,
+      ...((conn?.provider ?? provider) === 'tiktok'
+        ? {
+            clientKey: env.processEnv.TIKTOK_CLIENT_KEY,
+            clientSecret: env.processEnv.TIKTOK_CLIENT_SECRET,
+            redirectUri:
+              env.processEnv.TIKTOK_REDIRECT_URI ||
+              `${env.appBaseUrl.replace(/\/$/, '')}/api/v1/integrations/tiktok/callback`,
+          }
+        : {}),
+      ...((conn?.provider ?? provider) === 'snapchat'
+        ? {
+            clientId: env.processEnv.SNAPCHAT_CLIENT_ID,
+            clientSecret: env.processEnv.SNAPCHAT_CLIENT_SECRET,
+            redirectUri:
+              env.processEnv.SNAPCHAT_REDIRECT_URI ||
+              `${env.appBaseUrl.replace(/\/$/, '')}/api/v1/integrations/snapchat/callback`,
+          }
+        : {}),
       ...(conn?.config ?? {}),
     },
     onCredentials: async (c) => {
@@ -90,7 +115,7 @@ export function connectorContext(
 
 const publicConn = (c: Conn, identity: unknown = null) => ({
   identity,
-  account: c.provider === 'instagram' ? instagramAccount(c) : undefined,
+  account: c.provider === 'instagram' ? instagramAccount(c) : c.provider === 'threads' ? threadsAccount(c) : undefined,
   id: c.id,
   provider: c.provider,
   label: c.label,
@@ -127,6 +152,26 @@ function instagramAccount(c: Conn) {
     lastApiCheckAt: cfg.lastCheckAt ?? null,
   };
 }
+
+function threadsAccount(c: Conn) {
+  const cfg = (c.config ?? {}) as Record<string, any>;
+  const { flags, missing } = threadsCapabilityMatrix(c.scopes ?? []);
+  const days = c.expiresAt ? Math.floor((c.expiresAt.getTime() - Date.now()) / 86_400_000) : null;
+  return {
+    accountId: c.principalHint,
+    username: cfg.username ?? null,
+    name: cfg.name ?? null,
+    profilePictureUrl: cfg.profilePictureUrl ?? null,
+    grantedPermissions: c.scopes ?? [],
+    missingPermissions: missing,
+    capabilities: flags,
+    token: {
+      expiresAt: c.expiresAt,
+      daysRemaining: days,
+      status: days === null ? 'UNKNOWN' : days < 0 ? 'EXPIRED' : days <= 10 ? 'RENEWAL_DUE' : 'OK',
+    },
+  };
+}
 function redactConfig(cfg: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(cfg ?? {})) out[k] = /secret|token|key|password/i.test(k) ? '***' : v;
@@ -145,10 +190,29 @@ export async function listIntegrations(ctx: Ctx, overrides: Partial<ConnectorCon
       identityMap.set(c.id, await inspectIdentity(ctx, c));
   const out = [];
   for (const provider of PROVIDER) {
+    // A later empty attempt must not hide an account that is already connected.
+    const rank = (state: string) =>
+      state === 'ACTIVE'
+        ? 0
+        : state === 'PARTIAL_SYNC'
+          ? 1
+          : state === 'PAUSED'
+            ? 2
+            : state === 'AUTH_EXPIRED'
+              ? 3
+              : state === 'OFFLINE'
+                ? 4
+                : state === 'ERROR'
+                  ? 5
+                  : state === 'NOT_CONFIGURED'
+                    ? 9
+                    : 6;
     const conn =
       conns
         .filter((c) => c.provider === provider)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null;
+        .sort(
+          (a, b) => rank(a.state) - rank(b.state) || b.createdAt.getTime() - a.createdAt.getTime(),
+        )[0] ?? null;
     const connector = getConnector(provider);
     let caps;
     try {
@@ -198,7 +262,7 @@ async function setState(db: Db, conn: Conn, state: Conn['state'], lastError: str
 
 export async function startOAuth(
   ctx: Ctx,
-  provider: 'gmail' | 'youtube' | 'instagram' | 'facebook',
+  provider: 'gmail' | 'youtube' | 'instagram' | 'facebook' | 'tiktok' | 'threads' | 'snapchat',
   input: {
     drafts?: boolean;
     send?: boolean;
@@ -210,10 +274,12 @@ export async function startOAuth(
     videos?: boolean;
     messages?: boolean;
     reconnect?: boolean;
+    scopes?: string[];
   } = {},
   overrides: Partial<ConnectorContext> = {},
 ) {
-  if (provider === 'facebook') return startFacebookOAuth(ctx, { videos: input.videos });
+  if (provider === 'facebook')
+    return startFacebookOAuth(ctx, { videos: input.videos, scopes: input.scopes, reconnect: input.reconnect });
   const connector = getConnector(provider);
   const cctx = connectorContext(ctx.db, ctx.env, null, overrides, provider);
   const res = await connector.connect(cctx, input);
@@ -227,8 +293,12 @@ export async function startOAuth(
     codeVerifierEnc: encrypt(res.oauth.verifier, ctx.env.encryptionKey),
     scopes: res.oauth.scopes,
     redirectUri:
-      ((provider === 'instagram' ? cctx.config.instagramClient : cctx.config.googleClient) as any)
-        ?.redirectUri ?? '',
+      provider === 'tiktok' || provider === 'snapchat'
+        ? (cctx.config.redirectUri ?? '')
+        : provider === 'threads'
+          ? ((cctx.config.threadsClient as { redirectUri?: string } | undefined)?.redirectUri ?? '')
+          : (((provider === 'instagram' ? cctx.config.instagramClient : cctx.config.googleClient) as any)
+              ?.redirectUri ?? ''),
     expiresAt: new Date(Date.now() + 10 * 60_000),
   });
   await audit(ctx, 'integration.oauth.start', { type: 'provider', id: provider }, undefined, {
@@ -263,6 +333,9 @@ export async function completeOAuth(
     );
   if (st.provider === 'instagram') return completeInstagramOAuth(db, env, st, input.code, overrides);
   if (st.provider === 'facebook') return completeFacebookOAuth(db, env, st, input.code, overrides);
+  if (st.provider === 'tiktok') return completeTikTokOAuth(db, env, st, input.code, overrides);
+  if (st.provider === 'snapchat') return completeSnapchatOAuth(db, env, st, input.code, overrides);
+  if (st.provider === 'threads') return completeThreadsOAuth(db, env, st, input.code, overrides);
   const client = readGoogleClientConfig(env.processEnv, st.provider);
   if (!client)
     throw badRequest('Google OAuth client is not configured on the server.', undefined, 'NOT_CONFIGURED');
@@ -394,6 +467,213 @@ async function completeInstagramOAuth(
   // Reuse the existing channel account when its verified provider id matches. Username-only matches wait for owner confirmation.
   await autoReconcileConnection(systemCtx({ db, env }, st.orgId), id).catch(() => null);
   return { connectionId: id, provider: 'instagram' as const, principal: accountId };
+}
+
+/** Threads Login callback. The code is exchanged on the server. Facebook Page tokens are not reused. */
+async function completeThreadsOAuth(
+  db: Db,
+  env: ServiceEnv,
+  st: typeof oauthStates.$inferSelect,
+  code: string,
+  overrides: Partial<ConnectorContext>,
+) {
+  const client = readThreadsClientConfig(env.processEnv, env.appBaseUrl);
+  if (!client) throw badRequest('Threads app is not configured on the server.', undefined, 'NOT_CONFIGURED');
+  const cctx = connectorContext(db, env, null, overrides, 'threads');
+  const creds = await exchangeThreadsCode(cctx, client, code);
+  const profile = await fetchThreadsProfile({
+    ...cctx,
+    credentials: creds,
+    config: { ...cctx.config, threadsClient: client },
+  });
+  const accountId = profile.userId;
+  const nowIso = new Date().toISOString();
+  const existing = (
+    await db
+      .select()
+      .from(providerConnections)
+      .where(and(eq(providerConnections.orgId, st.orgId), eq(providerConnections.provider, 'threads')))
+  ).find((c) => c.principalHint === accountId);
+  const values = {
+    label: profile.username ? `@${profile.username}` : accountId,
+    principalHint: accountId,
+    encryptedTokenRef: encryptJson({ ...creds, principal: accountId, scopes: creds.scopes?.length ? creds.scopes : st.scopes }, env.encryptionKey),
+    scopes: creds.scopes?.length ? creds.scopes : st.scopes,
+    expiresAt: creds.expiresAt ? new Date(creds.expiresAt) : null,
+    state: 'ACTIVE' as const,
+    lastError: null,
+    config: {
+      ...((existing?.config as Record<string, unknown>) ?? {}),
+      username: profile.username,
+      name: profile.name,
+      profilePictureUrl: profile.profilePictureUrl,
+      biography: profile.biography,
+      issuedAt: nowIso,
+      lastCheckAt: nowIso,
+    },
+    updatedAt: new Date(),
+  };
+  let id: string;
+  if (existing) {
+    await db.update(providerConnections).set(values).where(eq(providerConnections.id, existing.id));
+    id = existing.id;
+  } else {
+    const [c] = await db
+      .insert(providerConnections)
+      .values({ orgId: st.orgId, provider: 'threads', ...values })
+      .returning({ id: providerConnections.id });
+    id = c!.id;
+  }
+  await audit(
+    { db, orgId: st.orgId, actor: { type: 'user', id: st.userId }, userId: st.userId },
+    existing ? 'integration.reconnected' : 'integration.connected',
+    { type: 'provider_connection', id },
+    undefined,
+    { provider: 'threads', accountId, scopes: values.scopes },
+  );
+  await autoReconcileConnection(systemCtx({ db, env }, st.orgId), id).catch(() => null);
+  return { connectionId: id, provider: 'threads' as const, principal: accountId };
+}
+
+/** TikTok Login Kit callback. The authorization code is exchanged on the server. The browser never sees the token. */
+async function completeTikTokOAuth(
+  db: Db,
+  env: ServiceEnv,
+  st: typeof oauthStates.$inferSelect,
+  code: string,
+  overrides: Partial<ConnectorContext>,
+) {
+  const cctx = connectorContext(db, env, null, overrides, 'tiktok');
+  if (!cctx.config.clientKey || !cctx.config.clientSecret || !cctx.config.redirectUri)
+    throw badRequest('TikTok app is not configured on the server.', undefined, 'NOT_CONFIGURED');
+  const creds = await tiktokConnector.exchangeCode(
+    cctx,
+    code,
+    decrypt(st.codeVerifierEnc, env.encryptionKey),
+  );
+  let displayName: string | null = null;
+  let avatarUrl: string | null = null;
+  try {
+    const profile = await tiktokConnector.profile({ ...cctx, credentials: creds });
+    displayName = profile.displayName;
+    avatarUrl = profile.avatarUrl;
+    if (profile.openId) creds.principal = profile.openId;
+  } catch {
+    // The token is still stored. Test shows the profile error.
+  }
+  const openId = creds.principal ?? null;
+  const existing = (
+    await db
+      .select()
+      .from(providerConnections)
+      .where(and(eq(providerConnections.orgId, st.orgId), eq(providerConnections.provider, 'tiktok')))
+  ).find((c) => !openId || !c.principalHint || c.principalHint === openId);
+  const values = {
+    label: displayName ?? openId ?? 'TikTok',
+    principalHint: openId,
+    encryptedTokenRef: encryptJson(creds, env.encryptionKey),
+    scopes: creds.scopes?.length ? creds.scopes : st.scopes,
+    expiresAt: creds.expiresAt ? new Date(creds.expiresAt) : null,
+    state: 'ACTIVE' as const,
+    lastError: null,
+    config: {
+      ...((existing?.config as Record<string, unknown>) ?? {}),
+      displayName,
+      avatarUrl,
+    },
+    updatedAt: new Date(),
+  };
+  let id: string;
+  if (existing) {
+    await db.update(providerConnections).set(values).where(eq(providerConnections.id, existing.id));
+    id = existing.id;
+  } else {
+    const [c] = await db
+      .insert(providerConnections)
+      .values({ orgId: st.orgId, provider: 'tiktok', ...values })
+      .returning({ id: providerConnections.id });
+    id = c!.id;
+  }
+  await audit(
+    { db, orgId: st.orgId, actor: { type: 'user', id: st.userId }, userId: st.userId },
+    existing ? 'integration.reconnected' : 'integration.connected',
+    { type: 'provider_connection', id },
+    undefined,
+    { provider: 'tiktok', scopes: values.scopes },
+  );
+  await autoReconcileConnection(systemCtx({ db, env }, st.orgId), id).catch(() => null);
+  return { connectionId: id, provider: 'tiktok' as const, principal: openId };
+}
+
+/** Snapchat Public Profile callback. The code is exchanged on the server. The browser never sees the token. */
+async function completeSnapchatOAuth(
+  db: Db,
+  env: ServiceEnv,
+  st: typeof oauthStates.$inferSelect,
+  code: string,
+  overrides: Partial<ConnectorContext>,
+) {
+  const cctx = connectorContext(db, env, null, overrides, 'snapchat');
+  if (!cctx.config.clientId || !cctx.config.clientSecret || !cctx.config.redirectUri)
+    throw badRequest('Snapchat app is not configured on the server.', undefined, 'NOT_CONFIGURED');
+  const creds = await snapchatConnector.exchangeCode(cctx, code);
+  const access = await snapchatConnector.inspectAccess({ ...cctx, credentials: creds });
+  const profile = access.profile;
+  const displayName = profile?.displayName ?? null;
+  const username = profile?.username ?? null;
+  const avatarUrl = profile?.avatarUrl ?? null;
+  const organizationId = profile?.organizationId ?? null;
+  if (profile?.id) creds.principal = profile.id;
+  const profileId = creds.principal ?? null;
+  const existing = (
+    await db
+      .select()
+      .from(providerConnections)
+      .where(and(eq(providerConnections.orgId, st.orgId), eq(providerConnections.provider, 'snapchat')))
+  ).find((c) => !profileId || !c.principalHint || c.principalHint === profileId);
+  const values = {
+    label: username ? `@${username.replace(/^@/, '')}` : (displayName ?? 'Snapchat'),
+    principalHint: profileId,
+    encryptedTokenRef: encryptJson(creds, env.encryptionKey),
+    scopes: creds.scopes?.length ? creds.scopes : st.scopes,
+    expiresAt: creds.expiresAt ? new Date(creds.expiresAt) : null,
+    state: (access.publicProfile ? 'ACTIVE' : 'PARTIAL_SYNC') as 'ACTIVE' | 'PARTIAL_SYNC',
+    lastError: access.detail,
+    config: {
+      ...((existing?.config as Record<string, unknown>) ?? {}),
+      displayName,
+      username,
+      avatarUrl,
+      organizationId,
+      access: {
+        publicProfile: access.publicProfile,
+        stories: access.stories,
+        publish: false,
+        analytics: false,
+      },
+    },
+    updatedAt: new Date(),
+  };
+  let id: string;
+  if (existing) {
+    await db.update(providerConnections).set(values).where(eq(providerConnections.id, existing.id));
+    id = existing.id;
+  } else {
+    const [c] = await db
+      .insert(providerConnections)
+      .values({ orgId: st.orgId, provider: 'snapchat', ...values })
+      .returning({ id: providerConnections.id });
+    id = c!.id;
+  }
+  await audit(
+    { db, orgId: st.orgId, actor: { type: 'user', id: st.userId }, userId: st.userId },
+    existing ? 'integration.reconnected' : 'integration.connected',
+    { type: 'provider_connection', id },
+    undefined,
+    { provider: 'snapchat', scopes: values.scopes },
+  );
+  await autoReconcileConnection(systemCtx({ db, env }, st.orgId), id).catch(() => null);
+  return { connectionId: id, provider: 'snapchat' as const, principal: profileId };
 }
 
 /**
@@ -576,6 +856,29 @@ export async function testConnection(
       ),
     );
   if (!conn) throw notFound('Connection');
+  if (provider === 'snapchat') {
+    const cctx = connectorContext(ctx.db, ctx.env, conn, overrides);
+    try {
+      const access = await snapchatConnector.inspectAccess(cctx);
+      const state = access.publicProfile ? 'ACTIVE' : 'PARTIAL_SYNC';
+      await setState(ctx.db, conn, state, access.detail);
+      await ctx.db
+        .update(providerConnections)
+        .set({
+          config: {
+            ...(conn.config as object),
+            access: { publicProfile: access.publicProfile, stories: access.stories, publish: false, analytics: false },
+          },
+        })
+        .where(eq(providerConnections.id, conn.id));
+      return { ok: access.publicProfile, state, detail: access.detail ?? undefined, checkedAt: new Date().toISOString() };
+    } catch (e) {
+      const err = e as ConnectorError;
+      const state = err.kind === 'AUTH_EXPIRED' ? 'AUTH_EXPIRED' : 'ERROR';
+      await setState(ctx.db, conn, state, err.message);
+      return { ok: false, state, detail: err.message, checkedAt: new Date().toISOString() };
+    }
+  }
   const connector = getConnector(provider);
   const h = await connector.health(connectorContext(ctx.db, ctx.env, conn, overrides));
   await setState(ctx.db, conn, h.state, h.ok ? null : (h.detail ?? 'health check failed'));
@@ -711,6 +1014,7 @@ export async function runSync(
       provider === 'meta' ||
       provider === 'instagram' ||
       provider === 'tiktok' ||
+      provider === 'threads' ||
       provider === 'postiz'
     ) {
       const [acct] = await db
@@ -748,7 +1052,11 @@ export async function runSync(
           publishedAt: p.publishedAt,
           privacy: p.privacy,
           stats: (p.stats ?? undefined) as any,
-          providerMeta: { thumbnailUrl: p.thumbnailUrl, durationMs: p.durationMs },
+          providerMeta: {
+            thumbnailUrl: p.thumbnailUrl,
+            durationMs: p.durationMs,
+            ...(p.raw && typeof p.raw === 'object' ? (p.raw as Record<string, unknown>) : {}),
+          },
         })),
       );
       await saveCursor(db, conn.orgId, conn.id, scope, res.nextCursor);
@@ -807,7 +1115,7 @@ export async function listConnectionsForSync(db: Db) {
     })
     .from(providerConnections)
     .where(
-      sql`${providerConnections.state} in ('ACTIVE','PARTIAL_SYNC') and ${providerConnections.encryptedTokenRef} is not null and ${providerConnections.provider} in ('gmail','youtube','meta','instagram','tiktok','postiz')`,
+      sql`${providerConnections.state} in ('ACTIVE','PARTIAL_SYNC') and ${providerConnections.encryptedTokenRef} is not null and ${providerConnections.provider} in ('gmail','youtube','meta','instagram','facebook','tiktok','threads','postiz')`,
     );
 }
 

@@ -12,6 +12,7 @@ import {
   notify,
   processFacebookWebhookEvents,
   processMetaWebhookEvents,
+  processTikTokWebhookEvents,
   processOutbox,
   pruneBackups,
   recordHeartbeat,
@@ -230,6 +231,15 @@ export async function jobMaintenance(d: WorkerDeps) {
   const ids = await orgIds(d.db);
   const now = nowOf(d);
   await each(d, ids, 'analytics snapshot', (orgId) => snapshotAnalytics(d.db, orgId, now));
+  const { syncAnalytics } = await import('@creatoros/services');
+  const { systemCtx } = await import('@creatoros/services');
+  await each(d, ids, 'analytics sync', async (orgId) => {
+    try {
+      await syncAnalytics(systemCtx({ db: d.db, env: d.env }, orgId), { scheduled: true });
+    } catch (e) {
+      if (!/does not exist/i.test(String((e as Error).message ?? e))) throw e;
+    }
+  });
   await each(d, ids, 'near duplicates', (orgId) =>
     detectNearDuplicates({ ...systemCtx({ db: d.db, env: d.env }, orgId), now: () => now }),
   );
@@ -289,6 +299,7 @@ export const JOB_TABLE = {
   'social-events': async (d: WorkerDeps) => ({
     instagram: await processMetaWebhookEvents(d.db, d.env, d.overrides),
     facebook: await processFacebookWebhookEvents(d.db, d.env, d.overrides),
+    tiktok: await processTikTokWebhookEvents(d.db),
   }),
   'sync-fast': (d: WorkerDeps) => jobSync(d, 'fast'),
   'sync-slow': (d: WorkerDeps) => jobSync(d, 'slow'),

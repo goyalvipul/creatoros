@@ -43,7 +43,16 @@ x-app-env: &app-env
   FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
   FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
   FACEBOOK_REDIRECT_URI: ${FACEBOOK_REDIRECT_URI:-}
+  THREADS_APP_ID: ${THREADS_APP_ID:-}
+  THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
+  THREADS_REDIRECT_URI: ${THREADS_REDIRECT_URI:-}
   META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v23.0}
+  TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+  TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+  TIKTOK_REDIRECT_URI: ${TIKTOK_REDIRECT_URI:-}
+  SNAPCHAT_CLIENT_ID: ${SNAPCHAT_CLIENT_ID:-}
+  SNAPCHAT_CLIENT_SECRET: ${SNAPCHAT_CLIENT_SECRET:-}
+  SNAPCHAT_REDIRECT_URI: ${SNAPCHAT_REDIRECT_URI:-}
 
 services:
   db:
@@ -184,7 +193,7 @@ services:
     restart: unless-stopped
     ports:
       - '${HTTP_PORT:-8080}:80'
-      # Restricted gateway for Meta webhooks only (loopback; expose with Tailscale Funnel, see docs/META_SETUP.md)
+      # Restricted gateway for signed Meta and TikTok webhooks (loopback; expose with Tailscale Funnel, see docs/META_SETUP.md)
       - '127.0.0.1:${META_GATEWAY_PORT:-8081}:8081'
     volumes:
       - ./infra/docker/Caddyfile:/etc/caddy/Caddyfile:ro

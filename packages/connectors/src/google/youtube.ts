@@ -9,6 +9,7 @@ import {
   type NormalizedPost,
   type RateLimitBudget,
   type SyncResult,
+  type DemographicSlice,
 } from '../types';
 import { ensureFreshToken, http } from '../http';
 import {
@@ -89,7 +90,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
       blockers,
       setupSteps: [
         'In Google Cloud Console enable "YouTube Data API v3" for the same project as the Gmail client.',
-        'Press Connect in Integrations and approve youtube.readonly (optionally yt-analytics.readonly).',
+        'Press Connect in Integrations. The consent screen includes watch time (yt-analytics.readonly). Check that box. Comments and uploads stay as they already are.',
         'Link the connected channel to the matching social account in Channels.',
         'For Socials comments: press Enable comments and approve youtube.force-ssl (read and reply to comments).',
         'To publish a video from Publishing: press Enable uploads and approve youtube.upload. Nothing is uploaded until you press Publish on that file.',
@@ -105,7 +106,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
     const scopes = [
       ...GOOGLE_SCOPES.identity,
       ...GOOGLE_SCOPES.youtubeRead,
-      ...(input.analytics ? GOOGLE_SCOPES.youtubeAnalytics : []),
+      ...GOOGLE_SCOPES.youtubeAnalytics,
       ...(input.comments ? GOOGLE_SCOPES.youtubeComments : []),
       ...(input.upload ? GOOGLE_SCOPES.youtubeUpload : []),
     ];
@@ -314,6 +315,111 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
   async refreshStats(ctx: ConnectorContext, ids: string[]): Promise<NormalizedPost[]> {
     return (await this.videosById(ctx, ids)).map((v) => this.normalize(v));
   }
+
+  /** Public channel totals from Data API statistics. Watch time is not in this response. */
+  async channelStatistics(
+    ctx: ConnectorContext,
+  ): Promise<{ subscribers: number | null; hidden: boolean; views: number | null }> {
+    const res = await this.get<{
+      items?: { statistics?: { subscriberCount?: string; viewCount?: string; hiddenSubscriberCount?: boolean } }[];
+    }>(ctx, '/channels', { part: 'statistics', mine: 'true' });
+    const s = res.items?.[0]?.statistics;
+    return {
+      hidden: s?.hiddenSubscriberCount === true,
+      subscribers: s?.hiddenSubscriberCount ? null : (num(s?.subscriberCount) ?? null),
+      views: num(s?.viewCount) ?? null,
+    };
+  }
+}
+
+export interface YtAnalyticsTable {
+  columnHeaders?: { name: string }[];
+  rows?: (string | number)[][];
+}
+
+/** Minutes watched across the returned rows. Empty means the report had no rows. */
+export function youtubeMinutesWatched(rows: Record<string, string | number>[]): number | null {
+  if (rows.length === 0) return null;
+  let total = 0;
+  let seen = false;
+  for (const row of rows) {
+    if (typeof row.estimatedMinutesWatched !== 'number') continue;
+    total += row.estimatedMinutesWatched;
+    seen = true;
+  }
+  return seen ? total : null;
+}
+
+/** Minutes watched keyed by video id. */
+export function youtubeMinutesByVideo(rows: Record<string, string | number>[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    if (typeof row.video !== 'string' || typeof row.estimatedMinutesWatched !== 'number') continue;
+    out.set(row.video, row.estimatedMinutesWatched);
+  }
+  return out;
+}
+
+/** Numeric analytics columns keyed by video id. A missing column is omitted, not stored as zero. */
+export function indexYoutubeByVideo(rows: Record<string, string | number>[]): Map<string, Record<string, number>> {
+  const out = new Map<string, Record<string, number>>();
+  for (const row of rows) {
+    if (typeof row.video !== 'string') continue;
+    const nums: Record<string, number> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (key === 'video' || typeof value !== 'number' || !Number.isFinite(value)) continue;
+      nums[key] = value;
+    }
+    out.set(row.video, nums);
+  }
+  return out;
+}
+
+/** First analytics row when the report has no dimension. */
+export function youtubeChannelRow(rows: Record<string, string | number>[]): Record<string, number> {
+  const row = rows[0];
+  if (!row) return {};
+  const nums: Record<string, number> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value === 'number' && Number.isFinite(value)) nums[key] = value;
+  }
+  return nums;
+}
+
+/** Viewer percentage by age and gender. The value is a percentage, not a person count. */
+export function youtubeDemographicSlices(rows: Record<string, string | number>[]): DemographicSlice[] {
+  return rows.flatMap((row) => {
+    if (typeof row.viewerPercentage !== 'number') return [];
+    const label = [row.ageGroup, row.gender].filter((part) => typeof part === 'string' && part).join(' · ');
+    if (!label) return [];
+    return [{ dimension: 'age_gender', label, value: row.viewerPercentage }];
+  });
+}
+
+/** Rows from youtubeAnalytics.reports.query. Empty means the API returned no breakdown, not a zero. */
+export function parseYoutubeAnalyticsTable(data: YtAnalyticsTable): Record<string, string | number>[] {
+  const names = (data.columnHeaders ?? []).map((h) => h.name);
+  return (data.rows ?? []).map((row) => {
+    const out: Record<string, string | number> = {};
+    names.forEach((name, i) => {
+      const cell = row[i];
+      if (name && cell !== undefined) out[name] = cell;
+    });
+    return out;
+  });
+}
+
+/** YouTube Analytics reports. Separate from the Data API quota. Requires yt-analytics.readonly. */
+export async function fetchYoutubeAnalyticsReport(
+  ctx: ConnectorContext,
+  query: Record<string, string>,
+): Promise<Record<string, string | number>[]> {
+  const token = await ensureFreshToken(ctx, refreshGoogleToken);
+  const { data } = await http<YtAnalyticsTable>(ctx, 'https://youtubeanalytics.googleapis.com/v2/reports', {
+    headers: { authorization: `Bearer ${token}` },
+    query: { ids: 'channel==MINE', ...query },
+  });
+  return parseYoutubeAnalyticsTable(data);
 }
 
 function num(s: string | undefined): number | undefined {

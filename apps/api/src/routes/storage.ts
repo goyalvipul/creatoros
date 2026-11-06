@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { attachmentHeaders } from '../attachment';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql } from '@creatoros/db';
@@ -780,12 +781,13 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
         if (v) reply.header(h, v);
       }
       const download = (req.query as { download?: string }).download === '1';
-      reply
-        .header('cache-control', 'private, no-store')
-        .header(
-          'content-disposition',
-          `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(f.fileName)}`,
-        );
+      if (download) {
+        for (const [key, value] of Object.entries(attachmentHeaders(f.fileName))) reply.header(key, value);
+      } else {
+        reply
+          .header('cache-control', 'private, no-store')
+          .header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.fileName)}`);
+      }
       reply.status(upstream.status);
       if (!upstream.body) return reply.send();
       return reply.send(Readable.fromWeb(upstream.body as any));

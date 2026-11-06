@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { ApiError, post, useApi } from '@/lib/api';
 import { Async, Badge, Button, Card, Notice, PageHeader } from '@/components/ui';
 import { ago, title as titleCase, when } from '@/lib/format';
+import { PlatformLogo } from '@/components/platform-logo';
 
 type Message = {
   messageId: string;
@@ -119,7 +120,7 @@ export default function TrendDetailPage() {
                     <div className="flex flex-wrap items-center gap-2 text-sm">
                       <span className="font-medium">{message.fromName || 'Unknown sender'}</span>
                       <Badge>{titleCase(message.kind)}</Badge>
-                      <Badge>{titleCase(message.platform)}</Badge>
+                      <PlatformLogo platform={message.platform} className="size-4" />
                       {message.account ? <Badge>{message.account}</Badge> : null}
                       <Badge tone={message.state === 'NEED_REPLY' ? 'warn' : 'neutral'}>
                         {titleCase(message.state)}

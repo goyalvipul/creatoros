@@ -3,7 +3,9 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { api, ApiError, post, refresh } from '@/lib/api';
-import { Button, Card, ErrorNote, Field, Input, Spinner } from '@/components/ui';
+import Link from 'next/link';
+import { BrandLogo, BrandSplash } from '@/components/brand-mark';
+import { Button, Card, ErrorNote, Field, Input } from '@/components/ui';
 
 function safeNext(n: string | null) {
   return n && n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '/';
@@ -60,14 +62,12 @@ function LoginForm() {
     }
   };
 
-  if (checking) return <Spinner label="Checking" />;
+  if (checking) return <BrandSplash label="Checking" />;
   return (
     <Card className="w-full max-w-sm">
       <div className="mb-5 text-center">
-        <div className="mx-auto mb-3 grid size-12 place-items-center rounded-xl bg-accent text-sm font-extrabold text-accentfg">
-          C/OS
-        </div>
-        <h1 className="text-xl font-semibold">Sign in to Creator OS</h1>
+        <BrandLogo className="mx-auto mb-3 h-16" />
+        <h1 className="text-xl font-semibold">Sign in to Kemokem</h1>
         <p className="mt-1 text-sm text-muted">
           Private workspace. No account is shared or hosted elsewhere.
         </p>
@@ -111,13 +111,19 @@ function LoginForm() {
           Sign in
         </Button>
       </form>
+      <nav className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1 text-xs text-muted" aria-label="Policies">
+        <Link href="/about" className="hover:text-text">About</Link>
+        <Link href="/terms" className="hover:text-text">Terms</Link>
+        <Link href="/privacy" className="hover:text-text">Privacy</Link>
+        <Link href="/legal/data-deletion" className="hover:text-text">Data deletion</Link>
+      </nav>
     </Card>
   );
 }
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<Spinner />}>
+    <Suspense fallback={<BrandSplash label="Loading" />}>
       <LoginForm />
     </Suspense>
   );

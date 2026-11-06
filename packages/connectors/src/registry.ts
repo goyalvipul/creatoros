@@ -3,6 +3,8 @@ import { GmailConnector } from './google/gmail';
 import { YouTubeConnector } from './google/youtube';
 import { TodoConnector } from './todo';
 import { InstagramLoginConnector } from './meta/instagram';
+import { ThreadsConnector } from './meta/threads';
+import { SnapchatConnector } from './snapchat';
 import { GatedConnector, InstagramConnector, PostizConnector, TikTokConnector } from './social';
 import type { Connector } from './types';
 
@@ -22,16 +24,8 @@ const facebook = new GatedConnector(
     'Set FACEBOOK_APP_ID / FACEBOOK_APP_SECRET, add the Facebook Login redirect URI and the Page webhook (docs/socials/FACEBOOK_SETUP.md).',
   ],
 );
-const threads = new GatedConnector(
-  'threads',
-  ['Threads integration is not implemented yet.'],
-  ['Use manual publication records for Threads for now.'],
-);
-const snapchat = new GatedConnector(
-  'snapchat',
-  ['Snapchat has no public read/publish API suitable for a creator profile; use manual publication records.'],
-  ['Record Snapchat posts manually with a link and date (USER_ENTERED).'],
-);
+const threads = new ThreadsConnector();
+const snapchat = new SnapchatConnector();
 const google = new GatedConnector(
   'google',
   ['"google" is an umbrella OAuth client. Connect Gmail and YouTube individually.'],
@@ -66,3 +60,4 @@ export const gmailConnector = gmail;
 export const youtubeConnector = youtube;
 export const todoConnector = todo;
 export const tiktokConnector = tiktok;
+export const snapchatConnector = snapchat;

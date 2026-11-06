@@ -818,3 +818,27 @@ describe('agent over HTTP', () => {
     expect((await signed('GET', `${V1}/agents/config`)).status).toBe(401);
   });
 });
+
+describe('analytics and public media kit', () => {
+  it('hides private analytics from anonymous callers and publishes only an approved kit', async () => {
+    expect((await api.call('GET', `${V1}/analytics`)).status).toBe(401);
+    expect((await api.call('POST', `${V1}/analytics/sync`, { body: {} })).status).toBe(401);
+    expect((await api.call('GET', `${V1}/public/media-kits/mehak`)).status).toBe(404);
+    const saved = await api.call('PUT', `${V1}/media-kit`, {
+      cookie: owner,
+      body: { slug: 'mehak', artistName: 'Mehak', bio: 'Singer', showFollowers: true, showTopContent: true },
+    });
+    expect(saved.status).toBe(200);
+    expect(JSON.stringify(saved.body)).not.toMatch(/accessToken|secret/i);
+    expect((await api.call('POST', `${V1}/media-kit/publish`, { cookie: owner, body: { published: true } })).status).toBe(200);
+    const pub = await api.call('GET', `${V1}/public/media-kits/mehak`);
+    expect(pub.status).toBe(200);
+    expect(pub.body.data.artistName).toBe('Mehak');
+    expect(pub.body.data.platforms?.every((p: { followers: number | null }) => p.followers == null)).toBe(true);
+    expect((await api.call('PUT', `${V1}/media-kit`, { body: { bio: 'nope' } })).status).toBe(401);
+    const ask = await api.call('POST', `${V1}/public/media-kits/mehak/inquiries`, {
+      body: { name: 'Ada', email: 'ada@example.com', message: 'Hello from the kit form.' },
+    });
+    expect(ask.status).toBe(200);
+  });
+});

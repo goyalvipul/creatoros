@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -17,6 +18,7 @@ import {
 } from 'react';
 import { ApiError } from '@/lib/api';
 import { title as titleCase } from '@/lib/format';
+import { uxV5 } from './ux-v5-flag';
 
 /* ---------- Buttons ---------- */
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -171,13 +173,16 @@ export function PageHeader({
   subtitle?: ReactNode;
   actions?: ReactNode;
 }) {
+  const v5 = uxV5();
   return (
-    <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <header className="mb-5 flex flex-wrap items-start justify-between gap-5">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight md:text-2xl">{title}</h1>
-        {subtitle && <p className="mt-1 max-w-3xl text-sm text-muted">{subtitle}</p>}
+        <h1 className={v5 ? 'font-serif text-[33px] leading-tight font-medium tracking-tight' : 'text-xl font-semibold tracking-tight md:text-2xl'}>
+          {title}
+        </h1>
+        {subtitle && <p className="mt-2 max-w-3xl text-[13px] leading-relaxed text-muted">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div>}
     </header>
   );
 }
@@ -441,10 +446,15 @@ export function Tabs<T extends string>({
   value: T;
   onChange: (v: T) => void;
 }) {
+  const v5 = uxV5();
   return (
     <div
       role="tablist"
-      className="mb-4 flex gap-1 overflow-x-auto rounded-lg border border-border bg-panel p-1"
+      className={
+        v5
+          ? 'mb-5 flex gap-1 overflow-x-auto border-b border-border'
+          : 'mb-4 flex gap-1 overflow-x-auto rounded-lg border border-border bg-panel p-1'
+      }
     >
       {tabs.map((t) => (
         <button
@@ -453,12 +463,38 @@ export function Tabs<T extends string>({
           aria-selected={value === t.id}
           onClick={() => onChange(t.id)}
           className={clsx(
-            'flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-sm font-medium',
-            value === t.id ? 'bg-accent text-accentfg' : 'text-muted hover:bg-panel2',
+            'flex shrink-0 cursor-pointer items-center gap-1.5 font-medium',
+            v5
+              ? 'border-b-2 px-3 py-2.5 text-xs'
+              : 'min-h-9 rounded-md px-3 text-sm',
+            value === t.id
+              ? v5
+                ? 'border-accent text-text'
+                : 'bg-accent text-accentfg'
+              : v5
+                ? 'border-transparent text-muted'
+                : 'text-muted hover:bg-panel2',
           )}
         >
           {t.label}
-          {t.badge}
+          {typeof t.badge === 'number' || typeof t.badge === 'string' ? (
+            t.badge === 0 || t.badge === '0' || t.badge === '' ? null : (
+              <span
+                className={clsx(
+                  'rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums',
+                  v5
+                    ? value === t.id
+                      ? 'bg-accent text-accentfg'
+                      : 'bg-panel2 text-muted'
+                    : 'bg-panel2 text-text',
+                )}
+              >
+                {t.badge}
+              </span>
+            )
+          ) : (
+            t.badge
+          )}
         </button>
       ))}
     </div>
@@ -473,6 +509,8 @@ export function Dialog({
   children,
   wide,
   footer,
+  surface,
+  nonce = 0,
 }: {
   open: boolean;
   onClose: () => void;
@@ -480,28 +518,78 @@ export function Dialog({
   children: ReactNode;
   wide?: boolean;
   footer?: ReactNode;
+  surface?: string;
+  /** Changes on every open request so showModal runs again after a native close. */
+  nonce?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
+  const skipClose = useRef(false);
+  useLayoutEffect(() => {
     const d = ref.current;
     if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
+    let frame = 0;
+    const show = () => {
+      if (d.open) return;
+      try {
+        d.showModal();
+      } catch {
+        if (d.open) {
+          skipClose.current = true;
+          d.close();
+        }
+        frame = requestAnimationFrame(() => {
+          try {
+            if (!d.open) d.showModal();
+          } catch {
+            /* the top layer is still releasing */
+          }
+        });
+      }
+    };
+    if (open) show();
+    else if (d.open) {
+      skipClose.current = true;
+      d.close();
+    }
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [open, nonce]);
+  useEffect(() => {
+    const d = ref.current;
+    return () => {
+      if (d?.open) {
+        skipClose.current = true;
+        d.close();
+      }
+    };
+  }, []);
   return (
     <dialog
       ref={ref}
-      onClose={onClose}
+      onClose={() => {
+        if (skipClose.current) {
+          skipClose.current = false;
+          return;
+        }
+        onClose();
+      }}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
       onClick={(e) => e.target === ref.current && onClose()}
       aria-label={title}
+      style={surface ? { background: surface, color: '#1c1916' } : undefined}
       className={clsx(
-        'm-auto w-[calc(100vw-1.5rem)] rounded-2xl border border-border bg-panel p-0 text-text shadow-2xl backdrop:backdrop-blur-sm',
+        'm-auto w-[calc(100vw-1.5rem)] rounded-2xl border border-border p-0 text-text shadow-2xl backdrop:backdrop-blur-sm',
+        surface ? 'bg-transparent' : 'bg-panel',
         wide ? 'max-w-3xl' : 'max-w-lg',
       )}
     >
       {open && (
         <div className="flex max-h-[90dvh] flex-col">
-          <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <div className="flex items-center justify-between gap-2 border-b border-black/10 px-4 py-3">
             <h2 className="text-base font-semibold">{title}</h2>
             <button
               onClick={onClose}
@@ -513,7 +601,15 @@ export function Dialog({
           </div>
           <div className="overflow-y-auto p-4">{children}</div>
           {footer && (
-            <div className="flex flex-wrap justify-end gap-2 border-t border-border px-4 py-3">{footer}</div>
+            <div
+              className={clsx(
+                'sticky bottom-0 z-10 flex flex-wrap justify-end gap-2 border-t border-black/10 px-4 py-3 shadow-[0_-8px_24px_rgba(28,25,22,0.08)]',
+                !surface && 'border-border bg-panel shadow-none',
+              )}
+              style={surface ? { background: surface } : undefined}
+            >
+              {footer}
+            </div>
           )}
         </div>
       )}

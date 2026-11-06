@@ -329,3 +329,235 @@ export async function uploadFacebookVideo(
     throw e;
   }
 }
+
+/**
+ * Threads image or video. Threads downloads the file from a public https URL.
+ * The container is not a post until threads_publish succeeds.
+ */
+export async function uploadThreadsPost(
+  fetchImpl: FetchFn,
+  input: {
+    userId: string;
+    accessToken: string;
+    mediaType: 'IMAGE' | 'VIDEO';
+    mediaUrl: string;
+    text: string;
+    topicTag?: string | null;
+    replyControl: string;
+    madeWithAi: boolean;
+  },
+): Promise<UploadResult> {
+  const call = bounded(fetchImpl);
+  const base = 'https://graph.threads.net/v1.0';
+  if (!input.mediaUrl.startsWith('https://'))
+    throw new UploadOutcome('Threads can only download the file from a public https address.', false);
+  const fields: Record<string, string> = {
+    media_type: input.mediaType,
+    access_token: input.accessToken,
+    reply_control: input.replyControl,
+    [input.mediaType === 'VIDEO' ? 'video_url' : 'image_url']: input.mediaUrl,
+  };
+  if (input.text) fields.text = input.text;
+  if (input.topicTag) fields.topic_tag = input.topicTag;
+  if (input.madeWithAi) fields.is_made_with_ai = 'true';
+  const start = await call(`${base}/${encodeURIComponent(input.userId)}/threads`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form(fields),
+  });
+  if (!start.ok) throw new UploadOutcome(`Threads refused the post: ${scrub(await readError(start))}`, false, start.status);
+  const started = (await start.json()) as { id?: string };
+  if (!started.id) throw new UploadOutcome('Threads did not return an upload id.', false);
+  const deadline = Date.now() + 5 * 60_000;
+  let status = 'IN_PROGRESS';
+  let detail = '';
+  while (Date.now() < deadline) {
+    const poll = await call(
+      `${base}/${encodeURIComponent(started.id)}?fields=status,error_message&access_token=${encodeURIComponent(input.accessToken)}`,
+    );
+    const body = (await poll.json().catch(() => ({}))) as { status?: string; error_message?: string };
+    status = body.status ?? 'IN_PROGRESS';
+    detail = body.error_message ?? '';
+    if (status === 'FINISHED' || status === 'ERROR' || status === 'EXPIRED' || status === 'PUBLISHED') break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  if (status !== 'FINISHED' && status !== 'PUBLISHED')
+    throw new UploadOutcome(
+      `Threads did not finish the file (${status}${detail ? `: ${detail}` : ''}). The PC that holds the file must stay on while Threads downloads it. A video can be at most 5 minutes.`,
+      false,
+    );
+  if (status === 'PUBLISHED') return { externalId: started.id, url: null };
+  const pub = await call(`${base}/${encodeURIComponent(input.userId)}/threads_publish`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form({ creation_id: started.id, access_token: input.accessToken }),
+  });
+  if (!pub.ok) throw new UploadOutcome(`Threads did not publish the post: ${scrub(await readError(pub))}`, true, pub.status);
+  const done = (await pub.json()) as { id?: string };
+  if (!done.id) throw new UploadOutcome('Threads published the container but returned no post id.', true);
+  const permalink = await mediaPermalink(
+    call,
+    `${base}/${encodeURIComponent(done.id)}?fields=permalink&access_token=${encodeURIComponent(input.accessToken)}`,
+  );
+  return { externalId: done.id, url: permalink };
+}
+
+function scrub(message: string) {
+  return message.replace(/access_token=[^&\s]+/gi, 'access_token=redacted');
+}
+
+const TIKTOK_MIN_CHUNK = 5_000_000;
+const TIKTOK_MAX_CHUNK = 64_000_000;
+
+/** TikTok wants one chunk when the file is at most 64 MB. Larger files use 10 MB chunks, and the last chunk can be bigger. */
+export function tiktokChunkPlan(videoSize: number): { chunkSize: number; totalChunkCount: number } {
+  if (videoSize < 1) throw new UploadOutcome('The video is empty.', false);
+  if (videoSize <= TIKTOK_MAX_CHUNK) return { chunkSize: videoSize, totalChunkCount: 1 };
+  let chunkSize = 10_000_000;
+  let count = Math.floor(videoSize / chunkSize);
+  while (count > 1000 && chunkSize < TIKTOK_MAX_CHUNK) {
+    chunkSize = Math.min(TIKTOK_MAX_CHUNK, chunkSize * 2);
+    count = Math.floor(videoSize / chunkSize);
+  }
+  if (count < 1 || count > 1000 || chunkSize < TIKTOK_MIN_CHUNK)
+    throw new UploadOutcome('This video is too large for one TikTok upload.', false);
+  return { chunkSize, totalChunkCount: count };
+}
+
+export interface TikTokCreatorInfo {
+  username: string | null;
+  privacyOptions: string[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoSeconds: number | null;
+}
+
+async function tiktokJson<T>(res: Response, sent: boolean): Promise<T> {
+  const body = (await res.json().catch(() => ({}))) as { data?: T; error?: { code?: string; message?: string } };
+  const code = body.error?.code;
+  if (!res.ok || (code && code !== 'ok'))
+    throw new UploadOutcome(`TikTok refused the post: ${body.error?.message || `HTTP ${res.status}`}`, sent);
+  return (body.data ?? {}) as T;
+}
+
+export async function queryTikTokCreator(fetchImpl: FetchFn, accessToken: string): Promise<TikTokCreatorInfo> {
+  const call = bounded(fetchImpl);
+  const res = await call('https://open.tiktokapis.com/v2/post/publish/creator_info/query/', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json; charset=UTF-8' },
+    body: '{}',
+  });
+  const data = await tiktokJson<{
+    creator_username?: string;
+    privacy_level_options?: string[];
+    comment_disabled?: boolean;
+    duet_disabled?: boolean;
+    stitch_disabled?: boolean;
+    max_video_post_duration_sec?: number;
+  }>(res, false);
+  return {
+    username: data.creator_username ?? null,
+    privacyOptions: data.privacy_level_options ?? [],
+    commentDisabled: Boolean(data.comment_disabled),
+    duetDisabled: Boolean(data.duet_disabled),
+    stitchDisabled: Boolean(data.stitch_disabled),
+    maxVideoSeconds: data.max_video_post_duration_sec ?? null,
+  };
+}
+
+/**
+ * Direct Post. The file bytes are uploaded to TikTok. The post is not public until status is PUBLISH_COMPLETE.
+ * An unaudited app can only use the privacy levels TikTok returns for this creator, often Only me.
+ */
+export async function uploadTikTokVideo(
+  fetchImpl: FetchFn,
+  input: {
+    accessToken: string;
+    file: UploadBytes;
+    title: string;
+    privacyLevel: string;
+    disableComment: boolean;
+    disableDuet: boolean;
+    disableStitch: boolean;
+    username?: string | null;
+  },
+): Promise<UploadResult> {
+  const call = bounded(fetchImpl);
+  const bytes = await readUploadBytes(input.file);
+  const plan = tiktokChunkPlan(bytes.byteLength);
+  const init = await call('https://open.tiktokapis.com/v2/post/publish/video/init/', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${input.accessToken}`, 'content-type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify({
+      post_info: {
+        title: input.title,
+        privacy_level: input.privacyLevel,
+        disable_comment: input.disableComment,
+        disable_duet: input.disableDuet,
+        disable_stitch: input.disableStitch,
+      },
+      source_info: {
+        source: 'FILE_UPLOAD',
+        video_size: bytes.byteLength,
+        chunk_size: plan.chunkSize,
+        total_chunk_count: plan.totalChunkCount,
+      },
+    }),
+  });
+  const started = await tiktokJson<{ publish_id?: string; upload_url?: string }>(init, false);
+  if (!started.publish_id || !started.upload_url) throw new UploadOutcome('TikTok did not return an upload.', false);
+  let sent = false;
+  try {
+    for (let i = 0; i < plan.totalChunkCount; i++) {
+      const start = i * plan.chunkSize;
+      const endExclusive = i === plan.totalChunkCount - 1 ? bytes.byteLength : start + plan.chunkSize;
+      const slice = bytes.subarray(start, endExclusive);
+      const copy = new Uint8Array(slice.byteLength);
+      copy.set(slice);
+      const put = await call(started.upload_url, {
+        method: 'PUT',
+        headers: {
+          'content-type': input.file.mime || 'video/mp4',
+          'content-length': String(copy.byteLength),
+          'content-range': `bytes ${start}-${endExclusive - 1}/${bytes.byteLength}`,
+        },
+        body: copy,
+      });
+      sent = true;
+      if (!put.ok && put.status !== 201 && put.status !== 206)
+        throw new UploadOutcome(`TikTok did not accept the video (${put.status}).`, true, put.status);
+    }
+    const deadline = Date.now() + 5 * 60_000;
+    let status = 'PROCESSING_UPLOAD';
+    let postId = '';
+    let failReason = '';
+    while (Date.now() < deadline) {
+      const poll = await call('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${input.accessToken}`, 'content-type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify({ publish_id: started.publish_id }),
+      });
+      const data = await tiktokJson<{ status?: string; publicaly_available_post_id?: string[]; fail_reason?: string }>(poll, true);
+      status = data.status ?? status;
+      postId = data.publicaly_available_post_id?.[0] ?? postId;
+      failReason = data.fail_reason ?? '';
+      if (status === 'PUBLISH_COMPLETE' || status === 'FAILED' || status === 'SEND_TO_USER_INBOX') break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    if (status === 'SEND_TO_USER_INBOX')
+      throw new UploadOutcome('TikTok put the video in your inbox instead of posting it. Finish it in the TikTok app, or post as Only me if the app is not audited.', true);
+    if (status !== 'PUBLISH_COMPLETE')
+      throw new UploadOutcome(`TikTok did not publish the video (${status}${failReason ? `: ${failReason}` : ''}).`, true);
+    const url = postId
+      ? input.username
+        ? `https://www.tiktok.com/@${input.username}/video/${postId}`
+        : `https://www.tiktok.com/video/${postId}`
+      : null;
+    return { externalId: postId || started.publish_id, url };
+  } catch (e) {
+    if (sent && !(e instanceof UploadOutcome))
+      throw new UploadOutcome(`TikTok upload outcome is unknown: ${(e as Error).message}`, true);
+    throw e;
+  }
+}

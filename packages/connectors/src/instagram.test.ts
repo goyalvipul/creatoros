@@ -7,6 +7,7 @@ import {
   exchangeInstagramCode,
   instagramCapabilityMatrix,
   isGraphUrl,
+  parseInstagramDemographicPayload,
   refreshInstagramToken,
   verifyMetaSignature,
   type ConnectorContext,
@@ -65,6 +66,7 @@ describe('Instagram Login connector', () => {
       'instagram_business_content_publish',
       'instagram_business_manage_comments',
       'instagram_business_manage_messages',
+      'instagram_business_manage_insights',
     ]);
     const none = await c.connect(ctxWith(() => json({}), { config: {} }).ctx);
     expect(none.status).toBe('NOT_CONFIGURED');
@@ -126,7 +128,11 @@ describe('Instagram Login connector', () => {
     });
     const m = instagramCapabilityMatrix(['instagram_business_basic', 'instagram_business_content_publish']);
     expect(m.flags.publish).toBe(true);
-    expect(m.missing).toEqual(['instagram_business_manage_comments', 'instagram_business_manage_messages']);
+    expect(m.missing).toEqual([
+      'instagram_business_manage_comments',
+      'instagram_business_manage_messages',
+      'instagram_business_manage_insights',
+    ]);
     // publish without basic is not usable
     expect(instagramCapabilityMatrix(['instagram_business_content_publish']).flags.publish).toBe(false);
     const caps = await new InstagramLoginConnector().getCapabilities(
@@ -164,6 +170,26 @@ describe('Instagram Login connector', () => {
     const r = await new InstagramLoginConnector().syncFull(ctx);
     expect(r.items).toHaveLength(1);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('Instagram demographics', () => {
+  it('keeps labelled follower counts and ignores a breakdown Meta did not return', () => {
+    const payload = {
+      data: [
+        {
+          name: 'follower_demographics',
+          total_value: {
+            breakdowns: [{ results: [{ dimension_values: ['18-24'], value: 40 }, { dimension_values: ['25-34'], value: 0 }] }],
+          },
+        },
+      ],
+    };
+    expect(parseInstagramDemographicPayload(payload, 'age')).toEqual([
+      { dimension: 'age', label: '18-24', value: 40 },
+      { dimension: 'age', label: '25-34', value: 0 },
+    ]);
+    expect(parseInstagramDemographicPayload({ data: [] }, 'gender')).toEqual([]);
   });
 });
 

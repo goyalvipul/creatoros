@@ -4,14 +4,39 @@ import { accountLabel } from '@/lib/social-label';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Async, Badge, Button, Card, CardTitle, EmptyState, PageHeader, Select, Stat } from '@/components/ui';
-import { useApi } from '@/lib/api';
+import { ApiError, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase, when } from '@/lib/format';
+import { PlatformLogo } from '@/components/platform-logo';
+
+const REASON: Record<string, string> = {
+  partnership: 'Partnerships',
+  collab: 'Says collaboration',
+  rates: 'Asks for rates',
+};
 
 export default function SocialsOverview() {
   const [account, setAccount] = useState('');
   const [days, setDays] = useState('30');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [decideError, setDecideError] = useState<string | null>(null);
   const accounts = useApi<any[]>('/socials/accounts');
   const res = useApi<any>('/socials/overview', { query: { account: account || undefined, days } });
+  async function decide(id: string, kind: 'dismiss' | 'accept') {
+    setBusy(id);
+    setDecideError(null);
+    setNote(null);
+    try {
+      const path = kind === 'dismiss' ? 'dismiss-opportunity' : 'accept-opportunity';
+      const out = await post<{ projectId?: string }>(`/socials/threads/${id}/${path}`, {});
+      if (out.projectId) setNote('Project created. A follow-up is on Today. Nothing was sent.');
+      refresh('/socials/overview');
+    } catch (e) {
+      setDecideError(e instanceof ApiError ? e.message : 'That did not save.');
+    } finally {
+      setBusy(null);
+    }
+  }
   return (
     <div>
       <PageHeader
@@ -92,19 +117,43 @@ export default function SocialsOverview() {
                 </Card>
                 <Card>
                   <CardTitle>Collaboration opportunities</CardTitle>
-                  {o.leadList.length === 0 ? (
-                    <p className="text-sm text-muted">No conversation has been confirmed as a lead.</p>
+                  <p className="mb-2 text-xs text-muted">
+                    Partnerships, messages that say collaboration, and requests for reel rates. Nothing is created
+                    until you choose. Not keeps the message and does not ask again.
+                  </p>
+                  {note && <p className="mb-2 text-sm text-ok">{note}</p>}
+                  {decideError && <p className="mb-2 text-sm text-bad">{decideError}</p>}
+                  {(o.suggestions ?? []).length === 0 && o.leadList.length === 0 ? (
+                    <p className="text-sm text-muted">No messages waiting for a decision.</p>
                   ) : (
                     <ul className="divide-y divide-border text-sm">
+                      {(o.suggestions ?? []).map((s: any) => (
+                        <li key={s.id} className="flex flex-wrap items-start justify-between gap-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{s.participantName || 'Unknown'}</span>
+                              <Badge>{REASON[s.reason] ?? s.reason}</Badge>
+                              {s.accountName && <span className="text-xs text-muted">{s.accountName}</span>}
+                            </div>
+                            {s.preview && <p className="mt-1 line-clamp-2 text-xs text-muted">{s.preview}</p>}
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <Button size="sm" disabled={busy === s.id} onClick={() => decide(s.id, 'dismiss')}>
+                              Not
+                            </Button>
+                            <Button size="sm" variant="primary" disabled={busy === s.id} onClick={() => decide(s.id, 'accept')}>
+                              Create project
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
                       {o.leadList.map((t: any) => (
                         <li key={t.id} className="py-2">
-                          <Link
-                            href={`/socials/inbox?thread=${t.id}`}
-                            className="font-medium hover:underline"
-                          >
+                          <Link href={`/socials/inbox?thread=${t.id}`} className="font-medium hover:underline">
                             {t.participantName}
                           </Link>{' '}
                           <Badge>{t.accountName ?? `@${t.accountUsername}`}</Badge>
+                          <span className="ml-2 text-xs text-muted">Confirmed</span>
                         </li>
                       ))}
                     </ul>
@@ -136,7 +185,7 @@ export default function SocialsOverview() {
                     <ul className="text-sm">
                       {o.scheduled.map((p: any) => (
                         <li key={p.id} className="py-1">
-                          {p.title ?? 'Untitled'} · {titleCase(p.platform)} {p.accountHandle} ·{' '}
+                          {p.title ?? 'Untitled'} · <PlatformLogo platform={p.platform} className="inline size-4 align-text-bottom" /> {p.accountHandle} ·{' '}
                           {when(p.plannedAt, p.timezone)}
                         </li>
                       ))}

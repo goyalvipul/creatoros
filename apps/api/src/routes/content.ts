@@ -66,6 +66,7 @@ import {
   schedulePublish,
   listAccountPlaylists,
   createAccountPlaylist,
+  tiktokCreatorOptions,
   unlinkPublishFile,
   markPublishedManual,
   publishingMatrix,
@@ -271,6 +272,16 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       params: idParam,
     },
     ({ ctx, params }) => listAccountPlaylists(ctx, params.id),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/social-accounts/:id/tiktok/creator',
+      tag: 'Publishing',
+      summary: 'Audience and interaction options TikTok allows for this account',
+      params: idParam,
+    },
+    ({ ctx, params }) => tiktokCreatorOptions(ctx, params.id),
   );
   route(
     {
@@ -1005,8 +1016,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         title: z.string().max(300).nullable().optional(),
         caption: z.string().max(5000).nullable().optional(),
         hashtags: z.array(z.string().max(100)).max(30).optional(),
-        privacy: z.enum(PRIVACY).nullable().optional(),
-        contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
+        privacy: z.string().max(40).nullable().optional(),
+        contentForm: z.string().max(80).nullable().optional(),
         playlistIds: z.array(z.string().max(80)).max(20).optional(),
         aiUse: z.enum(['YES', 'NO']).nullable().optional(),
       }),
@@ -1027,8 +1038,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         title: z.string().max(300).nullable().optional(),
         caption: z.string().max(5000).nullable().optional(),
         hashtags: z.array(z.string().max(100)).max(30).optional(),
-        privacy: z.enum(PRIVACY).nullable().optional(),
-        contentForm: z.enum(['VIDEO', 'SHORT']).nullable().optional(),
+        privacy: z.string().max(40).nullable().optional(),
+        contentForm: z.string().max(80).nullable().optional(),
         playlistIds: z.array(z.string().max(80)).max(20).optional(),
         aiUse: z.enum(['YES', 'NO']).nullable().optional(),
         plannedLocal: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/),

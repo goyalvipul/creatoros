@@ -8,6 +8,7 @@ import {
   sql,
   type Db,
 } from '@creatoros/db';
+import { oauthScopes } from '@creatoros/domain';
 import {
   FACEBOOK_ALL_SCOPES,
   FACEBOOK_VIDEO_SCOPE,
@@ -62,10 +63,17 @@ export const FACEBOOK_SETUP_STEPS = [
 // ------------------------------------------------------------------ connect
 
 /** Starts Facebook Login. Nothing is connected until the owner approves in Facebook and chooses Pages. */
-export async function startFacebookOAuth(ctx: Ctx, input: { videos?: boolean } = {}) {
+export async function startFacebookOAuth(
+  ctx: Ctx,
+  input: { videos?: boolean; scopes?: string[]; reconnect?: boolean } = {},
+) {
   const client = clientFor(ctx.env);
   const state = randomBytes(24).toString('base64url');
-  const scopes = input.videos ? [...FACEBOOK_ALL_SCOPES, FACEBOOK_VIDEO_SCOPE] : [...FACEBOOK_ALL_SCOPES];
+  const scopes = Array.isArray(input.scopes)
+    ? oauthScopes('facebook', input.videos ? [...input.scopes, FACEBOOK_VIDEO_SCOPE] : input.scopes)
+    : input.videos
+      ? [...FACEBOOK_ALL_SCOPES, FACEBOOK_VIDEO_SCOPE]
+      : [...FACEBOOK_ALL_SCOPES];
   await ctx.db.insert(oauthStates).values({
     orgId: ctx.orgId,
     userId: ctx.userId,
@@ -81,7 +89,7 @@ export async function startFacebookOAuth(ctx: Ctx, input: { videos?: boolean } =
   });
   return {
     status: 'REDIRECT' as const,
-    authorizeUrl: buildFacebookAuthUrl({ client, scopes, state }),
+    authorizeUrl: buildFacebookAuthUrl({ client, scopes, state, authType: input.reconnect ? 'rerequest' : undefined }),
     steps: [] as string[],
   };
 }

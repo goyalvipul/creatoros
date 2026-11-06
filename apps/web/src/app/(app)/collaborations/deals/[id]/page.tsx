@@ -27,6 +27,7 @@ import {
 } from '@/components/ui';
 import { ApiError, post, refresh, useApi } from '@/lib/api';
 import { money, title as titleCase, toMinor, when } from '@/lib/format';
+import { PlatformLogo } from '@/components/platform-logo';
 import { DEAL_STAGES, PAYMENT_METHODS } from '@/lib/options';
 import { InvoiceStatusSelect } from '../../invoice-controls';
 
@@ -176,7 +177,7 @@ export default function DealPage() {
                               key={p.id}
                               className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5"
                             >
-                              {titleCase(p.platform)} {p.handle} <StateBadge state={p.state} />
+                              <PlatformLogo platform={p.platform} className="size-4" /> {p.handle} <StateBadge state={p.state} />
                               {p.url && (
                                 <a className="text-accent" href={p.url} target="_blank" rel="noreferrer">
                                   open ↗

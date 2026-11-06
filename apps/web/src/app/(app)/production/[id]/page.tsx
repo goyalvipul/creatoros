@@ -28,6 +28,8 @@ import { CreativeFields, RichHtml, creativeFrom, creativePayload, type CreativeF
 import { ApiError, patch, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase, when } from '@/lib/format';
 import { PROJECT_STAGES, projectStageLabel } from '@/lib/options';
+import { uxV5 } from '@/components/ux-v5-flag';
+import { ProjectWorkspace } from '@/components/project-workspace';
 
 const SCENE_STATUSES = ['PLANNED', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'SELECTED', 'REJECTED'];
 
@@ -66,6 +68,7 @@ export default function ProjectPage() {
   return (
     <Async res={res}>
       {(p) => {
+        if (uxV5()) return <ProjectWorkspace project={p} id={id} tz={tz} />;
         const doneCount = p.checklist.filter((c: any) => c.doneAt).length;
         return (
           <>

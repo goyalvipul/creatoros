@@ -11,12 +11,24 @@ import {
   socialAccounts,
   sql,
 } from '@creatoros/db';
-import { parseLocalDateTime } from '@creatoros/domain';
 import {
+  parseLocalDateTime,
+  threadsPostError,
+  tiktokCaption,
+  tiktokInteractionForm,
+  tiktokInteractions,
+  tiktokPostError,
+} from '@creatoros/domain';
+import {
+  queryTikTokCreator,
   refreshGoogleToken,
+  refreshThreadsToken,
+  tiktokConnector,
   UploadOutcome,
   uploadFacebookVideo,
   uploadInstagramReel,
+  uploadThreadsPost,
+  uploadTikTokVideo,
   uploadYoutubeVideo,
   youtubeUploadText,
   type UploadBytes,
@@ -32,6 +44,8 @@ const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const YT_UPLOAD = 'https://www.googleapis.com/auth/youtube.upload';
 const FB_VIDEO = 'pages_manage_posts';
 const IG_PUBLISH = 'instagram_business_content_publish';
+const THREADS_PUBLISH = 'threads_content_publish';
+const TIKTOK_PUBLISH = 'video.publish';
 
 export async function linkPublishFile(ctx: Ctx, variantId: string, fileInstanceId: string) {
   const [v] = await ctx.db
@@ -124,18 +138,25 @@ async function publishAccounts(ctx: Ctx) {
     const scopes: string[] = a.scopes ?? [];
     let canPublish = false;
     let reason = 'This account is not connected.';
-    if (a.platform === 'tiktok') reason = 'TikTok direct posting needs an approved video.publish permission. It is not available.';
-    else if (!a.connectionId || a.connectionState === 'PAUSED' || a.connectionState === 'DISABLED')
+    if (!a.connectionId || a.connectionState === 'PAUSED' || a.connectionState === 'DISABLED')
       reason = 'Connect this account in Integrations first.';
-    else if (a.platform === 'instagram') {
+    else if (a.platform === 'tiktok') {
+      canPublish = scopes.includes(TIKTOK_PUBLISH);
+      reason = canPublish ? '' : 'Reconnect TikTok and check Publish. This login only has the permissions it asked for.';
+    } else if (a.platform === 'instagram') {
       canPublish = scopes.includes(IG_PUBLISH);
       reason = canPublish ? '' : 'Instagram publish permission is missing. Reconnect and allow content publishing.';
     } else if (a.platform === 'youtube') {
       canPublish = scopes.includes(YT_UPLOAD);
       reason = canPublish ? '' : 'YouTube uploads need an extra permission. Integrations → Enable uploads.';
-    } else if (a.platform === 'facebook') {
+    }     else if (a.platform === 'facebook') {
       canPublish = scopes.includes(FB_VIDEO);
       reason = canPublish ? '' : 'Page video posting needs pages_manage_posts. Integrations → Enable Page videos.';
+    } else if (a.platform === 'threads') {
+      canPublish = scopes.includes(THREADS_PUBLISH);
+      reason = canPublish ? '' : 'Reconnect Threads and check Publish.';
+    } else if (a.platform === 'snapchat') {
+      reason = 'This Snapchat profile is connected. Sending a Story from Kemokem is not available yet.';
     } else reason = 'Publishing is not available for this platform.';
     return {
       id: a.id,
@@ -154,8 +175,8 @@ export interface PublishRequest {
   title?: string | null;
   caption?: string | null;
   hashtags?: string[];
-  privacy?: 'PUBLIC' | 'UNLISTED' | 'PRIVATE' | 'SCHEDULED' | null;
-  contentForm?: 'VIDEO' | 'SHORT' | null;
+  privacy?: string | null;
+  contentForm?: string | null;
   playlistIds?: string[];
   aiUse?: 'YES' | 'NO' | null;
 }
@@ -177,12 +198,60 @@ function youtubeChoices(
   input: { playlistIds?: string[]; aiUse?: 'YES' | 'NO' | null },
   existing?: { playlistIds: string[] | null; aiUse: string | null } | null,
 ) {
+  if (platform === 'threads') {
+    const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
+    if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this post should show the Threads AI label.');
+    return { playlistIds: [] as string[], aiUse: ai };
+  }
   if (platform !== 'youtube') return { playlistIds: [] as string[], aiUse: null as 'YES' | 'NO' | null };
   const playlistIds =
     input.playlistIds === undefined ? (existing?.playlistIds ?? []) : cleanPlaylistIds(input.playlistIds);
   const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
   if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this video uses AI.');
   return { playlistIds, aiUse: ai };
+}
+
+function recordPrivacy(platform: string, privacy: string | null | undefined): 'PUBLIC' | 'UNLISTED' | 'PRIVATE' {
+  if (platform === 'threads') return 'PUBLIC';
+  if (platform === 'tiktok') return privacy === 'PUBLIC_TO_EVERYONE' ? 'PUBLIC' : 'PRIVATE';
+  if (privacy === 'PRIVATE' || privacy === 'UNLISTED' || privacy === 'PUBLIC') return privacy;
+  return 'PUBLIC';
+}
+
+function tiktokDraft(input: PublishRequest) {
+  const hashtags = (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30);
+  const err = tiktokPostError({ caption: input.caption, hashtags, privacy: input.privacy });
+  if (err) throw badRequest(err);
+  const form = (input.contentForm ?? '').trim();
+  if (form && form !== 'VIDEO' && form !== 'SHORT') {
+    const parts = form.split(',').map((part) => part.trim()).filter(Boolean);
+    if (parts.some((part) => part !== 'comments' && part !== 'duet' && part !== 'stitch'))
+      throw badRequest('Choose comments, duet, and stitch only.');
+  }
+  return { hashtags, contentForm: tiktokInteractionForm(tiktokInteractions(form)) };
+}
+
+function threadsDraft(input: PublishRequest) {
+  const tags = (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean);
+  if (tags.length > 1) throw badRequest('Threads allows one topic.');
+  const reply = (input.privacy || 'everyone').toLowerCase();
+  const ai = input.aiUse ?? '';
+  const err = threadsPostError({ text: input.caption?.trim() ?? '', topic: tags[0] ?? '', reply, ai });
+  if (err) throw badRequest(err);
+  return { hashtags: tags.slice(0, 1), reply };
+}
+
+function threadsKind(mime: string, name: string): 'IMAGE' | 'VIDEO' {
+  const type = mime.toLowerCase();
+  const file = name.toLowerCase();
+  const image = type.startsWith('image/') || /\.(jpe?g|png)$/.test(file);
+  if (image) {
+    if (type.includes('png') || file.endsWith('.png') || type.includes('jpeg') || type.includes('jpg') || /\.jpe?g$/.test(file))
+      return 'IMAGE';
+    throw new UploadOutcome('Threads images must be JPEG or PNG.', false);
+  }
+  if (type.startsWith('video/') || /\.(mp4|mov)$/.test(file)) return 'VIDEO';
+  throw new UploadOutcome('Threads can take a JPEG, PNG, or an MP4 or MOV video from this screen.', false);
 }
 
 /**
@@ -219,6 +288,15 @@ export async function requestPublish(
   if (account.platform === 'youtube' && !input.title?.trim()) throw badRequest('A YouTube title is required.');
   if (account.platform === 'youtube' && input.contentForm !== 'VIDEO' && input.contentForm !== 'SHORT')
     throw badRequest('Choose Video or Short.');
+  if (
+    account.platform === 'youtube' &&
+    input.privacy !== 'PUBLIC' &&
+    input.privacy !== 'UNLISTED' &&
+    input.privacy !== 'PRIVATE'
+  )
+    throw badRequest('Choose Public, Unlisted, or Private.');
+  const threads = account.platform === 'threads' ? threadsDraft(input) : null;
+  const tiktok = account.platform === 'tiktok' ? tiktokDraft(input) : null;
 
   const [existing] = await ctx.db
     .select()
@@ -238,9 +316,9 @@ export async function requestPublish(
   const values = {
     title: input.title?.trim() || null,
     caption: input.caption?.trim() || null,
-    hashtags: (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
-    privacy: input.privacy ?? null,
-    contentForm: input.contentForm ?? null,
+    hashtags: threads ? threads.hashtags : tiktok ? tiktok.hashtags : (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
+    privacy: threads ? threads.reply : (input.privacy ?? null),
+    contentForm: tiktok ? tiktok.contentForm : (input.contentForm ?? null),
     playlistIds: extra.playlistIds,
     aiUse: extra.aiUse,
     requestId: input.requestId,
@@ -314,6 +392,15 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
   if (account.platform === 'youtube' && !input.title?.trim()) throw badRequest('A YouTube title is required.');
   if (account.platform === 'youtube' && input.contentForm !== 'VIDEO' && input.contentForm !== 'SHORT')
     throw badRequest('Choose Video or Short.');
+  if (
+    account.platform === 'youtube' &&
+    input.privacy !== 'PUBLIC' &&
+    input.privacy !== 'UNLISTED' &&
+    input.privacy !== 'PRIVATE'
+  )
+    throw badRequest('Choose Public, Unlisted, or Private.');
+  const threads = account.platform === 'threads' ? threadsDraft(input) : null;
+  const tiktok = account.platform === 'tiktok' ? tiktokDraft(input) : null;
   const tzRows = rowsOf<{ timezone: string }>(
     await ctx.db.execute(sql`select timezone from organizations where id = ${ctx.orgId}`),
   );
@@ -349,8 +436,8 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
   const text = {
     title: input.title?.trim() || null,
     caption: input.caption?.trim() || null,
-    hashtags: (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
-    privacy: (input.privacy ?? 'PUBLIC') as 'PUBLIC',
+    hashtags: threads ? threads.hashtags : tiktok ? tiktok.hashtags : (input.hashtags ?? []).map((t) => t.replace(/^#/, '').trim()).filter(Boolean).slice(0, 30),
+    privacy: recordPrivacy(account.platform, input.privacy),
   };
   return ctx.db.transaction(async (tx) => {
     let publicationId = existing?.publicationId ?? null;
@@ -412,7 +499,8 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
     const extra = youtubeChoices(account.platform, input, existing);
     const values = {
       ...text,
-      contentForm: input.contentForm ?? null,
+      privacy: threads ? threads.reply : (input.privacy ?? 'PUBLIC'),
+      contentForm: tiktok ? tiktok.contentForm : (input.contentForm ?? null),
       playlistIds: extra.playlistIds,
       aiUse: extra.aiUse,
       requestId: input.requestId,
@@ -533,6 +621,13 @@ export async function executePublish(
     if (account.platform === 'youtube') {
       const fresh = await refreshGoogleToken(cctx).catch(() => creds);
       token = fresh.accessToken ?? token;
+    } else if (account.platform === 'threads') {
+      const fresh = await refreshThreadsToken(cctx).catch(() => creds);
+      token = fresh.accessToken ?? token;
+    } else if (account.platform === 'tiktok' && creds.refreshToken && (!creds.expiresAt || creds.expiresAt - 120_000 <= Date.now())) {
+      const fresh = await tiktokConnector.refreshCredentials(cctx).catch(() => creds);
+      token = fresh.accessToken ?? token;
+      if (fresh.accessToken && fresh.accessToken !== creds.accessToken) await cctx.onCredentials?.(fresh);
     }
     const caption = [claimed.caption, ...(claimed.hashtags ?? []).map((h) => `#${h}`)].filter(Boolean).join('\n');
     const youtube =
@@ -585,6 +680,58 @@ export async function executePublish(
         description: caption,
         file,
       });
+    } else if (account.platform === 'threads') {
+      const base = ctx.env.appBaseUrl.replace(/\/$/, '');
+      if (!base.startsWith('https://'))
+        return fail('FAILED', 'Threads downloads the file from this site. APP_BASE_URL must be the public https address.');
+      if (!conn.principalHint) return fail('FAILED', 'Reconnect Threads. The account id was not saved.');
+      const kind = threadsKind(file.mime, file.name);
+      const exp = Date.now() + 30 * 60_000;
+      const mediaToken = signMediaToken(ctx.env.agentPairingSecret, {
+        instanceId: item.fileInstanceId,
+        userId: ctx.userId ?? 'publish',
+        exp,
+      });
+      const mediaUrl = `${base}/api/v1/files/${item.fileInstanceId}/stream?token=${encodeURIComponent(mediaToken)}`;
+      if (typeof (file.body as ReadableStream).cancel === 'function')
+        await (file.body as ReadableStream).cancel().catch(() => undefined);
+      const reply = claimed.privacy && claimed.privacy !== 'PUBLIC' ? claimed.privacy : 'everyone';
+      result = await uploadThreadsPost(fetchImpl, {
+        userId: conn.principalHint,
+        accessToken: token,
+        mediaType: kind,
+        mediaUrl,
+        text: claimed.caption?.trim() ?? '',
+        topicTag: claimed.hashtags?.[0] ?? null,
+        replyControl: reply,
+        madeWithAi: claimed.aiUse === 'YES',
+      });
+    } else if (account.platform === 'tiktok') {
+      const video = file.mime.startsWith('video/') || /\.(mp4|mov|webm)$/i.test(file.name);
+      if (!video) return fail('FAILED', 'TikTok posts a video from this screen. Use an MP4 or MOV.');
+      let info;
+      try {
+        info = await queryTikTokCreator(fetchImpl, token);
+      } catch (e) {
+        return fail('FAILED', (e as Error).message);
+      }
+      if (info.privacyOptions.length && claimed.privacy && !info.privacyOptions.includes(claimed.privacy))
+        return fail(
+          'FAILED',
+          'TikTok does not allow that audience for this app. Choose one of the options in Who can watch. An unaudited app is often limited to Only me.',
+        );
+      const flags = tiktokInteractions(claimed.contentForm);
+      const title = tiktokCaption(claimed.caption, claimed.hashtags ?? []) || file.name.replace(/\.[^.]+$/, '') || 'Video';
+      result = await uploadTikTokVideo(fetchImpl, {
+        accessToken: token,
+        file,
+        title: title.slice(0, 2200),
+        privacyLevel: claimed.privacy || 'SELF_ONLY',
+        disableComment: info.commentDisabled || !flags.comments,
+        disableDuet: info.duetDisabled || !flags.duet,
+        disableStitch: info.stitchDisabled || !flags.stitch,
+        username: info.username,
+      });
     } else return fail('FAILED', 'Publishing is not available for this platform.');
 
     let playlistNote: string | null = null;
@@ -605,7 +752,7 @@ export async function executePublish(
       title: claimed.title?.trim() || claimed.caption?.trim().split('\n')[0]?.slice(0, 300) || null,
       caption: claimed.caption,
       hashtags: claimed.hashtags ?? [],
-      privacy: (claimed.privacy as 'PUBLIC') || 'PUBLIC',
+      privacy: recordPrivacy(account.platform, claimed.privacy),
       state: 'PUBLISHED_VERIFIED' as const,
       stateProvenance: 'VERIFIED_PLATFORM' as const,
       stateEvidence: claimed.scheduledAt

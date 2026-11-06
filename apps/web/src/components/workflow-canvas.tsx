@@ -10,12 +10,19 @@ export type WfDef = {
 };
 
 export type WfStep =
-  | { kind: 'condition'; id: string; condition: Record<string, unknown> }
+  | { kind: 'condition'; id: string; group?: number; condition: Record<string, unknown> }
   | { kind: 'action'; id: string; action: Record<string, unknown> };
 
-const EMOJI = ['❤️', '🔥', '😍', '🎶', '👏', '💯', '😭', '🙌'];
+const EMOJI_SETS: Record<string, string[]> = {
+  Popular: ['❤️', '🔥', '😍', '😂', '👍', '👏', '💯', '😮'],
+  Faces: ['😀', '😂', '🥹', '😍', '😮', '😢', '😡', '🤔'],
+  Hearts: ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '💕'],
+  Hands: ['👍', '👏', '🙌', '🙏', '👌', '✌️', '🤝', '💪'],
+  Music: ['🎶', '🎵', '🎤', '🎸', '🎹', '🥁', '🎧', '🎼'],
+  Symbols: ['💯', '✨', '⭐', '💥', '🎉', '✅', '❌', '💎'],
+};
 
-const MATCH = [
+export const MATCH = [
   ['contains', 'Contains these words'],
   ['word', 'Contains these whole words'],
   ['exact', 'The whole message is exactly'],
@@ -31,7 +38,7 @@ const MATCH = [
   ['sender', 'Sender is on a list'],
 ] as const;
 
-const ACTIONS = [
+export const ACTIONS = [
   ['draft_reply', 'Save a draft reply'],
   ['queue_approval', 'Queue a reply for me to approve'],
   ['send_reply', 'Send a reply (automatic only)'],
@@ -44,7 +51,7 @@ const ACTIONS = [
   ['stop', 'Stop'],
 ] as const;
 
-function nid(prefix: string) {
+export function nid(prefix: string) {
   return `${prefix}${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -78,7 +85,7 @@ export function matchKind(condition: Record<string, unknown>): string {
   return 'contains';
 }
 
-function conditionFor(kind: string, prev: Record<string, unknown>): Record<string, unknown> {
+export function conditionFor(kind: string, prev: Record<string, unknown>): Record<string, unknown> {
   const kept = words(prev.keywords ?? prev.phrases ?? prev.emojis);
   const list = splitWords(kept);
   if (kind === 'contains') return { type: 'keyword_any', keywords: list.length ? list : ['hello'] };
@@ -96,7 +103,7 @@ function conditionFor(kind: string, prev: Record<string, unknown>): Record<strin
   return { type: 'sender_in', senderIds: ['sender-id'], allow: true };
 }
 
-function actionFor(type: string): Record<string, unknown> {
+export function actionFor(type: string): Record<string, unknown> {
   if (type === 'draft_reply') return { type, template: 'Hi {{sender.display_name}}, ' };
   if (type === 'queue_approval') return { type, template: 'Hi {{sender.display_name}}, ', reason: '' };
   if (type === 'send_reply') return { type, template: 'Hi {{sender.display_name}}, ' };
@@ -220,7 +227,68 @@ export function WorkflowCanvas({ def, onChange }: { def: WfDef; onChange: (next:
   );
 }
 
-function ConditionFields({
+function EmojiPicker({ chosen, onChange }: { chosen: string[]; onChange: (emojis: string[]) => void }) {
+  const [setName, setSetName] = useState('Popular');
+  const [query, setQuery] = useState('');
+  const [paste, setPaste] = useState('');
+  const glyphs = (EMOJI_SETS[setName] ?? []).filter((emoji) => !query || emoji.includes(query));
+  const add = (emoji: string) => {
+    const next = emoji.trim();
+    if (!next || chosen.includes(next) || chosen.length >= 20) return;
+    onChange([...chosen, next]);
+  };
+  return (
+    <div>
+      <p className="mb-1 text-xs text-muted">The message matches if it contains one of the chosen emoji.</p>
+      <Field label="Search emoji">
+        <Input aria-label="Search emoji" value={query} placeholder="love, fire, music..." onChange={(e) => setQuery(e.target.value)} />
+      </Field>
+      <div className="mb-2 flex flex-wrap gap-1">
+        {Object.keys(EMOJI_SETS).map((name) => (
+          <button
+            key={name}
+            type="button"
+            className={`min-h-8 rounded-full px-2 text-xs ${name === setName ? 'bg-accent text-white' : 'border border-border'}`}
+            onClick={() => setSetName(name)}
+          >
+            {name}
+          </button>
+        ))}
+        <button type="button" className="min-h-8 px-2 text-xs text-muted" onClick={() => onChange([])}>
+          Clear
+        </button>
+      </div>
+      <div className="mb-2 flex flex-wrap gap-1">
+        {glyphs.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            aria-label={`Add ${emoji}`}
+            className={`min-h-9 min-w-9 rounded-md border px-2 ${chosen.includes(emoji) ? 'border-accent bg-[#e6f4ee]' : 'border-border'}`}
+            onClick={() => add(emoji)}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <div className="mb-2 flex gap-2">
+        <Input aria-label="Paste emoji" value={paste} placeholder="Paste any emoji" onChange={(e) => setPaste(e.target.value)} />
+        <Button type="button" onClick={() => { add(paste); setPaste(''); }}>
+          Add emoji
+        </Button>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {chosen.map((emoji) => (
+          <button key={emoji} type="button" className="min-h-8 rounded-full border border-border px-2 text-sm" onClick={() => onChange(chosen.filter((e) => e !== emoji))}>
+            {emoji} ×
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ConditionFields({
   step,
   onChange,
 }: {
@@ -261,31 +329,10 @@ function ConditionFields({
         />
       )}
       {kind === 'emoji' && (
-        <div>
-          <p className="mb-1 text-xs text-muted">Tap an emoji to add it. The message matches if it contains one of them.</p>
-          <div className="mb-2 flex flex-wrap gap-1">
-            {EMOJI.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                className="min-h-9 rounded-md border border-border px-2"
-                onClick={() => {
-                  const current = Array.isArray(c.emojis) ? (c.emojis as string[]) : [];
-                  onChange({ ...c, emojis: current.includes(emoji) ? current : [...current, emoji] });
-                }}
-              >
-                {emoji}
-              </button>
-            ))}
-          </div>
-          <WordList
-            label="Chosen emoji"
-            aria="Emoji"
-            value={Array.isArray(c.emojis) ? (c.emojis as string[]) : []}
-            fallback={['❤️']}
-            onCommit={(emojis) => onChange({ ...c, type: 'emoji', mode: 'includes', emojis })}
-          />
-        </div>
+        <EmojiPicker
+          chosen={Array.isArray(c.emojis) ? (c.emojis as string[]) : []}
+          onChange={(emojis) => onChange({ ...c, type: 'emoji', mode: 'includes', emojis })}
+        />
       )}
       {kind === 'hours' && (
         <div className="grid grid-cols-2 gap-2">
@@ -383,7 +430,7 @@ function WordList({
   );
 }
 
-function ActionFields({
+export function ActionFields({
   step,
   onChange,
 }: {

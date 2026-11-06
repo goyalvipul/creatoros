@@ -1,4 +1,4 @@
-import { ConnectorError, type ConnectorContext, type Credentials } from '../types';
+import { ConnectorError, type ConnectorContext, type Credentials, type DemographicSlice } from '../types';
 import { http } from '../http';
 import type { Page } from './instagram';
 
@@ -12,6 +12,7 @@ export const FACEBOOK_SCOPES = {
   messaging: 'pages_messaging',
   metadata: 'pages_manage_metadata',
   readEngagement: 'pages_read_engagement',
+  insights: 'read_insights',
   readContent: 'pages_read_user_content',
   engagement: 'pages_manage_engagement',
 } as const;
@@ -51,6 +52,7 @@ export function buildFacebookAuthUrl(args: {
   client: FacebookClientConfig;
   scopes: string[];
   state: string;
+  authType?: string;
 }) {
   const u = new URL(`https://www.facebook.com/${args.client.graphVersion}/dialog/oauth`);
   u.searchParams.set('client_id', args.client.appId);
@@ -58,6 +60,7 @@ export function buildFacebookAuthUrl(args: {
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('scope', args.scopes.join(','));
   u.searchParams.set('state', args.state);
+  if (args.authType) u.searchParams.set('auth_type', args.authType);
   return u.toString();
 }
 
@@ -190,6 +193,157 @@ export async function listFacebookPages(
   userToken: string,
 ): Promise<FacebookPage[]> {
   return (await discoverFacebookPages(ctx, client, userToken)).pages;
+}
+
+/** Reactions, comments and shares from the post object. Video views need read_insights, which is requested on reconnect. */
+export async function fetchFacebookPostEngagement(ctx: ConnectorContext, postId: string) {
+  const version = (ctx.config.facebookClient as FacebookClientConfig | undefined)?.graphVersion ?? 'v23.0';
+  const { data } = await http<any>(ctx, `${FACEBOOK_GRAPH}/${version}/${encodeURIComponent(postId)}`, {
+    headers: bearer(ctx.credentials.accessToken),
+    query: { fields: 'likes.summary(true),comments.summary(true),shares' },
+    maxAttempts: 3,
+  });
+  const reactions = data?.likes?.summary?.total_count ?? data?.reactions?.summary?.total_count;
+  const comments = data?.comments?.summary?.total_count;
+  const shares = data?.shares?.count;
+  return {
+    reactions: typeof reactions === 'number' ? reactions : null,
+    comments: typeof comments === 'number' ? comments : null,
+    shares: typeof shares === 'number' ? shares : null,
+  };
+}
+
+/** Latest numeric insight. A missing metric stays null. */
+export function parseFacebookInsightNumber(data: unknown, metric: string): number | null {
+  const rows = (data as { data?: { name?: string; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[] })?.data ?? [];
+  const row = rows.find((r) => r.name === metric) ?? rows[0];
+  const values = row?.values ?? [];
+  const raw = values.length ? values[values.length - 1]?.value : row?.total_value?.value;
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+}
+
+/** Country or city map on the latest insight value. */
+export function parseFacebookInsightMap(data: unknown, metric: string, dimension: string): DemographicSlice[] {
+  const rows = (data as { data?: { name?: string; values?: { value?: unknown }[] }[] })?.data ?? [];
+  const row = rows.find((r) => r.name === metric) ?? rows[0];
+  const values = row?.values ?? [];
+  const raw = values.length ? values[values.length - 1]?.value : null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  return Object.entries(raw as Record<string, unknown>)
+    .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+    .map(([label, value]) => ({ dimension, label, value }));
+}
+
+async function facebookInsight(ctx: ConnectorContext, id: string, metric: string, period: string) {
+  const version = (ctx.config.facebookClient as FacebookClientConfig | undefined)?.graphVersion ?? 'v23.0';
+  const { data } = await http<unknown>(ctx, `${FACEBOOK_GRAPH}/${version}/${encodeURIComponent(id)}/insights`, {
+    headers: bearer(ctx.credentials.accessToken),
+    query: { metric, period },
+    maxAttempts: 2,
+  });
+  return data;
+}
+
+const FACEBOOK_REACTION_KEYS: Record<string, string> = {
+  like: 'reactionLike',
+  love: 'reactionLove',
+  care: 'reactionCare',
+  wow: 'reactionWow',
+  haha: 'reactionHaha',
+  sorry: 'reactionSorry',
+  anger: 'reactionAnger',
+};
+
+/** Reaction totals from `post_reactions_by_type_total`. An object value is not a single view count. */
+export function parseFacebookReactionCounts(data: unknown): Record<string, number> {
+  const rows = (data as { data?: { name?: string; values?: { value?: unknown }[] }[] })?.data ?? [];
+  const row = rows.find((r) => r.name === 'post_reactions_by_type_total') ?? rows[0];
+  const values = row?.values ?? [];
+  const raw = values.length ? values[values.length - 1]?.value : null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const name = FACEBOOK_REACTION_KEYS[key.toLowerCase()];
+    if (!name || typeof value !== 'number' || !Number.isFinite(value)) continue;
+    out[name] = value;
+  }
+  return out;
+}
+
+/** Lifetime views of one Page post. `post_media_view` replaced the deprecated impressions metrics. */
+export async function fetchFacebookPostViews(ctx: ConnectorContext, postId: string): Promise<number | null> {
+  const data = await facebookInsight(ctx, postId, 'post_media_view', 'lifetime');
+  return parseFacebookInsightNumber(data, 'post_media_view');
+}
+
+/**
+ * Extra Page-post insights. Each metric is its own request so a photo that has no video metric
+ * still keeps views and clicks. Requires read_insights.
+ */
+export async function fetchFacebookPostInsights(
+  ctx: ConnectorContext,
+  postId: string,
+): Promise<Record<string, number | null>> {
+  const out: Record<string, number | null> = {};
+  for (const metric of ['post_media_view', 'post_clicks', 'post_video_views', 'post_video_avg_time_watched']) {
+    try {
+      const data = await facebookInsight(ctx, postId, metric, 'lifetime');
+      const value = parseFacebookInsightNumber(data, metric);
+      if (value != null) out[metric] = value;
+    } catch (e) {
+      if (!(e instanceof ConnectorError)) throw e;
+    }
+  }
+  try {
+    const data = await facebookInsight(ctx, postId, 'post_reactions_by_type_total', 'lifetime');
+    Object.assign(out, parseFacebookReactionCounts(data));
+  } catch (e) {
+    if (!(e instanceof ConnectorError)) throw e;
+  }
+  return out;
+}
+
+/** Latest daily Page totals. Each metric is separate so one retired metric does not hide follows. */
+export async function fetchFacebookPageMetrics(
+  ctx: ConnectorContext,
+  pageId: string,
+): Promise<Record<string, number | null>> {
+  const out: Record<string, number | null> = {};
+  for (const metric of ['page_media_view', 'page_post_engagements', 'page_views_total']) {
+    try {
+      const data = await facebookInsight(ctx, pageId, metric, 'day');
+      const value = parseFacebookInsightNumber(data, metric);
+      if (value != null) out[metric] = value;
+    } catch (e) {
+      if (!(e instanceof ConnectorError)) throw e;
+    }
+  }
+  return out;
+}
+
+/** Latest daily Page follows. `page_fans` was removed from the insights API. */
+export async function fetchFacebookPageFollows(ctx: ConnectorContext, pageId: string): Promise<number | null> {
+  const data = await facebookInsight(ctx, pageId, 'page_follows', 'day');
+  return parseFacebookInsightNumber(data, 'page_follows');
+}
+
+/** Country and city follower maps. An empty list means the API returned no breakdown. */
+export async function fetchFacebookAudience(ctx: ConnectorContext, pageId: string): Promise<DemographicSlice[]> {
+  const slices: DemographicSlice[] = [];
+  let lastError: unknown;
+  for (const [metric, dimension] of [
+    ['page_follows_country', 'country'],
+    ['page_follows_city', 'city'],
+  ] as const) {
+    try {
+      const data = await facebookInsight(ctx, pageId, metric, 'day');
+      slices.push(...parseFacebookInsightMap(data, metric, dimension));
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (slices.length === 0 && lastError instanceof ConnectorError) throw lastError;
+  return slices;
 }
 
 export async function fetchFacebookPage(ctx: ConnectorContext, client: FacebookClientConfig, pageId: string) {

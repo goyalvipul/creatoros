@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { YouTubeConnector } from './google/youtube';
 import {
   CONNECTORS,
   ConnectorError,
   GmailConnector,
   InstagramConnector,
   PostizConnector,
+  SnapchatConnector,
   TikTokConnector,
   TodoConnector,
   buildGoogleAuthUrl,
@@ -14,8 +16,13 @@ import {
   generatePkce,
   http,
   parseAddress,
+  parseFacebookInsightMap,
+  parseFacebookInsightNumber,
   parseIsoDurationMs,
   parseRetryAfter,
+  youtubeDemographicSlices,
+  youtubeMinutesByVideo,
+  youtubeMinutesWatched,
   refreshGoogleToken,
   type ConnectorContext,
   type Credentials,
@@ -186,6 +193,21 @@ describe('Google OAuth', () => {
     const next = await refreshGoogleToken(ctx);
     expect(next).toMatchObject({ accessToken: 'A2', refreshToken: 'r', scopes: ['a', 'b'] });
     expect(next.expiresAt).toBe(1_800_000_000_000 + 3_600_000);
+  });
+});
+
+describe('YouTube connector', () => {
+  it('asks for watch time on every connect and keeps comments and uploads when requested', async () => {
+    const { ctx } = makeCtx(() => json({}), { config: { googleClient: client } });
+    const youtube = new YouTubeConnector();
+    const scopes = (await youtube.connect(ctx)).oauth!.scopes;
+    expect(scopes.some((s) => s.endsWith('yt-analytics.readonly'))).toBe(true);
+    expect(scopes.some((s) => s.endsWith('youtube.readonly'))).toBe(true);
+    expect(scopes.some((s) => s.endsWith('youtube.force-ssl'))).toBe(false);
+    const again = (await youtube.connect(ctx, { comments: true, upload: true })).oauth!.scopes;
+    expect(again.some((s) => s.endsWith('yt-analytics.readonly'))).toBe(true);
+    expect(again.some((s) => s.endsWith('youtube.force-ssl'))).toBe(true);
+    expect(again.some((s) => s.endsWith('youtube.upload'))).toBe(true);
   });
 });
 
@@ -409,6 +431,27 @@ describe('YouTube helpers', () => {
     expect(parseIsoDurationMs('PT45S')).toBe(45_000);
     expect(parseIsoDurationMs(undefined)).toBeNull();
   });
+
+  it('reads watch minutes and audience percentages without inventing a missing row', () => {
+    expect(youtubeMinutesWatched([])).toBeNull();
+    expect(youtubeMinutesWatched([{ estimatedMinutesWatched: 12 }, { estimatedMinutesWatched: 3 }])).toBe(15);
+    expect(youtubeMinutesByVideo([{ video: 'abc', estimatedMinutesWatched: 4 }]).get('abc')).toBe(4);
+    expect(youtubeDemographicSlices([{ ageGroup: 'age18-24', gender: 'female', viewerPercentage: 22 }])).toEqual([
+      { dimension: 'age_gender', label: 'age18-24 · female', value: 22 },
+    ]);
+    expect(youtubeDemographicSlices([{}])).toEqual([]);
+  });
+
+  it('reads Facebook follows and country maps', () => {
+    const follows = { data: [{ name: 'page_follows', values: [{ value: 10 }, { value: 14 }] }] };
+    expect(parseFacebookInsightNumber(follows, 'page_follows')).toBe(14);
+    expect(parseFacebookInsightNumber({ data: [] }, 'page_follows')).toBeNull();
+    const countries = { data: [{ name: 'page_follows_country', values: [{ value: { CA: 9, US: 2 } }] }] };
+    expect(parseFacebookInsightMap(countries, 'page_follows_country', 'country')).toEqual([
+      { dimension: 'country', label: 'CA', value: 9 },
+      { dimension: 'country', label: 'US', value: 2 },
+    ]);
+  });
 });
 
 describe('social connectors never claim more than they can verify', () => {
@@ -455,6 +498,28 @@ describe('social connectors never claim more than they can verify', () => {
     expect(r.nextCursor).toBe('2026-10-10T00:00:00+0000');
   });
 
+  it('TikTok connect opens Login Kit and does not ask for a pasted token', async () => {
+    const { ctx } = makeCtx(() => json({}), {
+      config: {
+        clientKey: 'client-key',
+        clientSecret: 'client-secret',
+        redirectUri: 'https://os.example/api/v1/integrations/tiktok/callback',
+      },
+    });
+    const caps = await new TikTokConnector().getCapabilities(ctx);
+    expect(caps.flags.appConfigured).toBe(true);
+    expect(caps.setupSteps.join(' ')).not.toContain('Enter client key');
+    const res = await new TikTokConnector().connect(ctx);
+    const u = new URL(res.authorizeUrl!);
+    expect(u.origin + u.pathname).toBe('https://www.tiktok.com/v2/auth/authorize/');
+    expect(u.searchParams.get('client_key')).toBe('client-key');
+    expect(u.searchParams.get('redirect_uri')).toBe('https://os.example/api/v1/integrations/tiktok/callback');
+    expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(u.searchParams.get('scope')).toBe('user.info.basic,video.list');
+    const picked = await new TikTokConnector().connect(ctx, { scopes: ['user.info.basic', 'video.publish'] });
+    expect(new URL(picked.authorizeUrl!).searchParams.get('scope')).toBe('user.info.basic,video.publish');
+  });
+
   it('TikTok pages through videos and stops at the stored cursor', async () => {
     const pages = [
       () =>
@@ -483,11 +548,41 @@ describe('social connectors never claim more than they can verify', () => {
     expect(inc.items.map((v) => v.externalId)).toEqual(['v3']);
   });
 
-  it('Snapchat and the Google umbrella are gated with an explanation, not stubs that return data', async () => {
-    const { ctx } = makeCtx(() => json({}));
-    const snap = CONNECTORS.snapchat;
-    expect((await snap.getCapabilities(ctx)).state).toBe('UNSUPPORTED');
-    await expect(snap.syncFull(ctx)).rejects.toBeInstanceOf(ConnectorError);
+  it('Snapchat connect opens the Public Profile login and reads the profile', async () => {
+    const { ctx, calls } = makeCtx(
+      () =>
+        json({
+          request_status: 'SUCCESS',
+          public_profile: { id: 'profile-1', display_name: 'Mehak', snap_user_name: 'mehak', logo_urls: {} },
+        }),
+      {
+        credentials: { accessToken: 'token', expiresAt: 9e12, scopes: ['snapchat-profile-api'] },
+        config: {
+          clientId: 'snap-id',
+          clientSecret: 'snap-secret',
+          redirectUri: 'https://os.example/api/v1/integrations/snapchat/callback',
+        },
+      },
+    );
+    const caps = await new SnapchatConnector().getCapabilities(ctx);
+    expect(caps.flags.appConfigured).toBe(true);
+    expect(caps.write).toBe(false);
+    const res = await new SnapchatConnector().connect(ctx);
+    const u = new URL(res.authorizeUrl!);
+    expect(u.origin + u.pathname).toBe('https://accounts.snapchat.com/login/oauth2/authorize');
+    expect(u.searchParams.get('client_id')).toBe('snap-id');
+    expect(u.searchParams.get('redirect_uri')).toBe('https://os.example/api/v1/integrations/snapchat/callback');
+    expect(u.searchParams.get('scope')).toBe('snapchat-profile-api');
+    expect(u.searchParams.get('response_type')).toBe('code');
+    expect(u.searchParams.has('code_challenge')).toBe(false);
+    const skipped = await new SnapchatConnector().connect(ctx, { scopes: [] });
+    expect(skipped.authorizeUrl).toBeUndefined();
+    expect(skipped.steps?.join(' ')).toMatch(/Check Public Profile/);
+    const profile = await new SnapchatConnector().profile(ctx);
+    expect(profile).toMatchObject({ id: 'profile-1', username: 'mehak', displayName: 'Mehak' });
+    expect(calls[0]?.url).toContain('/public_profiles/my_profile');
+    const synced = await CONNECTORS.snapchat.syncFull(ctx);
+    expect(synced.items).toEqual([]);
     expect((await CONNECTORS.manual.getCapabilities(ctx)).read).toBe(false);
   });
 });

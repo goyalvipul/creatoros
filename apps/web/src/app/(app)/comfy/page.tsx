@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { ApiError, api, del, post, put, refresh, useApi } from '@/lib/api';
 import { FileDownload } from '@/components/file-download';
 import { VideoTrim } from '@/components/video-trim';
+import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
 import { ago } from '@/lib/format';
+import { uxV5 } from '@/components/ux-v5-flag';
 
 type Issue = { field: string; message: string };
 type Worker = {
@@ -43,6 +46,48 @@ function rememberWorker(id: string | null) {
   }
 }
 
+const STUDIO_KEY = 'cos-ltx-studio';
+
+function readStudioMemory(): {
+  form: Partial<Form>;
+  imageName: string | null;
+  audioName: string | null;
+  audioSeconds: number | null;
+} | null {
+  try {
+    const raw = localStorage.getItem(STUDIO_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      form?: Partial<Form>;
+      imageName?: string | null;
+      audioName?: string | null;
+      audioSeconds?: number | null;
+    };
+    if (!parsed?.form || typeof parsed.form !== 'object') return null;
+    return {
+      form: parsed.form,
+      imageName: parsed.imageName ?? null,
+      audioName: parsed.audioName ?? null,
+      audioSeconds: typeof parsed.audioSeconds === 'number' ? parsed.audioSeconds : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStudioMemory(memory: {
+  form: Form;
+  imageName: string | null;
+  audioName: string | null;
+  audioSeconds: number | null;
+}) {
+  try {
+    localStorage.setItem(STUDIO_KEY, JSON.stringify(memory));
+  } catch {
+    /* private mode */
+  }
+}
+
 /** e.g. RTX 3090 + 24 → "24GB (3090)" */
 function gpuTitle(w: Pick<Worker, 'label' | 'expectedVramGb'>) {
   const short = w.label.replace(/^RTX\s+/i, '').trim() || w.label;
@@ -71,6 +116,146 @@ function usePcQueue(workerId: string | null) {
     };
   }, [workerId]);
   return [queues, setQueues] as const;
+}
+
+function WorkerRail({
+  workers,
+  selectedId,
+  queues,
+}: {
+  workers: Worker[];
+  selectedId: string | null;
+  queues: Record<string, 'busy' | 'free' | 'offline' | undefined>;
+}) {
+  if (!uxV5()) return null;
+  return (
+    <aside>
+      <div className="mb-3 text-[12px] font-bold">Execution & outputs</div>
+      {workers.length === 0 && <p className="text-xs text-[#aebdb9]">No PC is saved yet. Add one under Settings.</p>}
+      {workers.map((w) => {
+        const queue = queues[w.id] ?? w.queue;
+        const selected = w.id === selectedId;
+        return (
+          <div key={w.id} className="mb-2 rounded-[10px] border border-[#334647] bg-[#202b2d] p-3">
+            <b className="block text-[12px]">{gpuTitle(w)}</b>
+            <small className="text-[#a4b9b1]">
+              {queue === 'busy' ? 'Rendering' : queue === 'free' ? 'Available' : 'Offline'}
+              {w.expectedVramGb ? ` · ${w.expectedVramGb} GB` : ''}
+              {selected ? ' · selected' : ''}
+            </small>
+          </div>
+        );
+      })}
+      <p className="mt-4 text-[11px] text-[#aebdb9]">Generate is the only control that starts a job. Playback needs that PC online.</p>
+    </aside>
+  );
+}
+
+const SPLIT_KEY = 'cos-studio-split';
+
+function readSplit() {
+  try {
+    const saved = Number(localStorage.getItem(SPLIT_KEY));
+    if (saved >= 280 && saved <= 2400) return saved;
+  } catch {
+    /* private mode */
+  }
+  return 460;
+}
+
+let splitWidth = 460;
+const splitListeners = new Set<(width: number) => void>();
+
+function publishSplit(width: number) {
+  splitWidth = width;
+  try {
+    localStorage.setItem(SPLIT_KEY, String(width));
+  } catch {
+    /* private mode */
+  }
+  splitListeners.forEach((listen) => listen(width));
+}
+
+function StudioSplit({ left, right }: { left: ReactNode; right: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  const widthRef = useRef(splitWidth);
+  const [width, setWidth] = useState(splitWidth);
+  useLayoutEffect(() => {
+    const saved = readSplit();
+    splitWidth = saved;
+    widthRef.current = saved;
+    setWidth(saved);
+    splitListeners.add(setWidth);
+    return () => {
+      splitListeners.delete(setWidth);
+    };
+  }, []);
+  function resize(next: number) {
+    const parent = box.current;
+    const max = parent ? Math.max(320, parent.clientWidth - 240) : 2400;
+    const clamped = Math.min(max, Math.max(280, next));
+    widthRef.current = clamped;
+    publishSplit(clamped);
+  }
+  function down(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const start = widthRef.current;
+    const move = (ev: PointerEvent) => resize(start + ev.clientX - startX);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+  return (
+    <div ref={box} className="studio-split">
+      <div className="studio-left" style={{ width }}>
+        {left}
+      </div>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the form and the preview"
+        tabIndex={0}
+        className="studio-grip"
+        onPointerDown={down}
+        onKeyDown={(event) => {
+          const step = event.key === 'ArrowLeft' ? -24 : event.key === 'ArrowRight' ? 24 : 0;
+          if (!step) return;
+          event.preventDefault();
+          resize(widthRef.current + step);
+        }}
+      />
+      <div className="studio-right">{right}</div>
+    </div>
+  );
+}
+
+function phoneShape(ratio: string): 'tall' | 'wide' | 'square' {
+  const text = ratio.toLowerCase();
+  if (text.includes('1:1') || text.includes('square')) return 'square';
+  if (text.includes('9:16') || text.includes('3:4') || text.includes('4:5') || text.includes('portrait')) return 'tall';
+  return 'wide';
+}
+
+function frameLabel(width: number, height: number) {
+  if (!(width > 0) || !(height > 0)) return 'Frame';
+  const ratio = width / height;
+  const known: [number, string][] = [
+    [9 / 16, '9:16 Portrait'],
+    [16 / 9, '16:9'],
+    [1, '1:1'],
+    [4 / 5, '4:5'],
+    [3 / 4, '3:4'],
+  ];
+  return known.find(([value]) => Math.abs(ratio - value) < 0.05)?.[1] ?? `${width}×${height}`;
+}
+
+function prettyName(name: string) {
+  return name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim() || name;
 }
 
 function GpuDot({ status }: { status?: 'busy' | 'free' | 'offline' }) {
@@ -236,39 +421,74 @@ export default function ComfyPage() {
   useEffect(() => {
     if (window.location.hash === '#history') setTab('history');
   }, []);
+  const v5 = uxV5();
+  const studioTabs = [
+    { id: 'ltx' as const, label: v5 ? 'LTX Video' : 'LTX' },
+    { id: 'h3' as const, label: 'MiniMax H3' },
+    { id: 'audio' as const, label: 'Audio' },
+    { id: 'history' as const, label: 'History' },
+    { id: 'settings' as const, label: 'Settings' },
+  ];
   return (
     <div>
       <PageHeader
-        title="ComfyUI"
-        subtitle="Fill the clip and generate only when you press the button. PCs are added under Settings."
+        title={v5 ? 'Create Studio' : 'ComfyUI'}
+        subtitle={v5 ? undefined : 'Fill the clip and generate only when you press the button. PCs are added under Settings.'}
       />
-      <Tabs
-        tabs={[
-          { id: 'ltx', label: 'LTX' },
-          { id: 'audio', label: 'Audio' },
-          { id: 'h3', label: 'MiniMax H3' },
-          { id: 'history', label: 'History' },
-          { id: 'settings', label: 'Settings' },
-        ]}
-        value={tab}
-        onChange={setTab}
-      />
+      {v5 ? (
+        <div className="studio-wrap studio-page">
+          <div className="studio-top">
+            <div className="studio-tabs" role="tablist">
+              {studioTabs.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item.id}
+                  className={tab === item.id ? 'studio-tab active' : 'studio-tab'}
+                  onClick={() => setTab(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className={tab === 'history' || tab === 'settings' ? 'p-5' : undefined}>
+            <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />
+          </div>
+        </div>
+      ) : (
+        <Tabs tabs={studioTabs} value={tab} onChange={setTab} />
+      )}
+      {!v5 && <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />}
+    </div>
+  );
+}
+
+function StudioBody({
+  tab,
+  recall,
+  onUse,
+  onHistory,
+}: {
+  tab: 'ltx' | 'audio' | 'h3' | 'history' | 'settings';
+  recall: SavedClip | null;
+  onUse: (clip: SavedClip) => void;
+  onHistory: () => void;
+}) {
+  return (
+    <>
       <div hidden={tab !== 'ltx'}>
-        <LtxStudio recall={recall} />
+        <LtxStudio recall={recall} onHistory={onHistory} />
       </div>
       <div hidden={tab !== 'audio'}>
-        <AudioTab />
+        <AudioTab onHistory={onHistory} />
       </div>
       <div hidden={tab !== 'h3'}>
-        <H3Tab />
+        <H3Tab onHistory={onHistory} />
       </div>
       <div hidden={tab !== 'history'}>
-        <HistoryTab
-          onUse={(clip) => {
-            setRecall(clip);
-            setTab('ltx');
-          }}
-        />
+        <HistoryTab onUse={onUse} />
       </div>
       <div hidden={tab !== 'settings'} className="space-y-4">
         {tab === 'settings' ? (
@@ -278,15 +498,15 @@ export default function ComfyPage() {
           </>
         ) : null}
       </div>
-    </div>
+    </>
   );
 }
 
-function jobLabel(status: string) {
+function jobLabel(status: string, progress?: { phase?: string } | null) {
   if (status === 'SUCCEEDED') return 'Ready';
   if (status === 'FAILED') return 'Failed';
+  if (status === 'QUEUED' || progress?.phase === 'waiting') return 'Waiting in the queue';
   if (status === 'RUNNING') return 'Rendering';
-  if (status === 'QUEUED') return 'Waiting';
   return status;
 }
 
@@ -322,8 +542,8 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge tone={job.status === 'SUCCEEDED' ? 'ok' : job.status === 'FAILED' ? 'bad' : job.status === 'RUNNING' ? 'info' : 'warn'}>
-                        {jobLabel(job.status)}
+                      <Badge tone={job.status === 'SUCCEEDED' ? 'ok' : job.status === 'FAILED' ? 'bad' : job.status === 'RUNNING' && s.progress?.phase !== 'waiting' ? 'info' : 'warn'}>
+                        {jobLabel(job.status, s.progress)}
                       </Badge>
                       <Badge tone="neutral">{job.kind}</Badge>
                       <span className="font-medium">{machine}</span>
@@ -372,7 +592,7 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
                 {job.error ? <p className="mt-2 text-sm text-muted">{job.error}</p> : null}
                 {job.status === 'SUCCEEDED' && s.outputs?.length ? (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <video className="w-full max-w-sm rounded-lg" controls src={`/api/v1/comfy/jobs/${job.id}/video`} />
+                    <VideoThumb src={`/api/v1/comfy/jobs/${job.id}/video`} className="w-full max-w-sm" />
                     <FileDownload href={`/api/v1/comfy/jobs/${job.id}/video?download=1`} name={`${job.kind}-${job.id}.mp4`} />
                   </div>
                 ) : null}
@@ -669,19 +889,24 @@ function MachineSetup() {
   );
 }
 
-function LtxStudio({ recall }: { recall: SavedClip | null }) {
+function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory: () => void }) {
   const studio = useApi<Studio>('/comfy/ltx');
   const [form, setForm] = useState<Form | null>(null);
   const [imageName, setImageName] = useState<string | null>(null);
   const [audioName, setAudioName] = useState<string | null>(null);
   const [audioSeconds, setAudioSeconds] = useState<number | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loras, setLoras] = useState<string[]>([]);
   const [queues, setQueues] = usePcQueue(form?.workerId ?? null);
   const [clipNote, setClipNote] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+  const [picking, setPicking] = useState<'image' | 'audio' | null>(null);
+  const [manageLora, setManageLora] = useState(false);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!studio.data || form) return;
@@ -694,7 +919,8 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
       d?.workerId ??
       workers.find((w) => w.role === 'primary')?.id ??
       null;
-    setForm({
+    const saved = readStudioMemory();
+    const base: Form = {
       projectId: d?.projectId ?? null,
       workerId,
       imageFileId: d?.imageFileId ?? null,
@@ -715,11 +941,17 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
       imageUploadWorkerId: d?.imageUploadWorkerId ?? null,
       audioUploadName: d?.audioUploadName ?? null,
       audioUploadWorkerId: d?.audioUploadWorkerId ?? null,
-    });
-    setImageName(d?.imageName ?? null);
-    setAudioName(d?.audioName ?? null);
-    setAudioSeconds(d?.audioDurationMs != null ? d.audioDurationMs / 1000 : null);
+    };
+    setForm(saved?.form ? { ...base, ...saved.form } : base);
+    setImageName(saved?.imageName ?? d?.imageName ?? null);
+    setAudioName(saved?.audioName ?? d?.audioName ?? null);
+    setAudioSeconds(saved?.audioSeconds ?? (d?.audioDurationMs != null ? d.audioDurationMs / 1000 : null));
   }, [studio.data, form]);
+
+  useEffect(() => {
+    if (!form) return;
+    writeStudioMemory({ form, imageName, audioName, audioSeconds });
+  }, [form, imageName, audioName, audioSeconds]);
 
   useEffect(() => {
     if (!recall) return;
@@ -788,35 +1020,22 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
     }
   }, [studio.data, form?.workerId]);
 
-  useEffect(() => {
-    if (!form?.audioFileId) {
-      setAudioUrl(null);
-      return;
-    }
-    let gone = false;
-    post<{ url: string }>(`/files/${form.audioFileId}/stream-token`)
-      .then((r) => {
-        if (!gone) setAudioUrl(r.url);
-      })
-      .catch(() => {
-        if (!gone) setAudioUrl(null);
-      });
-    return () => {
-      gone = true;
-    };
-  }, [form?.audioFileId]);
+  const audioSrc = form?.audioFileId
+    ? `/api/v1/files/${form.audioFileId}/stream`
+    : form?.audioUploadName && (form.audioUploadWorkerId || form.workerId)
+      ? `/api/v1/comfy/workers/${form.audioUploadWorkerId || form.workerId}/input?name=${encodeURIComponent(form.audioUploadName)}`
+      : null;
 
   useEffect(() => {
     const el = audioRef.current;
-    if (!el || !form || el.readyState < 1) return;
+    if (!el || !form || el.readyState < 1 || !el.paused) return;
     const start = Math.max(0, form.audioStartSec);
     if (Number.isFinite(el.duration) && start >= el.duration) {
       setClipNote(`This file is ${el.duration.toFixed(1)}s, so it cannot start at ${start}s.`);
       return;
     }
     el.currentTime = start;
-    setClipNote(`Playing from ${start}s for ${form.durationSec}s.`);
-  }, [audioUrl, form?.audioStartSec, form?.durationSec]);
+  }, [audioSrc, form?.audioStartSec, form?.durationSec]);
 
   useEffect(() => {
     if (!form?.workerId) {
@@ -844,6 +1063,44 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
   }, [rendering]);
 
   const set = (patch: Partial<Form>) => setForm((f) => (f ? { ...f, ...patch } : f));
+  function setTrim(start: number, length: number) {
+    const total = audioSeconds;
+    const minLen = total != null && total > 0 && total < 1 ? Math.max(0.2, total) : 1;
+    let nextStart = Math.max(0, Math.min(3600, start));
+    let nextLen = Math.max(minLen, Math.min(120, length));
+    if (total != null && total > 0) {
+      nextStart = Math.min(nextStart, Math.max(0, total - minLen));
+      nextLen = Math.min(nextLen, Math.max(minLen, total - nextStart));
+    }
+    set({
+      audioStartSec: Math.round(nextStart * 10) / 10,
+      durationSec: Math.round(nextLen * 10) / 10,
+    });
+  }
+  function toggleClip() {
+    const el = audioRef.current;
+    if (!form || !el || !audioSrc) {
+      setClipNote('Choose an audio file first.');
+      return;
+    }
+    if (!el.paused) {
+      el.pause();
+      return;
+    }
+    const start = Math.max(0, form.audioStartSec);
+    const end = start + Math.max(0.2, form.durationSec);
+    const place = () => {
+      if (Number.isFinite(el.duration) && start >= el.duration) {
+        el.currentTime = 0;
+        setClipNote(`This file is ${el.duration.toFixed(1)}s, so playback starts at the beginning.`);
+        return;
+      }
+      if (el.currentTime < start || el.currentTime >= end - 0.05) el.currentTime = start;
+    };
+    place();
+    setClipNote('');
+    void el.play().then(place).catch(() => setClipNote('The browser could not play this audio. The PC that holds it may be off.'));
+  }
 
   async function uploadToPc(kind: 'image' | 'audio', file: File) {
     if (!form?.workerId) {
@@ -912,8 +1169,320 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
         const workers = Array.isArray(data.workers) ? data.workers : [];
         const preset = data.preset ?? PRESET_FALLBACK;
         if (!form) return <Spinner />;
+        if (uxV5()) {
+          const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+          const shown = recent.find((job) => job.id === previewId) ?? recent[0] ?? null;
+          const other = recent.find((job) => job.id !== shown?.id) ?? null;
+          const imageSrc = form.imageFileId
+            ? `/api/v1/files/${form.imageFileId}/preview`
+            : form.imageUploadName && (form.imageUploadWorkerId || form.workerId)
+              ? `/api/v1/comfy/workers/${form.imageUploadWorkerId || form.workerId}/input?name=${encodeURIComponent(form.imageUploadName)}`
+              : null;
+          const machine = workers.find((worker) => worker.id === form.workerId);
+          const queue = form.workerId ? queues[form.workerId] ?? machine?.queue : undefined;
+          const queueLabel = queue === 'busy' ? 'Rendering' : queue === 'offline' ? 'Offline' : machine ? 'Ready' : 'No PC';
+          const applyJob = (job: Studio['jobs'][number]) => {
+            const s = job.settings;
+            set({
+              projectId: job.projectId ?? form.projectId,
+              workerId: s.workerId ?? form.workerId,
+              imageFileId: s.imageFileId ?? null,
+              audioFileId: s.audioFileId ?? null,
+              audioStartSec: num(s.audioStartSec, form.audioStartSec),
+              durationSec: num(s.durationSec, form.durationSec),
+              prompt: s.prompt ?? '',
+              negativePrompt: s.negativePrompt ?? '',
+              width: num(s.width, form.width),
+              height: num(s.height, form.height),
+              fps: num(s.fps, form.fps),
+              loraName: s.loraName || form.loraName,
+              loraStrength: num(s.loraStrength, form.loraStrength),
+              upscaleWidth: num(s.upscaleWidth, form.upscaleWidth),
+              upscaleHeight: num(s.upscaleHeight, form.upscaleHeight),
+              wantUpscale: s.wantUpscale !== false,
+              imageUploadName: s.imageFileId ? null : (s.imageUploadName ?? null),
+              imageUploadWorkerId: s.imageFileId ? null : (s.workerId ?? null),
+              audioUploadName: s.audioFileId ? null : (s.audioUploadName ?? null),
+              audioUploadWorkerId: s.audioFileId ? null : (s.workerId ?? null),
+            });
+            setImageName(s.imageName ?? null);
+            setAudioName(s.audioName ?? null);
+            if (s.workerId) rememberWorker(s.workerId);
+          };
+          return (
+            <StudioSplit
+              left={
+                <div className="space-y-4">
+                  {data.generation !== 'READY' && data.blockReason ? <Notice tone="warn">{data.blockReason}</Notice> : null}
+                  <div className="studio-pair">
+                  <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} quiet />
+                  <Field label="Run on">
+                    <div className="flex items-center gap-2">
+                      <GpuDot status={queue} />
+                      <Select
+                        className="min-w-0 flex-1"
+                        aria-label="PC"
+                        value={form.workerId ?? ''}
+                        onChange={(e) => {
+                          const id = e.target.value || null;
+                          rememberWorker(id);
+                          set({ workerId: id });
+                        }}
+                      >
+                        <option value="">Choose a PC</option>
+                        {workers.map((worker) => {
+                          const state = queues[worker.id] ?? worker.queue;
+                          return (
+                            <option key={worker.id} value={worker.id}>
+                              {gpuTitle(worker)}
+                              {state === 'busy' ? ' — busy' : state === 'offline' ? ' — offline' : ''}
+                            </option>
+                          );
+                        })}
+                      </Select>
+                    </div>
+                  </Field>
+                  </div>
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold">01 Source assets</h2>
+                      <button type="button" className="text-xs font-semibold text-accent" onClick={() => setPicking('image')}>
+                        Browse library
+                      </button>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <SourceCard
+                        title={imageName || 'No image'}
+                        detail="Starting frame · Image"
+                        action="Change image"
+                        fileId={form.imageFileId}
+                        image={form.imageFileId ? null : imageSrc}
+                        onAction={() => setPicking(picking === 'image' ? null : 'image')}
+                      />
+                      <SourceCard
+                        title={audioName || 'No audio'}
+                        detail={
+                          form.audioFileId || form.audioUploadName
+                            ? `${clockShort(form.audioStartSec)}–${clockShort(form.audioStartSec + form.durationSec)}`
+                            : 'Audio'
+                        }
+                        action="Change audio"
+                        playing={playing}
+                        onPlay={form.audioFileId || form.audioUploadName ? toggleClip : undefined}
+                        onAction={() => setPicking(picking === 'audio' ? null : 'audio')}
+                      />
+                    </div>
+                    {form.audioFileId || form.audioUploadName ? (
+                      <div className="mt-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <Field label="Start (seconds)">
+                            <LooseNumber value={form.audioStartSec} onValue={(audioStartSec) => setTrim(audioStartSec, form.durationSec)} />
+                          </Field>
+                          <Field label="Use (seconds)">
+                            <LooseNumber value={form.durationSec} onValue={(durationSec) => setTrim(form.audioStartSec, durationSec)} />
+                          </Field>
+                        </div>
+                        {audioSeconds != null && audioSeconds > 0 ? (
+                          <TrimBar total={audioSeconds} start={form.audioStartSec} length={form.durationSec} onChange={setTrim} />
+                        ) : (
+                          <p className="mt-1 text-xs text-muted">The length appears once the audio has loaded.</p>
+                        )}
+                        {clipNote ? <p className="mt-1 text-xs text-muted">{clipNote}</p> : null}
+                      </div>
+                    ) : null}
+                    {picking ? (
+                      <div className="mt-2">
+                        <FilePick
+                          kind={picking === 'image' ? 'IMAGE' : 'AUDIO'}
+                          label={picking === 'image' ? 'Image' : 'Audio'}
+                          quiet
+                          selected={picking === 'image' ? imageName : audioName}
+                          uploaded={picking === 'image' ? !!form.imageUploadName : !!form.audioUploadName}
+                          busy={busy === `upload-${picking}`}
+                          onSelect={(file) => {
+                            if (picking === 'image') {
+                              set({ imageFileId: file.id, imageUploadName: null, imageUploadWorkerId: null });
+                              setImageName(file.fileName);
+                            } else {
+                              set({ audioFileId: file.id, audioUploadName: null, audioUploadWorkerId: null });
+                              setAudioName(file.fileName);
+                              const ms = file.tech?.durationMs;
+                              setAudioSeconds(typeof ms === 'number' ? ms / 1000 : null);
+                            }
+                            setPicking(null);
+                          }}
+                          onUpload={(file) => void uploadToPc(picking, file)}
+                        />
+                      </div>
+                    ) : null}
+                  </section>
+                  <section>
+                    <h2 className="mb-2 text-sm font-semibold">02 Motion & performance</h2>
+                    <Textarea rows={5} value={form.prompt} aria-label="Prompt" onChange={(e) => set({ prompt: e.target.value })} />
+                    <p className="mt-1 text-xs text-muted">Describe motion and camera action.</p>
+                  </section>
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold">03 Output</h2>
+                      <button type="button" className="text-xs font-semibold text-accent" onClick={() => setAdvanced(true)}>
+                        Edit settings
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold" onClick={() => setAdvanced(true)}>
+                        {frameLabel(form.width, form.height)}
+                      </button>
+                      <button type="button" className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold" onClick={() => setAdvanced(true)}>
+                        {form.durationSec} sec
+                      </button>
+                      <button type="button" className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold" onClick={() => setAdvanced(true)}>
+                        {form.fps} FPS
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold"
+                        onClick={() => set({ wantUpscale: !form.wantUpscale })}
+                      >
+                        {form.wantUpscale ? 'Upscale On' : 'Upscale Off'}
+                      </button>
+                    </div>
+                  </section>
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h2 className="text-sm font-semibold">Identity & model</h2>
+                      <button type="button" className="text-xs font-semibold text-accent" onClick={() => setManageLora((open) => !open)}>
+                        Manage
+                      </button>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-panel2 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">{prettyName(form.loraName) || 'LoRA'} · LoRA</div>
+                        <div className="truncate text-xs text-muted">
+                          {form.loraName || 'No file'} · Strength {form.loraStrength}
+                          {machine ? ` · ${gpuTitle(machine)}` : ''}
+                        </div>
+                      </div>
+                      <Badge tone="ok">Active</Badge>
+                    </div>
+                    {manageLora ? (
+                      <div className="mt-2">
+                        <Input list="ltx-loras" aria-label="LoRA file" value={form.loraName} onChange={(e) => set({ loraName: e.target.value })} />
+                        <datalist id="ltx-loras">
+                          {loras.map((name) => (
+                            <option key={name} value={name} />
+                          ))}
+                        </datalist>
+                      </div>
+                    ) : null}
+                  </section>
+                  <section className="rounded-xl border border-border">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold"
+                      aria-expanded={advanced}
+                      onClick={() => setAdvanced((open) => !open)}
+                    >
+                      Advanced settings
+                      <span className="text-muted">{advanced ? '▴' : '▾'}</span>
+                    </button>
+                    {advanced ? (
+                      <div className="space-y-3 border-t border-border px-3 py-3">
+                        <SizePick
+                          label="Frame size"
+                          rows={FRAME_SIZES}
+                          width={form.width}
+                          height={form.height}
+                          onPick={(width, height) => set({ width, height })}
+                        />
+                        <SizePick
+                          label="Upscale size"
+                          rows={UPSCALE_SIZES}
+                          width={form.upscaleWidth}
+                          height={form.upscaleHeight}
+                          onPick={(upscaleWidth, upscaleHeight) => set({ upscaleWidth, upscaleHeight })}
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <Field label="Frame rate">
+                            <LooseNumber value={form.fps} onValue={(fps) => set({ fps })} />
+                          </Field>
+                          <Field label="LoRA strength">
+                            <LooseNumber value={form.loraStrength} onValue={(loraStrength) => set({ loraStrength })} />
+                          </Field>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input type="checkbox" checked={form.wantUpscale} onChange={(e) => set({ wantUpscale: e.target.checked })} />
+                          Enable upscale after rendering
+                        </label>
+                        <Field label="Negative prompt">
+                          <Textarea rows={3} value={form.negativePrompt} onChange={(e) => set({ negativePrompt: e.target.value })} />
+                        </Field>
+                        <Field label="Audio start (seconds)">
+                          <LooseNumber value={form.audioStartSec} onValue={(audioStartSec) => setTrim(audioStartSec, form.durationSec)} />
+                        </Field>
+                      </div>
+                    ) : null}
+                  </section>
+                  {audioSrc ? (
+                    <audio
+                      ref={audioRef}
+                      className="sr-only"
+                      src={audioSrc}
+                      preload="auto"
+                      onLoadedMetadata={(e) => {
+                        const el = e.currentTarget;
+                        if (Number.isFinite(el.duration)) setAudioSeconds(el.duration);
+                      }}
+                      onPlay={() => setPlaying(true)}
+                      onPause={() => setPlaying(false)}
+                      onEnded={() => setPlaying(false)}
+                      onTimeUpdate={(e) => {
+                        const el = e.currentTarget;
+                        const start = Math.max(0, form.audioStartSec);
+                        const end = start + form.durationSec;
+                        if (el.currentTime >= end - 0.02 && el.currentTime > start + 0.15) {
+                          el.pause();
+                          el.currentTime = start;
+                        }
+                      }}
+                    />
+                  ) : null}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                    <span className="inline-flex items-center gap-2 text-xs text-muted">
+                      <GpuDot status={queue} />
+                      {machine ? gpuTitle(machine) : 'No PC'} · {queueLabel}
+                    </span>
+                    <div className="flex gap-2">
+                      <Button busy={busy === 'draft'} onClick={() => run('draft')}>
+                        Save
+                      </Button>
+                      <Button variant="primary" busy={busy === 'generate'} onClick={() => run('generate')}>
+                        Generate
+                      </Button>
+                    </div>
+                  </div>
+                  {result ? <ResultLines result={result} /> : null}
+                </div>
+              }
+              right={
+                <StudioResult
+                  stageRef={stageRef}
+                  kind="video"
+                  tag="LTX"
+                  ratio={frameLabel(form.width, form.height)}
+                  job={shown}
+                  other={other}
+                  fallback={imageSrc}
+                  onHistory={onHistory}
+                  onPick={(id) => setPreviewId(id)}
+                  onReuse={() => shown && applyJob(shown)}
+                />
+              }
+            />
+          );
+        }
         return (
           <div className="space-y-4">
+          <div className={uxV5() ? 'studio-col space-y-4' : 'space-y-4'}>
             {data.generation === 'READY' ? (
               <Notice tone="info" dismissible={false} title="Generate runs on the PC you pick">
                 The video is written into that PC’s ComfyUI output folder. Validate only checks this form. Check only asks what that PC has installed.
@@ -1022,7 +1591,6 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
               </div>
               {form.imageFileId ? (
                 // The preview is a cached thumbnail. A missing one just hides.
-                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   alt=""
                   src={`/api/v1/files/${form.imageFileId}/preview`}
@@ -1032,13 +1600,13 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
                   }}
                 />
               ) : null}
-              {audioUrl && form ? (
+              {audioSrc && form ? (
                 <div className="mt-3">
                   <audio
                     ref={audioRef}
                     className="w-full"
                     controls
-                    src={audioUrl}
+                    src={audioSrc}
                     preload="metadata"
                     onLoadedMetadata={(e) => {
                       const el = e.currentTarget;
@@ -1103,7 +1671,7 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
                   </Field>
                 </div>
               ) : null}
-              <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />
+              {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button busy={busy === 'draft'} onClick={() => run('draft')}>
                   Save draft
@@ -1137,9 +1705,393 @@ function LtxStudio({ recall }: { recall: SavedClip | null }) {
             </Card>
             <p className="text-sm text-muted">Progress and finished videos are on the History tab.</p>
           </div>
+          {uxV5() && (
+            <div className="studio-preview">
+              <div className="flex items-center justify-between text-[13px] font-bold">
+                <span>Generation preview</span>
+                <span className="text-[11px] font-semibold text-[#9fb1a7]">Project output</span>
+              </div>
+              <div className="studio-screen">
+                {form.imageFileId ? (
+                  <img alt="" src={`/api/v1/files/${form.imageFileId}/preview`} />
+                ) : (
+                  <span className="px-6 text-center text-xs text-[#9fb1a7]">The starting image and the last finished video show here.</span>
+                )}
+              </div>
+              <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />
+              <div className="flex flex-wrap gap-2">
+                <Link href="/library" className="rounded-lg border border-[#40565a] px-2 py-1 text-[11px] font-bold">Open in Library</Link>
+                <Link href="/publishing" className="rounded-lg border border-[#40565a] px-2 py-1 text-[11px] font-bold">Prepare publishing</Link>
+              </div>
+            </div>
+          )}
+          <div className={uxV5() ? 'studio-col' : undefined}>
+            <WorkerRail workers={workers} selectedId={form.workerId} queues={queues} />
+          </div>
+          </div>
         );
       }}
     </Async>
+  );
+}
+
+function Still({
+  fileId,
+  src,
+  className,
+}: {
+  fileId?: string | null;
+  src?: string | null;
+  className?: string;
+}) {
+  const [step, setStep] = useState(0);
+  useEffect(() => setStep(0), [fileId, src]);
+  const url =
+    step === 0
+      ? src || (fileId ? `/api/v1/files/${fileId}/preview` : null)
+      : step === 1 && fileId
+        ? `/api/v1/files/${fileId}/stream`
+        : null;
+  if (!url) return null;
+  return <img alt="" src={url} className={className} onError={() => setStep((n) => n + 1)} />;
+}
+
+function clockShort(sec: number) {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function TrimBar({
+  total,
+  start,
+  length,
+  onChange,
+}: {
+  total: number;
+  start: number;
+  length: number;
+  onChange: (start: number, length: number) => void;
+}) {
+  const bar = useRef<HTMLDivElement>(null);
+  const end = Math.min(total, start + length);
+  function at(clientX: number) {
+    const rect = bar.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    return Math.min(total, Math.max(0, ((clientX - rect.left) / rect.width) * total));
+  }
+  function drag(edge: 'start' | 'end', event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const move = (ev: PointerEvent) => {
+      const point = at(ev.clientX);
+      if (edge === 'start') {
+        const next = Math.min(point, end - 0.2);
+        onChange(Math.round(next * 10) / 10, Math.round((end - next) * 10) / 10);
+      } else {
+        const next = Math.max(point, start + 0.2);
+        onChange(start, Math.round((next - start) * 10) / 10);
+      }
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+  const left = (start / total) * 100;
+  const width = (Math.max(0.2, end - start) / total) * 100;
+  return (
+    <div ref={bar} className="relative mt-2 h-8 rounded-lg bg-panel2">
+      <div className="absolute inset-y-1 rounded bg-accent/35" style={{ left: `${left}%`, width: `${width}%` }} />
+      <button
+        type="button"
+        aria-label="Trim start"
+        className="absolute top-1 h-6 w-3 -translate-x-1/2 cursor-ew-resize rounded bg-accent"
+        style={{ left: `${left}%` }}
+        onPointerDown={(event) => drag('start', event)}
+      />
+      <button
+        type="button"
+        aria-label="Trim end"
+        className="absolute top-1 h-6 w-3 -translate-x-1/2 cursor-ew-resize rounded bg-accent"
+        style={{ left: `${left + width}%` }}
+        onPointerDown={(event) => drag('end', event)}
+      />
+    </div>
+  );
+}
+
+function SourceCard({
+  title,
+  detail,
+  action,
+  fileId,
+  image,
+  onAction,
+  onPlay,
+  playing,
+}: {
+  title: string;
+  detail: string;
+  action: string;
+  fileId?: string | null;
+  image?: string | null;
+  onAction: () => void;
+  onPlay?: () => void;
+  playing?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 gap-2 rounded-xl border border-border p-2">
+      <div className="relative grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-panel2 text-lg">
+        {fileId || image ? (
+          <Still fileId={fileId} src={image} className="h-full w-full object-cover" />
+        ) : (
+          <span aria-hidden>{onPlay ? '♪' : '▣'}</span>
+        )}
+        {onPlay ? (
+          <button
+            type="button"
+            aria-label={playing ? 'Pause audio' : 'Play the selected part'}
+            className="absolute inset-0 grid place-items-center"
+            onClick={onPlay}
+          >
+            <span className="grid size-7 place-items-center rounded-full bg-black/60 text-[11px] text-white">{playing ? '❚❚' : '▶'}</span>
+          </button>
+        ) : null}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold" title={title}>
+          {title}
+        </div>
+        <div className="truncate text-[11px] text-muted">{detail}</div>
+        <button type="button" className="mt-1 text-xs font-semibold text-accent" onClick={onAction}>
+          {action}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResultLines({ result }: { result: CheckResult }) {
+  return (
+    <div className="space-y-1 text-sm">
+      {result.prompted ? <p>Sent to the PC. This page updates when the video is ready.</p> : null}
+      {result.loaded ? <p>Loaded from history. Change anything, then press Generate.</p> : null}
+      {result.ok && !result.prompted && !result.blockReason && !result.loaded ? <p>Saved.</p> : null}
+      {result.blockReason ? <p>{result.blockReason}</p> : null}
+      {result.errors?.map((item) => (
+        <p key={item.field + item.message} className="text-bad">
+          {item.message}
+        </p>
+      ))}
+      {result.warnings?.map((item) => (
+        <p key={item.field + item.message} className="text-muted">
+          {item.message}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function StudioResult({
+  stageRef,
+  kind,
+  tag,
+  ratio,
+  job,
+  other,
+  fallback,
+  onHistory,
+  onPick,
+  onReuse,
+}: {
+  stageRef: RefObject<HTMLDivElement | null>;
+  kind: 'video' | 'audio';
+  tag: string;
+  ratio: string;
+  job: Studio['jobs'][number] | null;
+  other: Studio['jobs'][number] | null;
+  fallback?: string | null;
+  onHistory: () => void;
+  onPick: (id: string) => void;
+  onReuse?: () => void;
+}) {
+  const fileId = job?.files?.find((file) => file.fileId)?.fileId ?? null;
+  const [trim, setTrim] = useState(false);
+  const ready = job?.status === 'SUCCEEDED';
+  const shape = kind === 'video' ? phoneShape(ratio) : null;
+  const picture = (
+    <>
+      {ready && kind === 'video' ? (
+        <video className="studio-picture" controls playsInline preload="metadata" src={`/api/v1/comfy/jobs/${job.id}/video`} />
+      ) : ready && kind === 'audio' ? (
+        <audio className="w-full" controls src={`/api/v1/comfy/jobs/${job.id}/audio`} />
+      ) : fallback || job?.settings.imageFileId ? (
+        <Still fileId={job?.settings.imageFileId ?? null} src={fallback} className="studio-picture" />
+      ) : (
+        <p className="grid min-h-40 place-items-center text-center text-xs text-muted">The last result for this tab shows here.</p>
+      )}
+    </>
+  );
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Preview & iterations</h2>
+        <div className="flex gap-2">
+          <button type="button" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold" onClick={() => stageRef.current?.requestFullscreen?.()}>
+            Fullscreen
+          </button>
+          <button type="button" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold" onClick={onHistory}>
+            Jobs
+          </button>
+        </div>
+      </div>
+      <div className="rounded-2xl border border-border bg-panel2 p-3">
+        <div className="mb-2 flex items-center justify-between text-[10px] font-semibold tracking-wide text-muted">
+          <span>LATEST RESULT · {tag}</span>
+          <span>Fit to canvas · {ratio}</span>
+        </div>
+        <div ref={stageRef} className="studio-stage relative w-full">
+          <button
+            type="button"
+            className="studio-stage-close"
+            aria-label="Close fullscreen"
+            onClick={() => {
+              const doc = document as Document & { webkitExitFullscreen?: () => void };
+              if (document.fullscreenElement) void document.exitFullscreen();
+              else doc.webkitExitFullscreen?.();
+            }}
+          >
+            <span aria-hidden>×</span>
+          </button>
+          {shape && (ready || fallback || job?.settings.imageFileId) ? (
+            <div className={shape === 'tall' ? 'studio-phone' : `studio-phone is-${shape}`}>
+              <span className="studio-island" aria-hidden />
+              {picture}
+            </div>
+          ) : (
+            picture
+          )}
+          {job && job.status !== 'SUCCEEDED' ? (
+            <p className="mt-2 text-xs text-muted">
+              {jobLabel(job.status, job.settings.progress)}
+              {job.settings.progress?.phase ? '' : job.settings.progress?.detail ? ` · ${job.settings.progress.detail}` : ''}
+              {job.error ? ` · ${job.error}` : ''}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <div>
+        <div className="mb-2 text-sm font-semibold">Recent in this tab</div>
+        {job ? (
+          <div className="grid grid-cols-2 gap-2">
+            {[job, other].filter(Boolean).map((item) => (
+              <button
+                key={item!.id}
+                type="button"
+                className={clsxCard(item!.id === job.id)}
+                onClick={() => onPick(item!.id)}
+              >
+                <div className="truncate text-xs font-semibold">{item!.projectTitle || item!.settings.projectTitle || tag}</div>
+                <div className="text-[11px] text-muted">
+                  {ago(item!.createdAt)} · {jobLabel(item!.status, item!.settings.progress)}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted">Nothing generated on this tab yet.</p>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Link href={fileId ? `/library?file=${fileId}` : '/library'} className="cursor-pointer rounded-lg border border-border px-2 py-1 text-[11px] font-semibold">
+          Open in Library
+        </Link>
+        <Link href="/publishing" className="cursor-pointer rounded-lg border border-border px-2 py-1 text-[11px] font-semibold">
+          Prepare publishing
+        </Link>
+        {fileId && kind === 'video' ? (
+          <button type="button" className="cursor-pointer rounded-lg border border-border px-2 py-1 text-[11px] font-semibold" onClick={() => setTrim(true)}>
+            Edit video
+          </button>
+        ) : null}
+        {onReuse ? (
+          <button type="button" className="cursor-pointer rounded-lg border border-border px-2 py-1 text-[11px] font-semibold" disabled={!job} onClick={onReuse}>
+            Reuse settings
+          </button>
+        ) : null}
+        <button type="button" className="cursor-pointer rounded-lg border border-border px-2 py-1 text-[11px] font-semibold disabled:cursor-not-allowed" disabled={!other} onClick={() => other && onPick(other.id)}>
+          Compare
+        </button>
+      </div>
+      {trim && fileId ? <VideoTrim fileId={fileId} projectId={job?.projectId ?? null} onClose={() => setTrim(false)} /> : null}
+    </div>
+  );
+}
+
+function clsxCard(on: boolean) {
+  return `cursor-pointer rounded-xl border px-2 py-2 text-left ${on ? 'border-accent' : 'border-border'}`;
+}
+
+function SizePick({
+  label,
+  rows,
+  width,
+  height,
+  onPick,
+}: {
+  label: string;
+  rows: [string, number, number][];
+  width: number;
+  height: number;
+  onPick: (width: number, height: number) => void;
+}) {
+  const match = rows.find(([, w, h]) => w === width && h === height);
+  const [choice, setChoice] = useState<string | null>(null);
+  const value = choice ?? (match ? match[0] : 'custom');
+  return (
+    <div className="space-y-2">
+      <Field label={label}>
+        <Select
+          value={value}
+          onChange={(e) => {
+            const next = e.target.value;
+            setChoice(next);
+            const row = rows.find((item) => item[0] === next);
+            if (row) onPick(row[1], row[2]);
+          }}
+        >
+          {rows.map(([name, w, h]) => (
+            <option key={name} value={name}>
+              {name} · {w}×{h}
+            </option>
+          ))}
+          <option value="custom">Custom</option>
+        </Select>
+      </Field>
+      {value === 'custom' ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Width">
+            <LooseNumber
+              value={width}
+              onValue={(next) => {
+                setChoice('custom');
+                onPick(next, height);
+              }}
+            />
+          </Field>
+          <Field label="Height">
+            <LooseNumber
+              value={height}
+              onValue={(next) => {
+                setChoice('custom');
+                onPick(width, next);
+              }}
+            />
+          </Field>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1199,7 +2151,6 @@ function LibraryFileOnPage({ id, onClose }: { id: string; onClose: () => void })
     effectiveAvailability?: string;
     copyPaths?: { local?: string | null };
   }>(`/files/${id}`);
-  const [trim, setTrim] = useState(false);
   const file = res.data;
   return (
     <Dialog open onClose={onClose} title={file?.fileName ?? 'Library file'} wide>
@@ -1207,25 +2158,16 @@ function LibraryFileOnPage({ id, onClose }: { id: string; onClose: () => void })
         {(row) => (
           <div className="space-y-3 text-sm">
             {row.fileType === 'VIDEO' ? (
-              <video className="max-h-80 w-full rounded-lg bg-black" controls preload="metadata" src={`/api/v1/files/${id}/stream`} />
+              <VideoThumb fileId={id} className="max-h-80 w-full" />
             ) : null}
             {row.fileType === 'AUDIO' ? <audio className="w-full" controls src={`/api/v1/files/${id}/stream`} /> : null}
             {row.fileType === 'IMAGE' ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img alt="" className="max-h-64 rounded-lg" src={`/api/v1/files/${id}/preview`} />
+              <SizedFrame fileId={id} kind="IMAGE" online={row.effectiveAvailability === 'AVAILABLE'} />
             ) : null}
             <p className="break-all text-xs text-muted">{row.copyPaths?.local || row.displayPath || 'Path is on the PC that holds this file.'}</p>
             {row.effectiveAvailability === 'AVAILABLE' ? (
-              <div className="flex flex-wrap gap-2">
-                <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={row.fileName} />
-                {row.fileType === 'VIDEO' ? (
-                  <Button size="sm" onClick={() => setTrim(true)}>
-                    Edit video
-                  </Button>
-                ) : null}
-              </div>
+              <FileDownload href={`/api/v1/files/${id}/stream?download=1`} name={row.fileName} />
             ) : null}
-            {trim ? <VideoTrim fileId={id} onClose={() => setTrim(false)} /> : null}
           </div>
         )}
       </Async>
@@ -1239,6 +2181,7 @@ function FilePick({
   selected,
   uploaded,
   busy,
+  quiet = false,
   onSelect,
   onUpload,
 }: {
@@ -1247,6 +2190,7 @@ function FilePick({
   selected: string | null;
   uploaded?: boolean;
   busy?: boolean;
+  quiet?: boolean;
   onSelect: (file: { id: string; fileName: string; tech?: { durationMs?: number } }) => void;
   onUpload: (file: File) => void;
 }) {
@@ -1258,9 +2202,11 @@ function FilePick({
     <Field
       label={label}
       hint={
-        selected
-          ? `${uploaded ? 'Uploaded to the PC' : 'From the library'}: ${selected}`
-          : 'Search the library, or upload a file onto the PC you picked.'
+        quiet
+          ? undefined
+          : selected
+            ? `${uploaded ? 'Uploaded to the PC' : 'From the library'}: ${selected}`
+            : 'Search the library, or upload a file onto the PC you picked.'
       }
     >
       <Input value={q} placeholder={kind === 'IMAGE' ? 'Search images' : 'Search audio'} onChange={(e) => setQ(e.target.value)} />
@@ -1296,9 +2242,13 @@ function FilePick({
 function ProjectPick({
   value,
   onChange,
+  compact = false,
+  quiet = false,
 }: {
   value: string | null;
   onChange: (id: string | null) => void;
+  compact?: boolean;
+  quiet?: boolean;
 }) {
   const projects = useApi<{ id: string; title: string }[]>('/projects', { query: { limit: 200 } });
   const [creating, setCreating] = useState(false);
@@ -1308,9 +2258,11 @@ function ProjectPick({
   const [error, setError] = useState('');
   const listed = Array.isArray(projects.data) ? projects.data : [];
   const rows = [...made.filter((item) => !listed.some((p) => p.id === item.id)), ...listed];
-  return (
-    <Field label="Project" hint="Empty leaves Production and Publishing alone. A later clip on the same project joins the publishing row that is already there.">
+  const control = (
+    <>
       <Select
+        aria-label="Project"
+        className={compact ? 'max-w-52' : undefined}
         value={creating ? '__new__' : (value ?? '')}
         onChange={(e) => {
           if (e.target.value === '__new__') {
@@ -1368,6 +2320,19 @@ function ProjectPick({
         </div>
       ) : null}
       {error ? <p className="mt-1 text-xs text-bad">{error}</p> : null}
+    </>
+  );
+  if (compact) {
+    return (
+      <label className="flex min-w-0 items-center gap-2 text-sm">
+        <span className="text-muted">Project</span>
+        {control}
+      </label>
+    );
+  }
+  return (
+    <Field label="Project" hint={quiet ? undefined : 'Empty leaves Production and Publishing alone. A later clip on the same project joins the publishing row that is already there.'}>
+      {control}
     </Field>
   );
 }
@@ -1391,7 +2356,7 @@ function LastOnMachine({
       {job ? (
         <div className="mt-2 space-y-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={job.status === 'SUCCEEDED' ? 'ok' : job.status === 'FAILED' ? 'bad' : 'info'}>{jobLabel(job.status)}</Badge>
+            <Badge tone={job.status === 'SUCCEEDED' ? 'ok' : job.status === 'FAILED' ? 'bad' : job.status === 'RUNNING' && job.settings.progress?.phase !== 'waiting' ? 'info' : 'warn'}>{jobLabel(job.status, job.settings.progress)}</Badge>
             <span className="text-muted">{ago(job.createdAt)}</span>
           </div>
           {job.status === 'QUEUED' || job.status === 'RUNNING' ? (
@@ -1400,7 +2365,7 @@ function LastOnMachine({
           {job.error ? <p className="text-bad">{job.error}</p> : null}
           {job.status === 'SUCCEEDED' ? (
             kind === 'video' ? (
-              <video className="w-full max-w-sm rounded-lg" controls src={`/api/v1/comfy/jobs/${job.id}/video`} />
+              <VideoThumb src={`/api/v1/comfy/jobs/${job.id}/video`} className="w-full max-w-sm" />
             ) : (
               <audio className="w-full" controls src={`/api/v1/comfy/jobs/${job.id}/audio`} />
             )
@@ -1418,7 +2383,7 @@ function LastOnMachine({
   );
 }
 
-function AudioTab() {
+function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
   const studio = useApi<{
     ready: boolean;
     blockReason: string | null;
@@ -1490,6 +2455,8 @@ function AudioTab() {
   }, [running]);
 
   const set = (patch: Partial<NonNullable<typeof form>>) => setForm((f) => (f ? { ...f, ...patch } : f));
+  const audioStage = useRef<HTMLDivElement>(null);
+  const [audioPreview, setAudioPreview] = useState<string | null>(null);
 
   async function upload(file: File) {
     if (!form?.workerId) {
@@ -1539,7 +2506,150 @@ function AudioTab() {
           referenceText: form.referenceText,
           targetText: form.targetText,
         };
+        if (uxV5()) {
+          const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+          const shown = recent.find((job) => job.id === audioPreview) ?? recent[0] ?? null;
+          const other = recent.find((job) => job.id !== shown?.id) ?? null;
+          return (
+            <StudioSplit
+              left={
+                <div className="space-y-3">
+                  {data.blockReason ? <Notice tone="warn">{data.blockReason}</Notice> : null}
+                  <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} quiet />
+                  <Field label="Run on">
+                    <div className="flex items-center gap-2">
+                      <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
+                      <Select
+                        className="min-w-0 flex-1"
+                        aria-label="PC"
+                        value={form.workerId ?? ''}
+                        onChange={(e) => {
+                          const id = e.target.value || null;
+                          try {
+                            if (id) localStorage.setItem('cos-qwen-worker', id);
+                          } catch {
+                            /* private mode */
+                          }
+                          set({ workerId: id });
+                        }}
+                      >
+                        <option value="">Choose a PC</option>
+                        {workers.map((worker) => {
+                          const state = queues[worker.id] ?? worker.queue;
+                          return (
+                            <option key={worker.id} value={worker.id}>
+                              {gpuTitle(worker)}
+                              {state === 'busy' ? ' — busy' : state === 'offline' ? ' — offline' : ''}
+                            </option>
+                          );
+                        })}
+                      </Select>
+                    </div>
+                  </Field>
+                  <Field label="Reference audio">
+                    <Select
+                      value={form.useBuiltin ? form.builtinClip : 'own'}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value === 'own') {
+                          set({ useBuiltin: false });
+                          return;
+                        }
+                        const clip = (data.defaults.clips ?? []).find((item) => item.file === value);
+                        set({ useBuiltin: true, builtinClip: value, referenceText: clip?.referenceText ?? form.referenceText });
+                      }}
+                    >
+                      {(data.defaults.clips ?? [{ file: data.defaults.builtinName, label: data.defaults.builtinName, referenceText: '' }]).map((clip) => (
+                        <option key={clip.file} value={clip.file}>
+                          {clip.label}
+                        </option>
+                      ))}
+                      <option value="own">A file I choose</option>
+                    </Select>
+                  </Field>
+                  {!form.useBuiltin ? (
+                    <FilePick
+                      kind="AUDIO"
+                      label="Reference clip"
+                      quiet
+                      selected={form.audioName}
+                      uploaded={!!form.audioUploadName}
+                      busy={busy === 'upload'}
+                      onSelect={(file) =>
+                        set({
+                          useBuiltin: false,
+                          audioFileId: file.id,
+                          audioUploadName: null,
+                          audioUploadWorkerId: null,
+                          audioName: file.fileName,
+                        })
+                      }
+                      onUpload={(file) => void upload(file)}
+                    />
+                  ) : null}
+                  <Field label="Text in that audio">
+                    <Textarea rows={4} value={form.referenceText} onChange={(e) => set({ referenceText: e.target.value })} />
+                  </Field>
+                  <Field label="What to say">
+                    <Textarea rows={4} value={form.targetText} onChange={(e) => set({ targetText: e.target.value })} />
+                  </Field>
+                  <div className="flex justify-end gap-2 border-t border-border pt-3">
+                    <Button
+                      busy={busy === 'draft'}
+                      onClick={async () => {
+                        setBusy('draft');
+                        setError('');
+                        try {
+                          await put('/comfy/audio/draft', payload);
+                        } catch (e) {
+                          setError(e instanceof ApiError ? e.message : 'That did not save.');
+                        } finally {
+                          setBusy(null);
+                        }
+                      }}
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="primary"
+                      busy={busy === 'generate'}
+                      onClick={async () => {
+                        setBusy('generate');
+                        setError('');
+                        try {
+                          await post('/comfy/audio/generate', payload);
+                          if (form.workerId) setQueues((q) => ({ ...q, [form.workerId!]: 'busy' }));
+                          await refresh('/comfy/audio');
+                        } catch (e) {
+                          setError(e instanceof ApiError ? e.message : 'The voice was not started.');
+                        } finally {
+                          setBusy(null);
+                        }
+                      }}
+                    >
+                      Generate
+                    </Button>
+                  </div>
+                  {error ? <p className="text-sm text-bad">{error}</p> : null}
+                </div>
+              }
+              right={
+                <StudioResult
+                  stageRef={audioStage}
+                  kind="audio"
+                  tag="Audio"
+                  ratio="Voice"
+                  job={shown}
+                  other={other}
+                  onHistory={onHistory}
+                  onPick={setAudioPreview}
+                />
+              }
+            />
+          );
+        }
         return (
+          <div>
           <Card>
             <CardTitle>Voice</CardTitle>
             <p className="mb-3 text-sm text-muted">
@@ -1627,7 +2737,7 @@ function AudioTab() {
             <Field label="What to say" className="mt-3">
               <Textarea rows={5} value={form.targetText} onChange={(e) => set({ targetText: e.target.value })} />
             </Field>
-            <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="audio" />
+            {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="audio" />}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 busy={busy === 'draft'}
@@ -1667,6 +2777,7 @@ function AudioTab() {
             </div>
             {error ? <p className="mt-3 text-sm text-bad">{error}</p> : null}
           </Card>
+          </div>
         );
       }}
     </Async>
@@ -1779,7 +2890,7 @@ function blankH3Clip(prompt: string, continuity: H3Join): H3Clip {
   };
 }
 
-function H3Tab() {
+function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
   const studio = useApi<{
     ready: boolean;
     blockReason: string | null;
@@ -1817,6 +2928,8 @@ function H3Tab() {
   const [queues, setQueues] = usePcQueue(form?.workerId ?? null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const h3Stage = useRef<HTMLDivElement>(null);
+  const [h3Preview, setH3Preview] = useState<string | null>(null);
   const photos = useApi<{ items: { id: string; fileName: string }[] }>(browser ? '/library' : null, {
     query: { kind: 'IMAGE', q: photoQ, limit: 40 },
   });
@@ -1994,18 +3107,31 @@ function H3Tab() {
             })),
           })),
         };
-        return (
-          <Card>
+        const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+        const shown = recent.find((job) => job.id === h3Preview) ?? recent[0] ?? null;
+        const other = recent.find((job) => job.id !== shown?.id) ?? null;
+        const formPane = (
+          <div>
+          {!uxV5() && (
+            <>
             <CardTitle>MiniMax H3</CardTitle>
             <p className="mb-3 text-sm text-muted">
               A timeline of segments. The first one is a new shot. Later ones can continue it. Generate sends the whole timeline. Nothing starts until then.
             </p>
+            </>
+          )}
             {data.blockReason ? (
               <div className="mb-3">
                 <Notice tone="warn">{data.blockReason}</Notice>
               </div>
             ) : null}
-            <Field label="Run on" hint="Green is free. Red is rendering. Choosing a PC checks it again.">
+            <div className={uxV5() ? 'studio-quad mb-3' : 'mb-3 grid gap-3 sm:grid-cols-2'}>
+            <ProjectPick
+              value={form.projectId}
+              onChange={(projectId) => setForm((current) => (current ? { ...current, projectId } : current))}
+              quiet={uxV5()}
+            />
+            <Field label="Run on" hint={uxV5() ? undefined : 'Green is free. Red is rendering. Choosing a PC checks it again.'}>
               <div className="flex items-center gap-2">
                 <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
                 <Select
@@ -2031,7 +3157,6 @@ function H3Tab() {
                 </Select>
               </div>
             </Field>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <Field label="Aspect">
                 <Select
                   value={form.aspectRatio}
@@ -2044,7 +3169,7 @@ function H3Tab() {
                   ))}
                 </Select>
               </Field>
-              <Field label="Megapixels" hint="MiniMax · 24 fps. The frame size comes from the aspect and this size.">
+              <Field label="Megapixels" hint={uxV5() ? undefined : 'MiniMax · 24 fps. The frame size comes from the aspect and this size.'}>
                 <Select
                   value={String(form.megapixels)}
                   onChange={(e) => setForm((current) => (current ? { ...current, megapixels: Number(e.target.value) } : current))}
@@ -2054,12 +3179,6 @@ function H3Tab() {
                   <option value="1.5">1.5</option>
                 </Select>
               </Field>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <ProjectPick
-                value={form.projectId}
-                onChange={(projectId) => setForm((current) => (current ? { ...current, projectId } : current))}
-              />
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[240px_1fr]">
               <div className="rounded-lg border border-border bg-black p-2">
@@ -2189,7 +3308,7 @@ function H3Tab() {
                 <p className="mt-1 text-xs text-muted">Picture 1 is the first photo. The words &lt;Picture 1&gt; in the prompt point at that photo.</p>
               </div>
             </div>
-            <div className="mt-3 flex flex-wrap items-end gap-2">
+            <div className="mt-3 flex gap-2">
               <Button
                 variant={form.view === 'individual' ? 'primary' : 'ghost'}
                 onClick={() => setForm((current) => (current ? { ...current, view: 'individual' } : current))}
@@ -2219,9 +3338,11 @@ function H3Tab() {
               >
                 Combined
               </Button>
+            </div>
+            <div className="studio-clip mt-3">
               <Field label="Length" hint="00:08:00 is 8 seconds. The boxes are minutes, seconds, then frames.">
                 <Input
-                  className="w-32 font-mono"
+                  className="font-mono"
                   inputMode="numeric"
                   placeholder="00:00:00"
                   value={clip.durationSec}
@@ -2451,7 +3572,7 @@ function H3Tab() {
                 </div>
               </div>
             </Dialog>
-            <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />
+            {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 busy={busy === 'draft'}
@@ -2490,8 +3611,29 @@ function H3Tab() {
               </Button>
             </div>
             {error ? <p className="mt-3 text-sm text-bad">{error}</p> : null}
-          </Card>
+          {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
+          </div>
         );
+        if (uxV5()) {
+          return (
+            <StudioSplit
+              left={formPane}
+              right={
+                <StudioResult
+                  stageRef={h3Stage}
+                  kind="video"
+                  tag="MiniMax"
+                  ratio={form.aspectRatio}
+                  job={shown}
+                  other={other}
+                  onHistory={onHistory}
+                  onPick={setH3Preview}
+                />
+              }
+            />
+          );
+        }
+        return formPane;
       }}
     </Async>
   );

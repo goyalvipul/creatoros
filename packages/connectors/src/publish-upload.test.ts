@@ -3,6 +3,9 @@ import {
   UploadOutcome,
   uploadFacebookVideo,
   uploadInstagramReel,
+  tiktokChunkPlan,
+  uploadThreadsPost,
+  uploadTikTokVideo,
   uploadYoutubeVideo,
   youtubeUploadText,
 } from './publish-upload';
@@ -170,5 +173,91 @@ describe('uploadInstagramReel', () => {
     expect(new URL(calls.find((u) => u.includes('media_publish'))!).searchParams.get('creation_id')).toBe('container');
     expect(result.externalId).toBe('post1');
     expect(result.url).toBe('https://www.instagram.com/reel/AbC123/');
+  });
+});
+
+describe('uploadThreadsPost', () => {
+  it('creates a video container, waits until Threads finishes, then publishes', async () => {
+    const bodies: string[] = [];
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      if (init?.body) bodies.push(String(init.body));
+      if (String(url).endsWith('/threads')) return new Response(JSON.stringify({ id: 'container' }));
+      if (String(url).includes('fields=status')) return new Response(JSON.stringify({ status: 'FINISHED' }));
+      if (String(url).endsWith('/threads_publish')) return new Response(JSON.stringify({ id: 'post1' }));
+      return new Response(JSON.stringify({ permalink: 'https://www.threads.net/t/AbC123' }));
+    };
+    const result = await uploadThreadsPost(fetchImpl, {
+      userId: 'user',
+      accessToken: 'token',
+      mediaType: 'VIDEO',
+      mediaUrl: 'https://os.example/api/v1/files/file/stream?token=abc',
+      text: 'hello',
+      topicTag: 'newsong',
+      replyControl: 'everyone',
+      madeWithAi: true,
+    });
+    const start = new URLSearchParams(bodies[0]);
+    expect(start.get('media_type')).toBe('VIDEO');
+    expect(start.get('video_url')).toBe('https://os.example/api/v1/files/file/stream?token=abc');
+    expect(start.get('text')).toBe('hello');
+    expect(start.get('topic_tag')).toBe('newsong');
+    expect(start.get('reply_control')).toBe('everyone');
+    expect(start.get('is_made_with_ai')).toBe('true');
+    expect(new URLSearchParams(bodies[1]).get('creation_id')).toBe('container');
+    expect(result).toEqual({ externalId: 'post1', url: 'https://www.threads.net/t/AbC123' });
+  });
+});
+
+describe('uploadTikTokVideo', () => {
+  it('splits a large file the way TikTok counts chunks, then uploads the whole file as one request when it fits', () => {
+    expect(tiktokChunkPlan(50_000_123)).toEqual({ chunkSize: 50_000_123, totalChunkCount: 1 });
+    expect(tiktokChunkPlan(70_000_000)).toEqual({ chunkSize: 10_000_000, totalChunkCount: 7 });
+    expect(tiktokChunkPlan(4_000_000)).toEqual({ chunkSize: 4_000_000, totalChunkCount: 1 });
+  });
+
+  it('uploads the file bytes and waits until TikTok says the post is public', async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const seen: { url: string; method?: string; body?: string; range?: string }[] = [];
+    const fetchImpl = async (url: string, init?: RequestInit) => {
+      seen.push({
+        url: String(url),
+        method: init?.method,
+        body: typeof init?.body === 'string' ? init.body : undefined,
+        range: new Headers(init?.headers).get('content-range') ?? undefined,
+      });
+      if (String(url).endsWith('/video/init/')) {
+        return new Response(
+          JSON.stringify({
+            data: { publish_id: 'pub1', upload_url: 'https://upload.example/video' },
+            error: { code: 'ok', message: '' },
+          }),
+        );
+      }
+      if (String(url).includes('upload.example')) return new Response(null, { status: 201 });
+      return new Response(
+        JSON.stringify({
+          data: { status: 'PUBLISH_COMPLETE', publicaly_available_post_id: ['12345'] },
+          error: { code: 'ok', message: '' },
+        }),
+      );
+    };
+    const result = await uploadTikTokVideo(fetchImpl, {
+      accessToken: 'token',
+      file: { body: bytes, size: bytes.byteLength, mime: 'video/mp4', name: 'clip.mp4' },
+      title: 'hello #song',
+      privacyLevel: 'SELF_ONLY',
+      disableComment: false,
+      disableDuet: true,
+      disableStitch: true,
+      username: 'mehakviking',
+    });
+    const init = JSON.parse(seen[0]?.body ?? '{}') as {
+      post_info: { title: string; privacy_level: string; disable_duet: boolean };
+      source_info: { source: string; video_size: number; chunk_size: number; total_chunk_count: number };
+    };
+    expect(init.post_info).toMatchObject({ title: 'hello #song', privacy_level: 'SELF_ONLY', disable_duet: true });
+    expect(init.source_info).toEqual({ source: 'FILE_UPLOAD', video_size: 4, chunk_size: 4, total_chunk_count: 1 });
+    expect(seen[1]?.range).toBe('bytes 0-3/4');
+    expect(result).toEqual({ externalId: '12345', url: 'https://www.tiktok.com/@mehakviking/video/12345' });
   });
 });

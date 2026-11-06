@@ -9,7 +9,9 @@
 }
 
 :80 {
-	encode zstd gzip
+	# TikTok fetches the URL-prefix file itself and rejects a changed body, a redirect, or a login page.
+	@compressible not path /tiktok0UrAw5La8GcDJDrdA5wk8dSnwzey02mT.txt
+	encode @compressible zstd gzip
 
 	header {
 		X-Content-Type-Options nosniff
@@ -21,6 +23,38 @@
 	}
 
 	# One origin for everything: /api -> Fastify, everything else -> Next.js
+	# Cloudflare cached an older /sw.js that saved every page and then failed the
+	# navigation when that save failed. These scripts never answer a request.
+	# CDN-Cache-Control tells Cloudflare not to store the next copy. The reset
+	# query is a new address, so a browser can replace the cached worker now.
+	handle /tiktok0UrAw5La8GcDJDrdA5wk8dSnwzey02mT.txt {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "no-store, no-transform"
+		header CDN-Cache-Control "no-store"
+		respond "tiktok-developers-site-verification=0UrAw5La8GcDJDrdA5wk8dSnwzey02mT" 200
+	}
+
+	handle /sw.js {
+		header Service-Worker-Allowed "/"
+		header Cache-Control "no-store, max-age=0"
+		header CDN-Cache-Control "no-store"
+		header Content-Type "application/javascript; charset=utf-8"
+		respond `self.addEventListener('install',function(e){e.waitUntil(self.skipWaiting())});self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k.indexOf('cos-')===0}).map(function(k){return caches.delete(k)}))}).then(function(){return self.clients.claim()}))});` 200
+	}
+	handle /api/sw.js {
+		header Service-Worker-Allowed "/"
+		header Cache-Control "no-store, max-age=0"
+		header CDN-Cache-Control "no-store"
+		header Content-Type "application/javascript; charset=utf-8"
+		respond `self.addEventListener('install',function(e){e.waitUntil(self.skipWaiting())});self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k.indexOf('cos-')===0}).map(function(k){return caches.delete(k)}))}).then(function(){return self.clients.claim()}))});` 200
+	}
+	handle /api/clear-site {
+		header Cache-Control "no-store, max-age=0"
+		header CDN-Cache-Control "no-store"
+		header Content-Type "text/html; charset=utf-8"
+		respond `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Clearing Kemokem</title><p id="m">Clearing the saved copy of this site. The app will open when that is done.</p><script data-cfasync="false">(function(){var m=document.getElementById('m');function fail(e){m.textContent='This tab could not clear the saved copy. Close every Kemokem window, including the installed app, then open this page again. '+(e&&e.message?e.message:'');}if(!('serviceWorker' in navigator)){location.replace('/');return;}var done=false;function go(){if(done)return;done=true;location.replace('/');}navigator.serviceWorker.addEventListener('controllerchange',function(){var c=navigator.serviceWorker.controller;if(c&&c.scriptURL.indexOf('reset=4')!==-1)go();});navigator.serviceWorker.register('/api/sw.js?reset=4',{scope:'/'}).then(function(reg){function watch(w){if(!w||w.state==='redundant'){fail(new Error('the replacement did not start'));return;}if(w.state==='activated'){var c=navigator.serviceWorker.controller;if(c&&c.scriptURL.indexOf('reset=4')!==-1)go();return;}w.addEventListener('statechange',function(){watch(w);});}watch(reg.installing||reg.waiting||reg.active);}).catch(fail);setTimeout(function(){if(!done)m.textContent='Still clearing. Close every Kemokem window, then open this page again.';},8000);})();</script></html>` 200
+	}
+
 	handle /api/* {
 		reverse_proxy api:4000 {
 			# media streaming: never buffer
@@ -54,10 +88,10 @@
 	}
 }
 
-# Restricted public gateway for Meta webhooks ONLY. Everything else answers 404, so exposing this port (for example with
+# Restricted public gateway for signed webhooks only. Everything else answers 404, so exposing this port (for example with
 # `tailscale funnel --bg --https=10000 http://127.0.0.1:8081`) never exposes the dashboard or the rest of the API.
 :8081 {
-	@webhook path /api/v1/integrations/meta/instagram/webhook /api/v1/integrations/meta/facebook/webhook
+	@webhook path /api/v1/integrations/meta/instagram/webhook /api/v1/integrations/meta/facebook/webhook /api/v1/integrations/tiktok/webhook
 	handle @webhook {
 		request_body {
 			max_size 256KB

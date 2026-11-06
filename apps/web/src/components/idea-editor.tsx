@@ -8,6 +8,7 @@ import { Button, ErrorNote, Field, Input, Options, PageHeader, Select, Spinner }
 import { patch, post, refresh, useApi } from '@/lib/api';
 import { blankIdea, clearIdeaDraft, readIdeaDraft, writeIdeaDraft, type IdeaFormState } from '@/lib/idea-draft';
 import { IDEA_FORMATS, PRIORITIES, useBrands } from '@/lib/options';
+import { uxV5 } from '@/components/ux-v5-flag';
 
 function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -87,7 +88,7 @@ export function IdeaEditor({ ideaId }: { ideaId: string }) {
 
   return (
     <form
-      className="mx-auto max-w-3xl space-y-4"
+      className={uxV5() ? 'mx-auto max-w-4xl space-y-4' : 'mx-auto max-w-3xl space-y-4'}
       onSubmit={(e) => {
         e.preventDefault();
         void save();

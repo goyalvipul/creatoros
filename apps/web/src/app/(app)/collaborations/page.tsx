@@ -283,29 +283,34 @@ function Inbox() {
   const reload = () => refresh('/threads', '/mail', '/actions', '/briefing');
   return (
     <>
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Select aria-label="Mailbox" value={account} onChange={(e) => setAccount(e.target.value)}>
-          <option value="">All mailboxes</option>
-          {(accounts.data?.accounts ?? []).map((a: any) => (
-            <option key={a.id} value={a.id}>
-              {a.label}
-              {a.counts?.needReply ? ` (${a.counts.needReply} to reply)` : ''}
-            </option>
-          ))}
-        </Select>
-        <Select aria-label="Reply state" value={state} onChange={(e) => setState(e.target.value)}>
-          <Options
-            values={['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE']}
-            none="Any reply state"
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="w-full min-w-0 sm:w-52 sm:shrink-0">
+          <Select aria-label="Mailbox" value={account} onChange={(e) => setAccount(e.target.value)}>
+            <option value="">All mailboxes</option>
+            {(accounts.data?.accounts ?? []).map((a: any) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+                {a.counts?.needReply ? ` (${a.counts.needReply} to reply)` : ''}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="w-full min-w-0 sm:w-44 sm:shrink-0">
+          <Select aria-label="Reply state" value={state} onChange={(e) => setState(e.target.value)}>
+            <Options
+              values={['NEED_REPLY', 'WAITING_FOR_BRAND', 'WAITING_FOR_USER', 'DONE']}
+              none="Any reply state"
+            />
+          </Select>
+        </div>
+        <div className="min-w-48 flex-1">
+          <Input
+            aria-label="Search mail"
+            placeholder="Search subject, sender or text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
           />
-        </Select>
-        <Input
-          aria-label="Search mail"
-          placeholder="Search subject, sender or text"
-          className="min-w-48 flex-1"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+        </div>
       </div>
       {(triage === 'POSSIBLE' || linked === 'deal') && (
         <div className="mb-3">

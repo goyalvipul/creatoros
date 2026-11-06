@@ -18,22 +18,28 @@ import {
 } from 'lucide-react';
 
 export const NAV = [
-  { href: '/', label: 'Home', icon: Home },
-  { href: '/today', label: 'Inbox & Today', icon: Inbox },
-  { href: '/content', label: 'Content', icon: Lightbulb },
-  { href: '/production', label: 'Production', icon: Clapperboard },
-  { href: '/comfy', label: 'ComfyUI', icon: Cpu },
-  { href: '/library', label: 'Library', icon: FolderKanban },
-  { href: '/publishing', label: 'Publishing', icon: Share2 },
-  { href: '/calendar', label: 'Calendar', icon: CalendarDays },
-  { href: '/collaborations', label: 'Collaborations', icon: Handshake },
-  { href: '/socials', label: 'Socials', icon: MessagesSquare },
-  { href: '/workflows', label: 'Workflows', icon: Workflow },
-  { href: '/analytics', label: 'Analytics', icon: LineChart },
-  { href: '/channels', label: 'Channels', icon: Layers },
-  { href: '/storage', label: 'Storage & Devices', icon: HardDrive },
-  { href: '/integrations', label: 'Integrations', icon: Plug },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/', label: 'Home', v5: 'Today', group: 'work', icon: Home },
+  { href: '/today', label: 'Inbox & Today', v5: 'Inbox & Tasks', group: 'work', icon: Inbox },
+  { href: '/content', label: 'Content', v5: 'Content', group: 'work', icon: Lightbulb },
+  { href: '/production', label: 'Production', v5: 'Production', group: 'work', icon: Clapperboard },
+  { href: '/comfy', label: 'ComfyUI', v5: 'Create Studio', group: 'work', icon: Cpu },
+  { href: '/library', label: 'Library', v5: 'Library', group: 'work', icon: FolderKanban },
+  { href: '/publishing', label: 'Publishing', v5: 'Publishing', group: 'work', icon: Share2 },
+  { href: '/calendar', label: 'Calendar', v5: 'Calendar', group: 'work', icon: CalendarDays },
+  { href: '/collaborations', label: 'Collaborations', v5: 'Collaborations', group: 'grow', icon: Handshake },
+  { href: '/socials', label: 'Socials', v5: 'Socials', group: 'grow', icon: MessagesSquare },
+  { href: '/workflows', label: 'Workflows', v5: 'Workflows', group: 'grow', icon: Workflow },
+  { href: '/analytics', label: 'Analytics', v5: 'Analytics', group: 'grow', icon: LineChart },
+  { href: '/channels', label: 'Channels', v5: 'Channels', group: 'system', icon: Layers },
+  { href: '/storage', label: 'Storage & Devices', v5: 'Storage & Devices', group: 'system', icon: HardDrive },
+  { href: '/integrations', label: 'Integrations', v5: 'Integrations', group: 'system', icon: Plug },
+  { href: '/settings', label: 'Settings', v5: 'Settings', group: 'system', icon: Settings },
+] as const;
+
+export const NAV_GROUPS = [
+  { id: 'work', label: 'Your work' },
+  { id: 'grow', label: 'Grow & operate' },
+  { id: 'system', label: 'System & settings' },
 ] as const;
 
 /** Only the owner can open these. Editors and viewers keep Home, Inbox & Today, Content, Production and Library. */

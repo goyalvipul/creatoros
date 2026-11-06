@@ -3,9 +3,10 @@
 import clsx from 'clsx';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
-import { Async, Badge, Button, Card, EmptyState, PageHeader, StateBadge } from '@/components/ui';
+import { Async, Button, Card, EmptyState, PageHeader, StateBadge } from '@/components/ui';
 import { useApi } from '@/lib/api';
-import { parseDate, title as titleCase } from '@/lib/format';
+import { parseDate } from '@/lib/format';
+import { PlatformLogo } from '@/components/platform-logo';
 
 function postLabel(item: { title?: string | null; caption?: string | null; fileName?: string | null }) {
   const title = item.title?.trim();
@@ -138,7 +139,7 @@ export default function CalendarPage() {
                       <li key={x.id} className="rounded-lg border border-border p-2 text-sm">
                         <div className="font-medium">{postLabel(x)}</div>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <Badge>{titleCase(x.platform)}</Badge>
+                          <PlatformLogo platform={x.platform} className="size-4" />
                           <span className="text-xs text-muted">{x.handle}</span>
                           <StateBadge state={x.state} />
                         </div>

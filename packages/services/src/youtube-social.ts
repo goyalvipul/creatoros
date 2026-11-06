@@ -9,6 +9,7 @@ import {
 import { autoReconcileConnection } from './identity';
 import { connectorContext } from './integrations';
 import { ingestSocialEvent } from './social';
+import { processSocialEvent } from './workflows';
 import { AppError, notFound, type Ctx } from './types';
 import { and } from '@creatoros/db';
 
@@ -50,9 +51,18 @@ async function ensureChannel(ctx: Ctx, conn: Conn, cctx: ConnectorContext) {
   return ch.channelId;
 }
 
+/** A comment can start a workflow only after one successful import. The first import is the backlog. */
+export function youtubeCommentIsLive(publishedAt: string, liveAfter: string | null | undefined): boolean {
+  if (!liveAfter) return false;
+  const published = new Date(publishedAt).getTime();
+  const cutoff = new Date(liveAfter).getTime();
+  return Number.isFinite(published) && Number.isFinite(cutoff) && published > cutoff;
+}
+
 /**
  * Imports comment threads (and your replies) for the whole channel into the Socials inbox. Read only, polling
- * (YouTube has no comment webhooks), historical (never triggers automation).
+ * (YouTube has no comment webhooks). The first successful import is historical. A later comment, newer than
+ * that import's start, is treated as live and can start a comment workflow.
  */
 export async function syncYoutubeComments(
   ctx: Ctx,
@@ -78,6 +88,7 @@ export async function syncYoutubeComments(
   } else {
     try {
       const channelId = await ensureChannel(ctx, conn, cctx);
+      const liveAfter = ((conn.config ?? {}) as any).social?.sync?.liveAfter as string | undefined;
       let token: string | null = null;
       const videos = new Set<string>();
       const topAuthor = new Map<string, string>();
@@ -87,19 +98,24 @@ export async function syncYoutubeComments(
           counts.comments += 1;
           if (c.videoId) videos.add(c.videoId);
           if (c.isTopLevel && c.authorChannelId) topAuthor.set(c.threadId, c.authorChannelId);
-          const r = await ingestSocialEvent(ctx, {
+          const inbound = c.authorChannelId !== channelId;
+          const isLive = inbound && youtubeCommentIsLive(c.publishedAt, liveAfter);
+          const event = {
             connectionId: conn.id,
-            kind: 'COMMENT',
+            kind: 'COMMENT' as const,
             providerThreadId: `yt:${c.threadId}`,
             providerMsgId: c.id,
             participantId: c.authorChannelId ?? 'unknown',
             participantName: c.authorName,
-            direction: c.authorChannelId === channelId ? 'OUTBOUND' : 'INBOUND',
+            direction: inbound ? ('INBOUND' as const) : ('OUTBOUND' as const),
             text: c.text,
             mediaId: c.videoId,
             receivedAt: new Date(c.publishedAt),
-            isLive: false,
-          });
+            isLive,
+          };
+          const r = isLive
+            ? await processSocialEvent(ctx.db, ctx.env, ctx.orgId, event)
+            : await ingestSocialEvent(ctx, event);
           if (!r.duplicate) counts.newMessages += 1;
         }
         token = page.nextPageToken;
@@ -148,6 +164,7 @@ export async function syncYoutubeComments(
     lastError: failed.map((s) => `${s.key}: ${s.error}`).join(' | ') || null,
     lastAttemptAt: started,
     ...(state !== 'FAILED' ? { lastSuccessAt: new Date().toISOString() } : {}),
+    ...(steps.some((s) => s.key === 'comments' && s.ok) ? { liveAfter: started } : {}),
   };
   const [fresh] = await ctx.db.select().from(providerConnections).where(eq(providerConnections.id, conn.id));
   await saveConfig(

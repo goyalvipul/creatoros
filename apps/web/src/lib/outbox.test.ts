@@ -23,6 +23,7 @@ describe('offline queue', () => {
     expect(queueable('POST', '/workflows/abc/activate')).toBe(false);
     expect(queueable('POST', '/files/abc/operations')).toBe(false);
     expect(queueable('POST', '/threads/abc/reply')).toBe(false);
+    expect(queueable('POST', '/workflows/approvals/abc/approve')).toBe(false);
     expect(queueable('POST', '/invoices/abc/payments')).toBe(false);
     expect(queueable('POST', '/variants/abc/publish')).toBe(false);
     expect(queueable('DELETE', '/workflows/abc')).toBe(false);

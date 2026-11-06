@@ -232,6 +232,20 @@
       "when": 1795000000000,
       "tag": "0032_video_trim_replace",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795100000000,
+      "tag": "0033_analytics_kit",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795200000000,
+      "tag": "0034_analytics_detail",
+      "breakpoints": true
     }
   ]
 }

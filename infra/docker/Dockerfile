@@ -20,7 +20,9 @@ COPY tests/integration/package.json tests/integration/
 COPY tests/e2e/package.json tests/e2e/
 RUN pnpm install --frozen-lockfile
 COPY . .
-# Next.js bakes rewrites at build time; Caddy normally routes /api itself, this keeps direct web access working too.
+# Next.js bakes rewrites and NEXT_PUBLIC_* at build time. 1 is the interface that was on the preview.
+ARG NEXT_PUBLIC_CREATOROS_UX_V5=1
+ENV NEXT_PUBLIC_CREATOROS_UX_V5=$NEXT_PUBLIC_CREATOROS_UX_V5
 ENV API_INTERNAL_URL=http://api:4000
 RUN pnpm --filter @creatoros/api build && pnpm --filter @creatoros/worker build && pnpm --filter @creatoros/web build
 

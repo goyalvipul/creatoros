@@ -2,7 +2,7 @@
 
 New to this repo? Read [docs/AGENT_MEMORY.md](docs/AGENT_MEMORY.md) first. It is the map. Open only the files it names for the task. Read [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) when the memory is not enough. Do not walk the repo to rediscover something the memory already states.
 
-Creator OS is a pnpm monorepo (TypeScript ESM, strict) plus a Go scanner agent. Read [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for intent, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for structure, [docs/DECISIONS.md](docs/DECISIONS.md) before changing a rule, and [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) for the ledger. When you change behavior, commands, or what is deployed, update [docs/AGENT_MEMORY.md](docs/AGENT_MEMORY.md) and [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) in the same change.
+Creator OS(Kemokem) is a pnpm monorepo (TypeScript ESM, strict) plus a Go scanner agent. Read [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for intent, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for structure, [docs/DECISIONS.md](docs/DECISIONS.md) before changing a rule, and [docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) for the ledger. When you change behavior, commands, or what is deployed, update [docs/AGENT_MEMORY.md](docs/AGENT_MEMORY.md) and [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) in the same change.
 
 ## Non-negotiable rules
 

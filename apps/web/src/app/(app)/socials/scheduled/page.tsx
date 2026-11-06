@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Async, Badge, EmptyState, PageHeader } from '@/components/ui';
 import { useApi } from '@/lib/api';
 import { title as titleCase, when } from '@/lib/format';
+import { PlatformLogo } from '@/components/platform-logo';
 
 export default function ScheduledPage() {
   const res = useApi<any[]>('/socials/scheduled');
@@ -25,7 +26,8 @@ export default function ScheduledPage() {
               <li key={p.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
                 <strong>{p.title ?? 'Untitled'}</strong>
                 <Badge>
-                  {titleCase(p.platform)} {p.accountHandle}
+                  <PlatformLogo platform={p.platform} className="mr-1 inline size-3.5 align-text-bottom" />
+                  {p.accountHandle}
                 </Badge>
                 <Badge tone="neutral">{titleCase(p.state)}</Badge>
                 <span className="text-muted">{when(p.plannedAt, p.timezone)}</span>

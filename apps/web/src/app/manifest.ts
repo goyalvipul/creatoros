@@ -2,9 +2,10 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Creator OS',
-    short_name: 'Creator OS',
+    name: 'Kemokem',
+    short_name: 'Kemokem',
     description: 'Private creative production, publishing and collaboration command centre.',
+    id: '/',
     start_url: '/',
     scope: '/',
     display: 'standalone',

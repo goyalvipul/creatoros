@@ -30,7 +30,7 @@ import {
 import { del, patch, post, put, refresh, useApi } from '@/lib/api';
 import { useWorkspace, WorkspaceMark } from '@/lib/workspace';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
-import { NOTIFICATION_CATALOG, NOTIFICATION_CATEGORIES } from '@creatoros/domain';
+import { defaultDelivery, NOTIFICATION_CATALOG, NOTIFICATION_CATEGORIES } from '@creatoros/domain';
 
 type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system';
 const TABS: { id: Tab; label: string }[] = [
@@ -592,7 +592,7 @@ function Reminders() {
                     <Field key={c.id} label={c.label}>
                       <Select
                         aria-label={c.label}
-                        value={(v.channels ?? {})[c.id] ?? 'in_app'}
+                        value={(v.channels ?? {})[c.id] ?? defaultDelivery(c.id)}
                         onChange={(e) =>
                           setP({ ...v, channels: { ...(v.channels ?? {}), [c.id]: e.target.value } })
                         }
@@ -679,31 +679,62 @@ function AccountChannels({ v, setP }: { v: any; setP: (next: any) => void }) {
   );
 }
 
+function phoneInstall() {
+  if (typeof window === 'undefined') return { ios: false, android: false, installed: false, push: false };
+  const ua = navigator.userAgent;
+  const nav = navigator as Navigator & { standalone?: boolean };
+  return {
+    ios: /iPhone|iPad|iPod/.test(ua),
+    android: /Android/.test(ua),
+    installed: nav.standalone === true || window.matchMedia('(display-mode: standalone)').matches,
+    push: 'Notification' in window && 'PushManager' in window && 'serviceWorker' in navigator,
+  };
+}
+
 function PushDevices() {
   const key = useApi<{ publicKey: string | null }>('/notifications/push/key');
   const devices = useApi<any[]>('/notifications/push/subscriptions');
   const toast = useToast();
-  const [status, setStatus] = useState('Checking this browser…');
+  const [status, setStatus] = useState('Checking this phone…');
+  const [install, setInstall] = useState({ ios: false, android: false, installed: false, push: false });
+  const [allowed, setAllowed] = useState(false);
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
-      setStatus('This browser cannot show push notifications. In-app alerts still work. On iPhone, install Kemokem to the Home Screen (iOS 16.4 or newer) and open that icon.');
+    const here = phoneInstall();
+    setInstall(here);
+    setAllowed(here.push && Notification.permission === 'granted');
+    if (here.ios && !here.installed) {
+      setStatus('This is a Safari tab. On iPhone, notifications work only from the Home Screen app. In Safari, tap Share, then Add to Home Screen, then open the Kemokem icon.');
+      return;
+    }
+    if (!here.push) {
+      setStatus('This browser cannot show push notifications. In-app alerts still work.');
       return;
     }
     setStatus(
       Notification.permission === 'granted'
-        ? 'This browser allowed notifications.'
+        ? here.installed
+          ? 'This Home Screen app is allowed to notify. Close it and lock the phone before you send a test.'
+          : 'This browser allowed notifications.'
         : Notification.permission === 'denied'
-          ? 'This browser blocked notifications. Change that in the browser settings, then come back.'
-          : 'Notifications are off until you turn them on.',
+          ? 'Notifications are blocked for Kemokem. Turn them on in the phone Settings, then come back.'
+          : 'Phone notifications are off until you tap Enable.',
     );
   }, []);
+  const label = install.installed
+    ? install.ios
+      ? 'iPhone Home Screen'
+      : install.android
+        ? 'Android Home Screen'
+        : 'Installed app'
+    : install.ios
+      ? 'iPhone Safari'
+      : 'This browser';
   return (
     <Card>
       <CardTitle>This device</CardTitle>
       <p className="mb-3 text-sm text-muted">{status}</p>
       <p className="mb-3 text-sm text-muted">
-        Push is delivered by the browser or phone. Kemokem can record that the push service accepted a message. It cannot promise the lock screen showed it.
+        A test asks Apple or Google to deliver one message. Kemokem can record that they accepted it. It cannot see whether the lock screen showed it.
       </p>
       {key.data && !key.data.publicKey && (
         <p className="mb-3 text-sm text-muted">Push is not configured on this server yet. In-app notifications still work.</p>
@@ -712,12 +743,13 @@ function PushDevices() {
         <Button
           type="button"
           variant="primary"
-          disabled={!key.data?.publicKey}
+          disabled={!key.data?.publicKey || (install.ios && !install.installed) || !install.push}
           onClick={async () => {
             try {
               if (!key.data?.publicKey) return;
               const permission = await Notification.requestPermission();
-              setStatus(permission === 'granted' ? 'This browser allowed notifications.' : 'Permission was not granted.');
+              setStatus(permission === 'granted' ? 'This app allowed notifications.' : 'Permission was not granted.');
+              setAllowed(permission === 'granted');
               if (permission !== 'granted') return;
               const reg = await navigator.serviceWorker.ready;
               const sub = await reg.pushManager.subscribe({
@@ -725,29 +757,56 @@ function PushDevices() {
                 applicationServerKey: vapidKey(key.data.publicKey),
               });
               const json = sub.toJSON();
-              await post('/notifications/push/subscriptions', { endpoint: json.endpoint, keys: json.keys });
+              await post('/notifications/push/subscriptions', { endpoint: json.endpoint, keys: json.keys, label });
               await refresh('/notifications/push/subscriptions');
-              toast.ok('This device will receive push');
+              toast.ok('This phone is registered');
             } catch (err) {
               toast.error(err);
             }
           }}
         >
-          Enable notifications
+          {allowed ? 'Reconnect this phone' : 'Enable Phone Notifications'}
         </Button>
         <Button
           type="button"
           onClick={async () => {
             try {
-              const out = await post<{ push: string }>('/notifications/push/test');
-              toast.ok(out.push === 'queued' ? 'Test queued' : 'Saved in the app. No device is subscribed.');
-              await refresh('/notifications');
+              const out = await post<{ push: string; delivery?: { sent?: number; skipped?: string } }>('/notifications/push/test');
+              toast.ok(
+                out.delivery?.sent
+                  ? 'The push service accepted the test. Check the lock screen with Kemokem closed.'
+                  : out.delivery?.skipped === 'vapid'
+                    ? 'Push is not configured on the server.'
+                    : out.push === 'queued'
+                      ? 'Saved. No device accepted it yet.'
+                      : 'Saved in the app. No device is subscribed.',
+              );
+              await refresh('/notifications', '/notifications/push/subscriptions');
             } catch (err) {
               toast.error(err);
             }
           }}
         >
-          Send a test
+          Send Test Notification
+        </Button>
+        <Button
+          type="button"
+          onClick={async () => {
+            try {
+              const reg = await navigator.serviceWorker.ready;
+              const sub = await reg.pushManager.getSubscription();
+              if (sub) {
+                await post('/notifications/push/subscriptions/current/revoke', { endpoint: sub.endpoint });
+                await sub.unsubscribe();
+              }
+              await refresh('/notifications/push/subscriptions');
+              toast.ok('This phone will no longer get push');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          Disable on this phone
         </Button>
       </div>
       <Async res={devices} empty={<p className="text-sm text-muted">No devices saved.</p>}>

@@ -274,6 +274,27 @@
       "when": 1795600000000,
       "tag": "0038_brand_cover",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1795700000000,
+      "tag": "0039_long_videos",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1795800000000,
+      "tag": "0040_long_video_h3",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795900000000,
+      "tag": "0041_long_video_context",
+      "breakpoints": true
     }
   ]
 }

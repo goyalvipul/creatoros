@@ -84,6 +84,8 @@ export async function jobLtx(d: WorkerDeps) {
   const qwen = await pollRunningQwen(d.db, d.env);
   const h3Queued = await submitQueuedH3(d.db, d.env);
   const h3 = await pollRunningH3(d.db, d.env);
+  const { reconcileLongVideos } = await import('@creatoros/services');
+  await reconcileLongVideos(d.db, d.env);
   let trimsExpired = 0;
   let trims = 0;
   try {

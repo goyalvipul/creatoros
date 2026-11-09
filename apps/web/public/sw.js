@@ -20,6 +20,10 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+function safePath(value) {
+  return typeof value === 'string' && value.charAt(0) === '/' && value.charAt(1) !== '/' ? value : '/notifications';
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -29,30 +33,41 @@ self.addEventListener('push', (event) => {
   }
   const title = typeof data.title === 'string' ? data.title.slice(0, 120) : 'Kemokem';
   const body = typeof data.body === 'string' ? data.body.slice(0, 180) : '';
-  const url =
-    typeof data.url === 'string' && data.url.startsWith('/') && !data.url.startsWith('//') ? data.url : '/notifications';
+  const url = safePath(data.url);
+  const tag = typeof data.tag === 'string' ? data.tag.slice(0, 80) : 'kemokem';
+  const badge = typeof data.badge === 'number' && data.badge >= 0 ? Math.min(99, Math.floor(data.badge)) : null;
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      data: { url },
-      icon: '/brand/kemokem-pwa-192.png',
-    }),
+    Promise.all([
+      self.registration.showNotification(title, {
+        body,
+        tag,
+        data: { url },
+        icon: '/brand/kemokem-pwa-192.png',
+      }),
+      badge === null
+        ? Promise.resolve()
+        : badge > 0 && navigator.setAppBadge
+          ? navigator.setAppBadge(badge).catch(() => {})
+          : navigator.clearAppBadge
+            ? navigator.clearAppBadge().catch(() => {})
+            : Promise.resolve(),
+    ]),
   );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  let url = event.notification.data && event.notification.data.url;
-  if (typeof url !== 'string' || !url.startsWith('/') || url.startsWith('//')) url = '/notifications';
+  const url = safePath(event.notification.data && event.notification.data.url);
+  const absolute = new URL(url, self.location.origin).href;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
       for (const client of list) {
-        if (client.focus) {
+        if (client.url.indexOf(self.location.origin) === 0 && client.navigate) {
           client.focus();
-          if (client.navigate) return client.navigate(url);
+          return client.navigate(absolute);
         }
       }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
+      if (self.clients.openWindow) return self.clients.openWindow(absolute);
     }),
   );
 });

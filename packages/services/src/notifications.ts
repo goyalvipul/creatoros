@@ -169,6 +169,35 @@ export async function listNotifications(
   );
 }
 
+const ACTION_TYPES = [
+  'workflow.approval',
+  'deal.reply_required',
+  'task.overdue',
+  'publish.failed',
+  'oauth.expired',
+  'workflow.failed',
+];
+
+/** Unread items that still need a decision. The home-screen badge uses this, not every old alert. */
+export async function actionBadgeCount(db: Executor, orgId: string, userId: string | null): Promise<number> {
+  return (
+    rowsOf<{ n: number }>(
+      await db.execute(sql`
+        select count(*)::int as n from notifications
+        where org_id = ${orgId}::uuid
+          and (${userId}::uuid is null or user_id is null or user_id = ${userId}::uuid)
+          and archived_at is null and read_at is null
+          and (snoozed_until is null or snoozed_until <= now())
+          and (
+            severity in ('WARNING', 'CRITICAL')
+            or priority in ('high', 'urgent')
+            or type in (${sql.join(ACTION_TYPES.map((t) => sql`${t}`), sql`, `)})
+          )
+      `),
+    )[0]?.n ?? 0
+  );
+}
+
 export async function unreadCount(ctx: Ctx) {
   return (
     rowsOf<{ n: number }>(

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   title: { default: 'Creator OS', template: '%s · Creator OS' },
   description: 'Private creative production, publishing and collaboration command centre.',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'Creator OS', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'Kemokem', statusBarStyle: 'default' },
   icons: {
     icon: [
       { url: '/brand/kemokem-favicon.ico' },

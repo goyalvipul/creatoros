@@ -2,7 +2,7 @@ import { sql, type Db } from '@creatoros/db';
 import { lockScreenText, safeNotificationPath } from '@creatoros/domain';
 import webpush from 'web-push';
 import { decryptJson, encryptJson, sha256Hex } from './crypto';
-import { notify } from './notifications';
+import { actionBadgeCount, notify } from './notifications';
 import { badRequest, type Ctx, type ServiceEnv } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
@@ -23,7 +23,7 @@ export function pushPublicKey(env: ServiceEnv) {
 
 export async function savePushSubscription(
   ctx: Ctx,
-  input: { endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string | null },
+  input: { endpoint: string; keys: { p256dh: string; auth: string }; userAgent?: string | null; label?: string | null },
 ) {
   let url: URL;
   try {
@@ -35,9 +35,10 @@ export async function savePushSubscription(
   if (!input.keys?.p256dh || !input.keys?.auth) throw badRequest('This browser did not send push keys');
   const hash = sha256Hex(input.endpoint);
   const secret = encryptJson({ endpoint: input.endpoint, keys: input.keys } satisfies StoredSub, ctx.env.encryptionKey);
+  const label = (input.label?.trim() || input.userAgent || 'This browser').slice(0, 200);
   await ctx.db.execute(sql`
     insert into push_subscriptions (org_id, user_id, endpoint_hash, secret_ref, user_agent, revoked_at, updated_at)
-    values (${ctx.orgId}::uuid, ${ctx.userId}::uuid, ${hash}, ${secret}, ${input.userAgent?.slice(0, 200) ?? null}, null, now())
+    values (${ctx.orgId}::uuid, ${ctx.userId}::uuid, ${hash}, ${secret}, ${label}, null, now())
     on conflict (endpoint_hash) do update set
       org_id = excluded.org_id,
       user_id = excluded.user_id,
@@ -68,6 +69,15 @@ export async function listPushSubscriptions(ctx: Ctx) {
       limit 20
     `),
   );
+}
+
+export async function revokePushSubscriptionByEndpoint(ctx: Ctx, endpoint: string) {
+  const hash = sha256Hex(endpoint);
+  const r = await ctx.db.execute(sql`
+    update push_subscriptions set revoked_at = now(), updated_at = now()
+    where endpoint_hash = ${hash} and org_id = ${ctx.orgId}::uuid and user_id = ${ctx.userId}::uuid and revoked_at is null
+  `);
+  return { updated: (r as { rowCount?: number }).rowCount ?? 0 };
 }
 
 export async function revokePushSubscription(ctx: Ctx, id: string) {
@@ -126,10 +136,12 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
     attempts: number;
     title: string;
     type: string;
+    priority: string;
     deepLink: string | null;
     secretRef: string;
     subscriptionId: string;
     userId: string;
+    orgId: string;
   }>(
     await db.execute(sql`
       with due as (
@@ -154,13 +166,15 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
     attempts: number;
     title: string;
     type: string;
+    priority: string;
     deepLink: string | null;
     secretRef: string;
     subscriptionId: string;
     userId: string;
+    orgId: string;
   }>(
     await db.execute(sql`
-      select d.id, d.attempts, n.title, n.type, n.deep_link as "deepLink",
+      select d.id, d.attempts, n.title, n.type, n.priority, n.deep_link as "deepLink", n.org_id as "orgId",
              s.secret_ref as "secretRef", s.id as "subscriptionId", s.user_id as "userId"
       from notification_deliveries d
       join notifications n on n.id = d.notification_id
@@ -170,7 +184,28 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
   );
   let sent = 0;
   let failed = 0;
+  const badges = new Map<string, number>();
   for (const row of full) {
+    const important = row.priority === 'high' || row.priority === 'urgent' || row.type === 'system.test';
+    if (!important) {
+      const routine = rowsOf<{ n: number }>(
+        await db.execute(sql`
+          select count(*)::int as n from notification_deliveries d
+          join notifications n on n.id = d.notification_id
+          join push_subscriptions s on s.id = d.subscription_id
+          where s.user_id = ${row.userId}::uuid and d.sent_at > now() - interval '1 day'
+            and n.priority = 'normal' and n.type <> 'system.test'
+        `),
+      )[0]?.n ?? 0;
+      if (routine >= 12) {
+        await db.execute(sql`
+          update notification_deliveries
+          set state = 'RETRY', last_error = 'waiting: 12 routine pushes already sent today', next_attempt_at = now() + interval '6 hours'
+          where id = ${row.id}::uuid
+        `);
+        continue;
+      }
+    }
     const recent = rowsOf<{ n: number }>(
       await db.execute(sql`
         select count(*)::int as n from notification_deliveries d
@@ -196,17 +231,21 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
       failed += 1;
       continue;
     }
+    if (!badges.has(row.userId)) badges.set(row.userId, await actionBadgeCount(db, row.orgId, row.userId));
+    const urgent = row.priority === 'high' || row.priority === 'urgent';
     const payload = JSON.stringify({
       title: row.title.slice(0, 120),
       body: lockScreenText(row.type),
       url: safeNotificationPath(row.deepLink),
+      tag: row.type,
+      badge: badges.get(row.userId) ?? 0,
       id: row.id,
     });
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: sub.keys },
         payload,
-        { TTL: 60 * 60 * 12 },
+        { TTL: urgent ? 60 * 60 * 4 : 60 * 60 * 12, urgency: urgent ? 'high' : 'normal' },
       );
       await db.execute(sql`
         update notification_deliveries set state = 'SENT', sent_at = now(), last_error = null where id = ${row.id}::uuid

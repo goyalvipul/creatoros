@@ -51,6 +51,31 @@ export type NotificationEventType = keyof typeof NOTIFICATION_CATALOG;
 
 const CHOICES = new Set<string>(['push', 'in_app', 'digest', 'off']);
 
+/** Used when that event or category has not been saved. Success stays a digest. Messages and health do not. */
+const DEFAULT_TYPE: Record<string, DeliveryChoice> = {
+  'publish.sent': 'digest',
+  'publication.discovered': 'digest',
+  'comfy.ready': 'digest',
+  'invoice.paid': 'digest',
+  'agent.connected': 'digest',
+  'deal.inquiry.detected': 'push',
+  'deal.reply_required': 'push',
+  'mail.reply': 'push',
+};
+
+const DEFAULT_CATEGORY: Record<string, DeliveryChoice> = {
+  publishing: 'push',
+  workflows: 'push',
+  tasks: 'push',
+  social: 'digest',
+  analytics: 'digest',
+  system: 'push',
+};
+
+export function defaultDelivery(typeOrCategory: string): DeliveryChoice {
+  return DEFAULT_TYPE[typeOrCategory] ?? DEFAULT_CATEGORY[typeOrCategory] ?? 'in_app';
+}
+
 export function notificationMeta(type: string): { category: NotificationCategory; priority: string; label: string } {
   const known = (NOTIFICATION_CATALOG as Record<string, { category: NotificationCategory; priority: string; label: string }>)[type];
   return known ?? { category: 'system', priority: 'normal', label: type };
@@ -65,9 +90,24 @@ export function safeNotificationPath(value: string | null | undefined): string {
 
 /** Lock-screen text. The stored body can include a draft reply, so it stays in the app. */
 export function lockScreenText(type: string): string {
-  if (type === 'workflow.approval') return 'A reply is waiting. Open Kemokem to review it.';
-  if (type === 'system.test') return 'Kemokem can reach this device.';
-  return 'Open Kemokem to see this.';
+  const lines: Record<string, string> = {
+    'publish.soon': 'A scheduled post is coming up.',
+    'publish.sent': 'A post was sent.',
+    'publish.failed': 'A scheduled post needs attention.',
+    'comfy.ready': 'A video or audio file is ready to review.',
+    'workflow.failed': 'A generation stopped and needs a look.',
+    'workflow.approval': 'A reply is waiting. Open Kemokem to review it.',
+    'task.due': 'A task is due soon.',
+    'task.overdue': 'A task is overdue.',
+    'briefing.daily': 'Your daily summary is ready.',
+    'briefing.weekly': 'Your weekly summary is ready.',
+    'deal.inquiry.detected': 'A collaboration inquiry is waiting.',
+    'deal.reply_required': 'A message needs a reply.',
+    'oauth.expired': 'An account needs to be connected again.',
+    'connector.sync.failed': 'An account sync failed.',
+    'system.test': 'Kemokem can reach this phone.',
+  };
+  return lines[type] ?? 'Open Kemokem to see this.';
 }
 
 export function deliveryChoice(input: {
@@ -82,7 +122,13 @@ export function deliveryChoice(input: {
   const meta = notificationMeta(input.type);
   const channels = input.channels ?? {};
   const accountKey = input.accountId ? channels[`account:${input.accountId}`] : undefined;
-  const raw = accountKey || channels[input.type] || channels[meta.category] || 'in_app';
+  const raw =
+    accountKey ||
+    channels[input.type] ||
+    DEFAULT_TYPE[input.type] ||
+    channels[meta.category] ||
+    DEFAULT_CATEGORY[meta.category] ||
+    'in_app';
   const choice = CHOICES.has(raw) ? (raw as DeliveryChoice) : 'in_app';
   if (choice === 'off') return 'off';
   if (choice === 'digest') return 'digest';

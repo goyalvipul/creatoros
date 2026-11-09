@@ -52,6 +52,7 @@ export interface CallOpts {
   query?: Record<string, unknown>;
   idempotencyKey?: string;
   silent401?: boolean;
+  keepalive?: boolean;
 }
 
 function rememberOffline(method: string, path: string, body: unknown): never {
@@ -81,6 +82,7 @@ export async function api<T = any>(path: string, opts: CallOpts = {}): Promise<T
       method,
       headers,
       credentials: 'same-origin',
+      keepalive: opts.keepalive,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
@@ -134,6 +136,7 @@ export function refresh(...prefixes: string[]) {
 
 export const post = <T = any>(path: string, body?: unknown, o: Omit<CallOpts, 'method' | 'body'> = {}) =>
   api<T>(path, { ...o, method: 'POST', body: body ?? {} });
-export const patch = <T = any>(path: string, body: unknown) => api<T>(path, { method: 'PATCH', body });
+export const patch = <T = any>(path: string, body: unknown, o: Omit<CallOpts, 'method' | 'body'> = {}) =>
+  api<T>(path, { ...o, method: 'PATCH', body });
 export const put = <T = any>(path: string, body: unknown) => api<T>(path, { method: 'PUT', body });
 export const del = <T = any>(path: string) => api<T>(path, { method: 'DELETE' });

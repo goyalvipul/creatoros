@@ -7,4 +7,5 @@ export * from './comfy';
 export * from './publishing';
 export * from './crm';
 export * from './system';
+export * from './long-video';
 export * from './social';

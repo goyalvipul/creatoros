@@ -24,3 +24,4 @@ export * from './threads-post';
 export * from './tiktok-post';
 export * from './notification-events';
 export * from './today';
+export * from './long-video';

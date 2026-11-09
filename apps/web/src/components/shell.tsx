@@ -290,13 +290,13 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className={clsx('min-h-dvh md:grid', v5 ? 'md:grid-cols-[238px_1fr]' : 'md:grid-cols-[15rem_1fr]')}>
       {/* Desktop sidebar */}
-      <aside className={clsx('sticky top-0 hidden h-dvh flex-col border-r border-border bg-panel md:flex', v5 ? 'px-[13px] pt-[23px]' : '')}>
-        <Link href="/" className={clsx('block', v5 ? 'px-[11px] pb-[22px]' : 'px-4 py-4')}>
+      <aside className={clsx('sticky top-0 hidden h-dvh flex-col border-r border-border bg-panel md:flex', v5 ? 'px-[13px] pt-2' : '')}>
+        <Link href="/" className={clsx('block', v5 ? 'px-[11px] pb-1' : 'px-4 py-4')}>
           {installed ? <BrandSymbol className="size-9" /> : <BrandLogo className={v5 ? 'h-14' : 'h-12'} />}
         </Link>
         <nav aria-label="Main" className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
           {v5
-            ? NAV_GROUPS.map((group) => {
+            ? NAV_GROUPS.map((group, groupIndex) => {
                 const order = ['/', '/today', '/content', '/production', '/comfy', '/library', '/publishing', '/calendar'];
                 const items = nav
                   .filter((n) => n.group === group.id)
@@ -304,7 +304,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 if (!items.length) return null;
                 return (
                   <div key={group.id} className="mb-3">
-                    <div className="px-3 pb-2 pt-[18px] text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#a0aca3]">
+                    <div className={clsx('px-3 pb-2 text-[10px] font-extrabold uppercase tracking-[0.14em] text-[#a0aca3]', groupIndex === 0 ? 'pt-2' : 'pt-[18px]')}>
                       {group.label}
                     </div>
                     {items.map((n) => (
@@ -328,27 +328,20 @@ export function Shell({ children }: { children: ReactNode }) {
               ))}
         </nav>
         <div className="border-t border-border p-3 text-xs text-muted">
-          {v5 ? (
-            <div className="flex items-center gap-2">
-              <span className="grid size-8 place-items-center rounded-full bg-[#193d37] text-[10px] font-semibold text-[#f7ceab]">
-                {String(me.data.user.name ?? 'C')
-                  .split(' ')
-                  .slice(0, 2)
-                  .map((p: string) => p[0])
-                  .join('')
-                  .toUpperCase()}
-              </span>
-              <span className="min-w-0 flex-1">
-                <WorkspaceSwitch canCreate={role === 'OWNER' || role === 'EDITOR'} />
-                <span className="block truncate">{me.data.user.role === 'OWNER' ? 'Owner' : me.data.user.role}</span>
-              </span>
-            </div>
-          ) : (
-            <>
-              <div className="truncate font-medium text-text">{me.data.user.name}</div>
-              <WorkspaceSwitch canCreate={role === 'OWNER' || role === 'EDITOR'} />
-            </>
-          )}
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#193d37] text-[10px] font-semibold text-[#f7ceab]">
+              {String(me.data.user.name ?? 'C')
+                .split(' ')
+                .slice(0, 2)
+                .map((p: string) => p[0])
+                .join('')
+                .toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-text">{me.data.user.name}</span>
+              <span className="block truncate">{me.data.user.role === 'OWNER' ? 'Owner' : me.data.user.role}</span>
+            </span>
+          </div>
         </div>
       </aside>
 

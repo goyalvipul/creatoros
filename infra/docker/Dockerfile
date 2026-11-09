@@ -46,6 +46,9 @@ FROM app AS migrate
 CMD ["node", "apps/api/dist/migrate.js"]
 
 FROM app AS api
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+USER node
 EXPOSE 4000
 CMD ["node", "apps/api/dist/main.js"]
 

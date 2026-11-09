@@ -12,6 +12,7 @@ import { clipBounds, clipPlayback } from '@/lib/audio-clip';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
+import { LongVideos } from './long-videos';
 
 type Issue = { field: string; message: string };
 type Worker = {
@@ -442,15 +443,17 @@ const PRESET_FALLBACK = {
 };
 
 export default function ComfyPage() {
-  const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'history' | 'settings'>('ltx');
+  const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'long' | 'history' | 'settings'>('ltx');
   const [recall, setRecall] = useState<SavedClip | null>(null);
   useEffect(() => {
     if (window.location.hash === '#history') setTab('history');
+    if (window.location.hash.startsWith('#long')) setTab('long');
   }, []);
   const v5 = uxV5();
   const studioTabs = [
     { id: 'ltx' as const, label: v5 ? 'LTX Video' : 'LTX' },
     { id: 'h3' as const, label: 'MiniMax H3' },
+    { id: 'long' as const, label: 'Long Videos' },
     { id: 'audio' as const, label: 'Audio' },
     { id: 'history' as const, label: 'History' },
     { id: 'settings' as const, label: 'Settings' },
@@ -497,7 +500,7 @@ function StudioBody({
   onUse,
   onHistory,
 }: {
-  tab: 'ltx' | 'audio' | 'h3' | 'history' | 'settings';
+  tab: 'ltx' | 'audio' | 'h3' | 'long' | 'history' | 'settings';
   recall: SavedClip | null;
   onUse: (clip: SavedClip) => void;
   onHistory: () => void;
@@ -512,6 +515,9 @@ function StudioBody({
       </div>
       <div hidden={tab !== 'h3'}>
         <H3Tab onHistory={onHistory} />
+      </div>
+      <div hidden={tab !== 'long'}>
+        <LongVideos />
       </div>
       <div hidden={tab !== 'history'}>
         <HistoryTab onUse={onUse} />

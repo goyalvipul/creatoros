@@ -24,6 +24,19 @@ describe('notification delivery', () => {
     expect(safeNotificationPath('//evil.example')).toBe('/notifications');
     expect(safeNotificationPath('/publishing/abc')).toBe('/publishing/abc');
     expect(lockScreenText('workflow.approval')).not.toMatch(/reply text/i);
-    expect(lockScreenText('publish.failed')).toBe('Open Kemokem to see this.');
+    expect(lockScreenText('publish.failed')).toBe('A scheduled post needs attention.');
+    expect(lockScreenText('workflow.approval')).not.toMatch(/draft/i);
+  });
+
+  it('pushes publishing, renders, tasks, messages and health, and digests the rest', () => {
+    const on = { browserPush: true as const, channels: {} };
+    expect(deliveryChoice({ ...on, type: 'publish.failed' })).toBe('push');
+    expect(deliveryChoice({ ...on, type: 'comfy.ready' })).toBe('digest');
+    expect(deliveryChoice({ ...on, type: 'workflow.failed' })).toBe('push');
+    expect(deliveryChoice({ ...on, type: 'task.due' })).toBe('push');
+    expect(deliveryChoice({ ...on, type: 'deal.reply_required' })).toBe('push');
+    expect(deliveryChoice({ ...on, type: 'oauth.expired' })).toBe('push');
+    expect(deliveryChoice({ ...on, type: 'briefing.weekly' })).toBe('digest');
+    expect(deliveryChoice({ type: 'publish.failed', channels: { publishing: 'off' }, browserPush: true })).toBe('off');
   });
 });

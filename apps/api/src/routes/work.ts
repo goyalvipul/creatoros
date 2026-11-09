@@ -109,6 +109,9 @@ import {
   listInvoices,
   listNotifications,
   listPushSubscriptions,
+  actionBadgeCount,
+  deliverQueuedPushes,
+  revokePushSubscriptionByEndpoint,
   savePushSubscription,
   revokePushSubscription,
   sendTestNotification,
@@ -1237,6 +1240,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       body: z.object({
         endpoint: z.string().min(8).max(2000),
         keys: z.object({ p256dh: z.string().min(8).max(200), auth: z.string().min(8).max(200) }),
+        label: z.string().max(80).optional(),
       }),
     },
     async ({ ctx, body, req }) => {
@@ -1245,8 +1249,27 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
         userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
       });
       await updatePrefs(ctx, { browserPush: true });
+      const prefs = await getPrefs(ctx);
+      if (!prefs.quietStart && !prefs.quietEnd) {
+        await updatePrefs(ctx, {
+          quietStart: '22:00',
+          quietEnd: '08:00',
+          timezone: prefs.timezone || 'America/Vancouver',
+        });
+      }
       return saved;
     },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/push/subscriptions/current/revoke',
+      tag: 'Today',
+      summary: 'Stop push for the subscription this browser currently holds',
+      role: 'VIEWER',
+      body: z.object({ endpoint: z.string().min(8).max(2000) }),
+    },
+    ({ ctx, body }) => revokePushSubscriptionByEndpoint(ctx, body.endpoint),
   );
   route(
     {
@@ -1267,7 +1290,20 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Send one test notification',
       role: 'VIEWER',
     },
-    ({ ctx }) => sendTestNotification(ctx),
+    async ({ ctx }) => {
+      const saved = await sendTestNotification(ctx);
+      const delivery = await deliverQueuedPushes(ctx.db, ctx.env);
+      return { ...saved, delivery };
+    },
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/notifications/badge',
+      tag: 'Today',
+      summary: 'Count of unread items that still need a decision, for the home-screen badge',
+    },
+    async ({ ctx }) => ({ count: await actionBadgeCount(ctx.db, ctx.orgId, ctx.userId) }),
   );
   route(
     {

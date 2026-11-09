@@ -15,10 +15,10 @@ import {
   type Executor,
 } from '@creatoros/db';
 import {
+  acceptIngestBatch,
   canonicalPath,
   extName,
   baseName,
-  ingestBatchSchema,
   isInsideRoot,
   kindFromExtension,
   type FileKind,
@@ -45,6 +45,7 @@ export interface IngestOptions {
   missingGraceHours?: number;
   minMissingChecks?: number;
   now?: Date;
+  onDropped?: (dropped: { path: string; issue: string }[]) => void;
 }
 
 export async function getOrgNumberSetting(
@@ -72,7 +73,9 @@ export async function processIngest(
   input: unknown,
   opts: IngestOptions = {},
 ): Promise<IngestResponse> {
-  const batch = ingestBatchSchema.parse(input);
+  const accepted = acceptIngestBatch(input);
+  const batch = accepted.batch;
+  if (accepted.dropped.length) opts.onDropped?.(accepted.dropped);
   const now = opts.now ?? new Date();
   const [root] = await db.select().from(storageRoots).where(eq(storageRoots.id, batch.rootId));
   if (!root || root.orgId !== agent.orgId || root.deviceId !== agent.deviceId) {

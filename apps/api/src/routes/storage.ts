@@ -97,7 +97,15 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
     );
   }
   function agentRoute<B = unknown>(
-    opts: { method: 'GET' | 'POST'; url: string; summary: string; body?: z.ZodType<B>; bodyLimit?: number },
+    opts: {
+      method: 'GET' | 'POST';
+      url: string;
+      summary: string;
+      body?: z.ZodType<B>;
+      bodyLimit?: number;
+      /** Document the body in OpenAPI, but let the handler accept a batch with a few bad file records. */
+      validateBody?: boolean;
+    },
     handler: (c: { agent: AuthedAgent; body: B; req: FastifyRequest }) => Promise<unknown>,
   ) {
     app.route({
@@ -111,7 +119,12 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       },
       handler: async (req, reply) => {
         const agent = await agentAuth(req);
-        const body = opts.body ? opts.body.parse(req.body ?? {}) : (undefined as B);
+        const body =
+          opts.validateBody === false
+            ? ((req.body ?? {}) as B)
+            : opts.body
+              ? opts.body.parse(req.body ?? {})
+              : (undefined as B);
         const data = await handler({ agent, body, req });
         return reply.send({ data: data ?? null, meta: { requestId: req.correlationId }, error: null });
       },
@@ -146,8 +159,17 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Ingest a batch of scan observations (idempotent)',
       body: ingestBatchSchema,
       bodyLimit: 16 * 1024 * 1024,
+      validateBody: false,
     },
-    ({ agent, body }) => processIngest(db, env, agent, body),
+    ({ agent, body, req }) =>
+      processIngest(db, env, agent, body, {
+        onDropped: (dropped) => {
+          req.log.warn(
+            { count: dropped.length, sample: dropped.slice(0, 8) },
+            'ingest skipped invalid file records',
+          );
+        },
+      }),
   );
   agentRoute(
     { method: 'GET', url: '/agents/hash-requests', summary: 'Files the server wants hashed' },
@@ -373,7 +395,7 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       summary: 'Edit a scan root',
       role: 'OWNER',
       params: idParam,
-      body: z.object(rootFields).partial(),
+      body: z.object({ displayPath: z.string().trim().min(1).max(1000).optional(), ...rootFields }).partial(),
     },
     ({ ctx, params, body }) => updateRoot(ctx, params.id, body),
   );

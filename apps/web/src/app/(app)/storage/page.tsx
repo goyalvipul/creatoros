@@ -211,6 +211,7 @@ function Folders() {
   const roots = useRoots(10_000);
   const devices = useApi<any[]>('/devices');
   const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
   const [f, setF] = useState({
     deviceId: '',
     label: '',
@@ -272,7 +273,40 @@ function Folders() {
                 <Td>{r.lastSuccessfulScanAt ? ago(r.lastSuccessfulScanAt) : 'not yet'}</Td>
                 <Td>
                   <div className="flex flex-wrap gap-1">
-                    +
+                    {r.state !== 'RETIRED' && (
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setEditId(r.id);
+                          setF({
+                            deviceId: r.deviceId,
+                            label: r.label ?? '',
+                            displayPath: r.displayPath ?? '',
+                            smbPath: r.smbPath ?? '',
+                            mountPath: r.mountPath ?? '',
+                            extensions: Array.isArray(r.extensions) ? r.extensions.join(', ') : '',
+                            interval: String(r.scanIntervalMinutes ?? 360),
+                            settle: String(r.settleSeconds ?? 60),
+                            hashMode: r.hashMode ?? 'all',
+                          });
+                          setAdding(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {r.state !== 'RETIRED' && r.state !== 'PAUSED' && (
+                      <ActionButton
+                        size="sm"
+                        success="Scan requested. It starts on the next check from that computer, within a few seconds if it is on."
+                        onAction={async () => {
+                          await post(`/roots/${r.id}/scan`, {});
+                          await refresh('/roots');
+                        }}
+                      >
+                        Scan now
+                      </ActionButton>
+                    )}
                     {r.state === 'PAUSED' ? (
                       <ActionButton
                         size="sm"
@@ -332,18 +366,20 @@ function Folders() {
       </Async>
       <FormDialog
         open={adding}
-        onClose={() => setAdding(false)}
+        onClose={() => {
+          setAdding(false);
+          setEditId(null);
+        }}
         wide
-        title="Add folder"
-        submitLabel="Add"
+        title={editId ? 'Edit folder' : 'Add folder'}
+        submitLabel={editId ? 'Save' : 'Add'}
         onSubmit={async () => {
-          await post('/roots', {
-            deviceId: f.deviceId,
+          const body = {
             label: f.label.trim(),
             displayPath: f.displayPath.trim(),
             hashMode: f.hashMode,
-            smbPath: f.smbPath.trim() || undefined,
-            mountPath: f.mountPath.trim() || undefined,
+            smbPath: f.smbPath.trim() || null,
+            mountPath: f.mountPath.trim() || null,
             accessMethod: f.smbPath.trim() ? 'SMB' : 'LOCAL',
             extensions: f.extensions
               .split(',')
@@ -351,13 +387,16 @@ function Folders() {
               .filter(Boolean),
             scanIntervalMinutes: Number(f.interval) || 360,
             settleSeconds: Number(f.settle) || 60,
-          });
+          };
+          if (editId) await patch(`/roots/${editId}`, body);
+          else await post('/roots', { ...body, deviceId: f.deviceId, smbPath: body.smbPath ?? undefined, mountPath: body.mountPath ?? undefined });
+          setEditId(null);
           setF({ ...f, label: '', displayPath: '', smbPath: '', mountPath: '' });
           await refresh('/roots');
         }}
       >
         <Field label="Device">
-          <Select required value={f.deviceId} onChange={set('deviceId')}>
+          <Select required value={f.deviceId} onChange={set('deviceId')} disabled={Boolean(editId)}>
             {usable.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.displayName}

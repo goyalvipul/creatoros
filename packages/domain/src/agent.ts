@@ -28,24 +28,25 @@ export const observationSchema = z.object({
   eventId: z.string().min(3).max(120),
   seq: z.number().int().nonnegative(),
   kind: z.enum(['file', 'hash', 'probe', 'error']),
-  path: z.string().min(1).max(4096),
-  fileId: z.string().max(200).optional(),
+  path: z.string().min(1).max(32768),
+  fileId: z.string().max(500).optional(),
   size: z.number().int().nonnegative().default(0),
-  mtimeMs: z.number().nonnegative().default(0),
-  ctimeMs: z.number().nonnegative().optional(),
-  mtimePrecisionMs: z.number().nonnegative().optional(),
+  /** A copied file can carry a pre-1970 time. One old file must not reject the batch. */
+  mtimeMs: z.number().finite().default(0),
+  ctimeMs: z.number().finite().optional(),
+  mtimePrecisionMs: z.number().finite().nonnegative().optional(),
   state: z.enum(['STABLE', 'STILL_WRITING', 'PERMISSION_DENIED', 'INCOMPLETE']).default('STABLE'),
   stableObservations: z.number().int().nonnegative().default(1),
-  quickSignature: z.string().max(200).optional(),
+  quickSignature: z.string().max(500).optional(),
   fullHash: z
     .string()
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
   hashAlg: z.literal('sha256').optional(),
-  ext: z.string().max(20).optional(),
+  ext: z.string().max(255).optional(),
   probeState: z.enum(['PENDING', 'STILL_WRITING', 'PROBING', 'INDEXED', 'PROBE_FAILED']).optional(),
   probe: probeSchema.optional(),
-  error: z.string().max(1000).optional(),
+  error: z.string().max(4000).optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
 
@@ -66,6 +67,53 @@ export const ingestBatchSchema = z.object({
   observations: z.array(observationSchema).max(1000).default([]),
 });
 export type IngestBatch = z.infer<typeof ingestBatchSchema>;
+
+function clip(value: unknown, max: number): unknown {
+  return typeof value === 'string' && value.length > max ? value.slice(0, max) : value;
+}
+
+/** Keep a usable record when one Mac file has a long suffix or an old timestamp. */
+function relaxObservation(item: unknown): unknown {
+  if (!item || typeof item !== 'object') return item;
+  const o = { ...(item as Record<string, unknown>) };
+  o.ext = clip(o.ext, 255);
+  o.path = clip(o.path, 32768);
+  o.fileId = clip(o.fileId, 500);
+  o.quickSignature = clip(o.quickSignature, 500);
+  o.error = clip(o.error, 4000);
+  o.eventId = clip(o.eventId, 180);
+  return o;
+}
+
+/**
+ * Accept a scan batch even when a few file records are invalid. Those are returned in `dropped`
+ * and the rest are saved. A bad envelope (root, run, phase) still throws.
+ */
+export function acceptIngestBatch(input: unknown): {
+  batch: IngestBatch;
+  dropped: { path: string; issue: string }[];
+} {
+  const raw = input && typeof input === 'object' ? { ...(input as Record<string, unknown>) } : {};
+  const list = Array.isArray(raw.observations) ? raw.observations : [];
+  const dropped: { path: string; issue: string }[] = [];
+  const kept: Observation[] = [];
+  for (const item of list) {
+    const relaxed = relaxObservation(item);
+    const parsed = observationSchema.safeParse(relaxed);
+    if (parsed.success) {
+      kept.push(parsed.data);
+      continue;
+    }
+    const issue = parsed.error.issues[0];
+    const path =
+      relaxed && typeof relaxed === 'object' && typeof (relaxed as { path?: unknown }).path === 'string'
+        ? (relaxed as { path: string }).path.slice(0, 300)
+        : '';
+    dropped.push({ path, issue: `${(issue?.path ?? []).join('.')}: ${issue?.message ?? 'invalid'}` });
+  }
+  const batch = ingestBatchSchema.parse({ ...raw, observations: kept });
+  return { batch, dropped };
+}
 
 export const ingestResponseSchema = z.object({
   ack: z.number().int().nonnegative(),

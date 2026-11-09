@@ -36,6 +36,7 @@ import {
   validatePublication,
   zonedToUtc,
   BUILT_IN_TEMPLATES,
+  acceptIngestBatch,
   ingestBatchSchema,
   observationSchema,
 } from './index';
@@ -369,6 +370,25 @@ describe('templates and agent contract', () => {
     };
     expect(ingestBatchSchema.safeParse({ ...base, observations: Array(1001).fill(o) }).success).toBe(false);
     expect(ingestBatchSchema.safeParse({ ...base, observations: [o] }).success).toBe(true);
+  });
+
+  it('keeps a Mac file with a long suffix or an old time and skips only the broken record', () => {
+    const base = {
+      rootId: '11111111-1111-4111-8111-111111111111',
+      runId: '22222222-2222-4222-8222-222222222222',
+      phase: 'END',
+    };
+    const { batch, dropped } = acceptIngestBatch({
+      ...base,
+      observations: [
+        { eventId: 'r:1', seq: 1, kind: 'file', path: '/Users/a/Documents/notes.final-version-for-the-client', ext: 'final-version-for-the-client', mtimeMs: -20_000 },
+        { eventId: 'r:2', seq: 2, kind: 'nope', path: '/Users/a/Documents/bad' },
+      ],
+    });
+    expect(batch.observations).toHaveLength(1);
+    expect(batch.observations[0]?.ext).toBe('final-version-for-the-client');
+    expect(batch.observations[0]?.mtimeMs).toBe(-20_000);
+    expect(dropped).toEqual([{ path: '/Users/a/Documents/bad', issue: 'kind: Invalid option: expected one of "file"|"hash"|"probe"|"error"' }]);
   });
 });
 

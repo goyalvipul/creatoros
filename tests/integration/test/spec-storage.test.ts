@@ -11,7 +11,9 @@ import {
   archiveChannel,
   archiveSocialAccount,
   deleteRoot,
+  requestScan,
   setRootState,
+  updateRoot,
   listCatalog,
   createAsset,
   createBrand,
@@ -482,5 +484,25 @@ describe('removing entries (catalogue and folders)', () => {
     // another organisation cannot remove it
     const other = await makeOrg(h);
     await expect(deleteRoot(other.ctx, w.rootNas.id)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('a folder can be edited, including its path, and a scan can be asked for now', async () => {
+    const w = await world();
+    const edited = await updateRoot(w.ctx, w.rootA.id, {
+      label: 'Media',
+      displayPath: 'E:\\Clips',
+      extensions: [],
+      scanIntervalMinutes: 30,
+    });
+    expect(edited.label).toBe('Media');
+    expect(edited.displayPath).toBe('E:\\Clips');
+    expect(edited.canonicalPath).toBe('e:\\clips');
+    expect(edited.scanIntervalMinutes).toBe(30);
+    await expect(updateRoot(w.ctx, w.rootA.id, { displayPath: 'Z:\\Archive\\sub' })).rejects.toMatchObject({
+      code: 'ROOT_OVERLAP',
+    });
+    await h.db.execute(sql`update storage_roots set scan_requested_at = null where id = ${w.rootA.id}`);
+    const scanned = await requestScan(w.ctx, w.rootA.id);
+    expect(scanned.scanRequestedAt).toBeTruthy();
   });
 });

@@ -82,7 +82,7 @@ UI components used everywhere: `PageHeader`, `Select`, `Button`, `ActionButton` 
 | `/collaborations/invoices/new`, `/collaborations/invoices/[id]`                 | Invoice document: from, to, lines, bank details          |
 | `/socials/*`                                                                    | Comments, inbox, leads, scheduled. Not the email inbox   |
 | `/channels`                                                                     | Brands → channels → social accounts                      |
-| `/storage`                                                                      | Devices, scan roots, pairing                             |
+| `/storage`                                                                      | Devices, scan roots, pairing. Folder rows have Edit and Scan now. |
 | `/integrations`                                                                 | OAuth and opt-in scopes                                  |
 | `/analytics`, `/workflows`, `/settings`                                         | Reports, automations, health, demo data                  |
 

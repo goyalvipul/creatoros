@@ -123,11 +123,7 @@ export async function createRoot(ctx: Ctx, input: RootInput) {
   return root;
 }
 
-export async function updateRoot(
-  ctx: Ctx,
-  id: string,
-  patch: Partial<Omit<RootInput, 'deviceId' | 'displayPath'>>,
-) {
+export async function updateRoot(ctx: Ctx, id: string, patch: Partial<Omit<RootInput, 'deviceId'>>) {
   const [existing] = await ctx.db
     .select()
     .from(storageRoots)
@@ -152,7 +148,39 @@ export async function updateRoot(
   ] as const) {
     if ((patch as any)[k] !== undefined) set[k] = (patch as any)[k];
   }
-  if (patch.extensions) set.extensions = patch.extensions.map((e) => e.replace(/^\./, '').toLowerCase());
+  if (patch.extensions !== undefined)
+    set.extensions = patch.extensions.map((e) => e.replace(/^\./, '').toLowerCase());
+  if (patch.displayPath !== undefined) {
+    const display = patch.displayPath.trim();
+    if (!display) throw badRequest('Path is required');
+    const [device] = await ctx.db.select().from(devices).where(eq(devices.id, existing.deviceId));
+    if (!device) throw notFound('Device');
+    const os: PathOs = osToPathOs(device.os, display);
+    const canonical = canonicalPath(display, os);
+    if (canonical !== existing.canonicalPath) {
+      const siblings = await ctx.db
+        .select()
+        .from(storageRoots)
+        .where(
+          and(eq(storageRoots.deviceId, device.id), ne(storageRoots.state, 'RETIRED'), ne(storageRoots.id, id)),
+        );
+      for (const s of siblings) {
+        if (s.canonicalPath === canonical)
+          throw conflict(`A scan root for ${s.displayPath} already exists on this device.`, { rootId: s.id }, 'ROOT_EXISTS');
+        if (isInsideRoot(s.canonicalPath, canonical, os) || isInsideRoot(canonical, s.canonicalPath, os)) {
+          throw conflict(
+            `This path overlaps the existing root ${s.displayPath}. Overlapping roots would index the same files twice; use include/exclude globs on one root instead.`,
+            { rootId: s.id },
+            'ROOT_OVERLAP',
+          );
+        }
+      }
+      set.displayPath = display;
+      set.canonicalPath = canonical;
+      set.pathOs = os;
+      set.scanRequestedAt = ctx.now();
+    }
+  }
   const [row] = await ctx.db.update(storageRoots).set(set).where(eq(storageRoots.id, id)).returning();
   await audit(ctx, 'storage_root.update', { type: 'storage_root', id }, undefined, set);
   return row;

@@ -368,8 +368,10 @@ export function Shell({ children }: { children: ReactNode }) {
             onClick={() => setPaletteOpen(true)}
             aria-label="Search workspace"
             className={clsx(
-              'flex min-h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden border border-border px-3 text-left text-sm text-muted',
-              v5 ? 'order-last basis-full rounded-[10px] bg-panel md:order-none md:basis-auto md:max-w-[230px]' : 'rounded-full bg-bg md:max-w-md',
+              'flex min-h-10 min-w-0 items-center gap-2 overflow-hidden border border-border px-3 text-left text-sm text-muted',
+              v5
+                ? 'order-last basis-full flex-1 rounded-[10px] bg-panel md:order-none md:ml-auto md:w-[230px] md:flex-none md:basis-auto'
+                : 'flex-1 rounded-full bg-bg md:max-w-md',
             )}
           >
             <Search className="size-4 shrink-0" aria-hidden />

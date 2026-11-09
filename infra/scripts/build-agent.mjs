@@ -1,6 +1,6 @@
 // Builds the scanner agent binaries into apps/scanner-agent/dist.
-//   node infra/scripts/build-agent.mjs            -> windows/amd64 + current platform
-//   node infra/scripts/build-agent.mjs --all      -> also linux/amd64, linux/arm64, darwin/arm64
+//   node infra/scripts/build-agent.mjs            -> windows/amd64 and darwin/arm64
+//   node infra/scripts/build-agent.mjs --all      -> also linux/amd64 and linux/arm64
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { agentDir, runGo } from './go.mjs';
@@ -11,12 +11,14 @@ const version = pkg.version ?? '0.1.0';
 const dist = join(agentDir, 'dist');
 mkdirSync(dist, { recursive: true });
 
-const targets = [{ goos: 'windows', goarch: 'amd64' }];
+const targets = [
+  { goos: 'windows', goarch: 'amd64' },
+  { goos: 'darwin', goarch: 'arm64' },
+];
 if (all)
   targets.push(
     { goos: 'linux', goarch: 'amd64' },
     { goos: 'linux', goarch: 'arm64' },
-    { goos: 'darwin', goarch: 'arm64' },
   );
 
 let failed = 0;

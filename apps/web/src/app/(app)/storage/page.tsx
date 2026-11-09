@@ -59,8 +59,11 @@ function Devices() {
   const [name, setName] = useState('');
   const toast = useToast();
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
-  const cmd = code
+  const windowsCmd = code
     ? `.\\creatoros-agent-windows-amd64.exe pair --server ${origin} --code ${code.code}\n.\\creatoros-agent-windows-amd64.exe install`
+    : '';
+  const macCmd = code
+    ? `chmod +x creatoros-agent-darwin-arm64\n./creatoros-agent-darwin-arm64 pair --server ${origin} --code ${code.code} --label "Mac"\n./creatoros-agent-darwin-arm64 run`
     : '';
   return (
     <div className="space-y-4">
@@ -132,14 +135,14 @@ function Devices() {
       </Async>
 
       <Card>
-        <CardTitle>Pair another PC</CardTitle>
+        <CardTitle>Pair another computer</CardTitle>
         <ol className="mb-3 list-decimal space-y-1 pl-5 text-sm text-muted">
           <li>
-            Copy the agent program to the PC (build it with{' '}
-            <code className="rounded bg-panel2 px-1">pnpm agent:build</code>).
+            Build it with <code className="rounded bg-panel2 px-1">pnpm agent:build</code>. That writes the Windows program and{' '}
+            <code className="rounded bg-panel2 px-1">creatoros-agent-darwin-arm64</code> for an Apple silicon Mac.
           </li>
           <li>Create a one-time code here.</li>
-          <li>Run the two commands in an Administrator PowerShell on that PC.</li>
+          <li>On Windows, run the PowerShell commands as Administrator. On a Mac, run the Terminal commands and leave that window open.</li>
         </ol>
         <ActionButton
           variant="primary"
@@ -155,16 +158,31 @@ function Devices() {
             <div className="font-mono text-2xl tracking-widest" aria-label="Pairing code">
               {code.code}
             </div>
-            <pre className="overflow-x-auto rounded-lg bg-panel2 p-3 text-xs">{cmd}</pre>
+            <p className="text-xs font-medium">Windows</p>
+            <pre className="overflow-x-auto rounded-lg bg-panel2 p-3 text-xs">{windowsCmd}</pre>
             <Button
               size="sm"
               onClick={async () => {
-                await copy(cmd);
+                await copy(windowsCmd);
                 toast.ok('Copied');
               }}
             >
-              Copy commands
+              Copy Windows commands
             </Button>
+            <p className="pt-2 text-xs font-medium">Mac</p>
+            <pre className="overflow-x-auto rounded-lg bg-panel2 p-3 text-xs">{macCmd}</pre>
+            <Button
+              size="sm"
+              onClick={async () => {
+                await copy(macCmd);
+                toast.ok('Copied');
+              }}
+            >
+              Copy Mac commands
+            </Button>
+            <p className="text-xs text-muted">
+              The Mac program does not install a Windows service. Leave <code className="rounded bg-panel2 px-1">run</code> open while you want those files available, then add the folder on the Folders tab.
+            </p>
             <p className="text-xs text-muted">
               Valid once, expires {when(code.expiresAt)}. It will not be shown again.
             </p>

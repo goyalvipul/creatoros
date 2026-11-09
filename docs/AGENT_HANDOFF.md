@@ -50,7 +50,7 @@ Brands, channels, and accounts are created on **Channels**. Production projects 
 apps/api            Fastify REST under /api/v1. Routes: src/routes/{core,content,storage,work,socials}.ts
 apps/worker         BullMQ. Scheduled jobs in src/jobs.ts. On-demand jobs (sync, backup, publish) in src/main.ts
 apps/web            Next.js App Router PWA. Screens in src/app/(app)/*. The installed phone app draws under the status bar (`viewport-fit: cover`). The top bar has a `safe-top` spacer (`env(safe-area-inset-top)`); the bottom nav uses `safe-bottom`. Kemokem logos and icons are the named files in `apps/icons`, served from `public/brand`.
-apps/scanner-agent  Go. Windows service or Linux systemd. Scans are read-only. Confirmed rename, move, and delete are the only writes.
+apps/scanner-agent  Go. Windows service, a Mac left running in Terminal, or Linux systemd. `pnpm agent:build` writes the Windows exe and `creatoros-agent-darwin-arm64`. Scans are read-only. Confirmed rename, move, and delete are the only writes.
 packages/domain     Enums, Zod, pure rules
 packages/db         Drizzle schema in src/schema/*, SQL migrations in drizzle/*.sql plus drizzle/meta/_journal.json
 packages/services   All business logic. The API, the worker, and tests call this. Do not put rules only in a route.
@@ -276,7 +276,8 @@ pnpm test:agent                  # Go
 pnpm test:e2e                    # Playwright. Do not run bare playwright after pnpm build
 pnpm build
 pnpm db:migrate
-pnpm agent:build -- --all
+pnpm agent:build                 # Windows exe and Mac Apple silicon
+pnpm agent:build -- --all      # also Linux
 ```
 
 On Windows, before any `docker` command in an agent shell: `. .\infra\scripts\docker-env.ps1`. If that changes the directory, `cd` back to the repo.

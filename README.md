@@ -38,7 +38,7 @@ Then: add `http://<pc-lan-ip>:8080` to `ALLOWED_ORIGINS` in `.env` to use it fro
 | Go agent tests                          | `pnpm test:agent`                                                                                            | repo root |
 | Browser tests, desktop and 360px        | `pnpm test:e2e`                                                                                              | repo root |
 | Migrations / demo data                  | `pnpm db:migrate`, `pnpm db:seed:demo`                                                                       | repo root |
-| Build scanner agent                     | `pnpm agent:build` (`-- --all` for Linux and macOS)                                                          | repo root |
+| Build scanner agent                     | `pnpm agent:build` (Windows and Mac; `-- --all` also builds Linux)                                           | repo root |
 | Backup, restore, diagnostics            | `pnpm backup`, `pnpm restore <file> [--yes]`, `pnpm diagnostics`                                             | repo root |
 | Restart safety check on the live stack  | `pnpm restart-test`                                                                                          | repo root |
 | HTTPS over Tailscale                    | `pnpm tailscale status\|enable\|disable`                                                                     | repo root |

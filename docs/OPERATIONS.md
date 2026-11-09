@@ -152,7 +152,8 @@ The agent is one small Go binary that reads your media folders and reports to Cr
 3. **The binary.** Build it where Go is installed (the Windows PC has it), then copy the right file to each machine:
 
    ```powershell
-   pnpm agent:build -- --all      # run in the repo root; files land in apps\scanner-agent\dist\
+   pnpm agent:build               # Windows and Mac; files land in apps\scanner-agent\dist\
+   pnpm agent:build -- --all      # also Linux
    ```
 
    | Machine                    | File                                |
@@ -188,6 +189,18 @@ Notes:
 - Data and credentials live in `C:\ProgramData\CreatorOS\agent` (logs in `agent.log` there). Keep the `.exe` somewhere permanent (for example `C:\CreatorOS\`) before running `install`, because the service points at that path.
 - A service runs as LocalSystem by default, which usually **cannot see network shares or mapped drives**. For SMB/NAS folders install it under an account that can open them: `install --account ".\youruser" --password "..."` (the password goes to Windows' service manager, not to Creator OS).
 - The label is what you see in the app (for example `GPU-12GB`, `GPU-24GB`). Pairing the same machine again keeps its identity, so its files and folders carry over.
+
+### If you are installing on a Mac
+
+Apple silicon uses `creatoros-agent-darwin-arm64` from the same `pnpm agent:build`. There is no Windows service on a Mac. Pair as your normal user, then leave `run` open in Terminal. Credentials go to `~/.config/creatoros-agent`. `install`, `start`, and `stop` do not apply.
+
+```bash
+chmod +x creatoros-agent-darwin-arm64
+./creatoros-agent-darwin-arm64 pair --server http://192.168.1.151:8080 --code ABCD-EFGH --label "Mac"
+./creatoros-agent-darwin-arm64 run
+```
+
+ffmpeg is optional and adds durations and thumbnails (`brew install ffmpeg`). The server still needs to reach the Mac on TCP 7755 for previews. After the Mac shows as online, add its folder under Storage & Devices.
 
 ### If you are installing on Ubuntu / Linux
 

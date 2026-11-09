@@ -211,6 +211,7 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
   }
   const attached = new Map<string, number>();
   const published = new Map<string, number>();
+  const active = new Map<string, number>();
   if (ids.length) {
     const idList = sql.join(
       ids.map((i) => sql`${i}::uuid`),
@@ -231,6 +232,25 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
       ),
     ))
       published.set(`${r.variantId}:${r.accountId}`, r.n);
+    for (const r of rowsOf<{ variantId: string; accountId: string; n: number }>(
+      await ctx.db.execute(sql`
+        select variant_id as "variantId", account_id as "accountId", count(distinct file_instance_id)::int as n
+        from (
+          select i.variant_id, d.social_account_id as account_id, i.file_instance_id
+          from publish_drafts d
+          join publish_items i on i.id = d.item_id
+          where i.variant_id in (${idList})
+            and d.upload_state in ('PUBLISHED', 'SCHEDULED', 'QUEUED', 'UPLOADING')
+          union
+          select r.variant_id, r.social_account_id, r.file_instance_id
+          from publication_records r
+          where r.variant_id in (${idList})
+            and r.file_instance_id is not null
+            and r.state in ('PUBLISHED_VERIFIED', 'PUBLISHED_MANUAL')
+        ) s
+        group by variant_id, account_id`),
+    ))
+      active.set(`${r.variantId}:${r.accountId}`, r.n);
   }
   const previews = new Map<string, string[]>();
   if (ids.length) {
@@ -264,6 +284,7 @@ export async function publishingMatrix(ctx: Ctx, q: { assetId?: string; brandId?
         accountId: a.id,
         ...(cells.get(`${v.id}:${a.id}`) ?? { state: 'NOT_PLANNED', recordId: null }),
         published: published.get(`${v.id}:${a.id}`) ?? 0,
+        active: active.get(`${v.id}:${a.id}`) ?? 0,
       })),
     })),
   };
@@ -624,7 +645,7 @@ export async function reschedule(ctx: Ctx, id: string, plannedLocal: string, tim
 }
 
 /** Calendar items grouped by the owner's local day (DST safe because plannedAt is stored as a UTC instant + zone name). */
-export async function calendar(ctx: Ctx, from: Date, to: Date, tz?: string) {
+export async function calendar(ctx: Ctx, from: Date, to: Date, tz?: string, brandId?: string) {
   const zone = tz ?? (await orgTimezone(ctx.db, ctx.orgId));
   const rows = rowsOf<any>(
     await ctx.db.execute(sql`
@@ -636,6 +657,17 @@ export async function calendar(ctx: Ctx, from: Date, to: Date, tz?: string) {
       left join file_instances f on f.id = r.file_instance_id
       where r.org_id = ${ctx.orgId} and r.state <> 'REMOVED'
         and coalesce(r.published_at, r.planned_at) >= ${from.toISOString()}::timestamptz and coalesce(r.published_at, r.planned_at) < ${to.toISOString()}::timestamptz
+        ${brandId ? sql`and (
+          exists (
+            select 1 from channels c
+            where c.id = sa.channel_id and c.brand_id = ${brandId}
+          )
+          or exists (
+            select 1 from distribution_variants v
+            left join creative_projects cp on cp.id = v.project_id
+            where v.id = r.variant_id and (v.brand_id = ${brandId} or cp.brand_id = ${brandId})
+          )
+        )` : sql``}
       order by coalesce(r.published_at, r.planned_at)`),
   );
   const days: Record<string, any[]> = {};

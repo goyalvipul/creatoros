@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   title: { default: 'Creator OS', template: '%s · Creator OS' },
   description: 'Private creative production, publishing and collaboration command centre.',
   manifest: '/manifest.webmanifest',
-  appleWebApp: { capable: true, title: 'Creator OS', statusBarStyle: 'black-translucent' },
+  appleWebApp: { capable: true, title: 'Creator OS', statusBarStyle: 'default' },
   icons: {
     icon: [
       { url: '/brand/kemokem-favicon.ico' },
@@ -33,14 +33,11 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f6f7fb' },
-    { media: '(prefers-color-scheme: dark)', color: '#0d0f17' },
-  ],
+  themeColor: '#f7f7f3',
 };
 
 // Applied before first paint so the theme never flashes.
-const themeScript = `try{var t=localStorage.getItem('cos-theme');if(!t){t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.dataset.theme=t;${process.env.NEXT_PUBLIC_CREATOROS_UX_V5 === '1' ? "document.documentElement.dataset.ux='v5';" : ''}}catch(e){}`;
+const themeScript = `try{var t=localStorage.getItem('cos-theme');if(!t){t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.dataset.theme=t;var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute('content',t==='dark'?'#101816':'#f7f7f3');${process.env.NEXT_PUBLIC_CREATOROS_UX_V5 === '1' ? "document.documentElement.dataset.ux='v5';" : ''}}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

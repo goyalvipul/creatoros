@@ -17,6 +17,7 @@ import {
   Select,
 } from '@/components/ui';
 import { del, patch, post, refresh, useApi } from '@/lib/api';
+import { useWorkspace } from '@/lib/workspace';
 import { title as titleCase } from '@/lib/format';
 import { IDEA_FORMATS, IDEA_STATUSES, PRIORITIES, PROJECT_TYPES, useBrands } from '@/lib/options';
 
@@ -119,6 +120,7 @@ function nextStickyColor(rows: IdeaRow[], wallColors: Record<string, string>) {
 export function ContentPlayground() {
   const router = useRouter();
   const brands = useBrands();
+  const { id: workspaceId } = useWorkspace();
   const channels = useApi<any[]>('/channels');
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -154,11 +156,14 @@ export function ContentPlayground() {
   }, []);
 
   useEffect(() => {
-    if (selectedId !== 'new' || brands.length !== 1) return;
-    const id = brands[0]?.id;
-    if (!id) return;
+    if (workspaceId) setBrandId(workspaceId);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    const id = workspaceId || (brands.length === 1 ? brands[0]?.id : null);
+    if (selectedId !== 'new' || !id) return;
     setDraft((current) => (current && current.id === 'new' && !current.brandId ? { ...current, brandId: id } : current));
-  }, [selectedId, brands]);
+  }, [selectedId, brands, workspaceId]);
 
   useEffect(() => {
     if (brands.length !== 1) return;
@@ -193,7 +198,7 @@ export function ContentPlayground() {
         format: 'OTHER',
         priority: 'NORMAL',
         language: 'en',
-        brandId: brands.length === 1 ? brands[0]?.id ?? null : null,
+        brandId: workspaceId ?? (brands.length === 1 ? brands[0]?.id ?? null : null),
         contentPillars: [],
         score: null,
         ...creativeFrom({}),
@@ -254,7 +259,7 @@ export function ContentPlayground() {
         format: current.format,
         priority: current.priority,
         status: current.status,
-        brandId: current.brandId || (brands.length === 1 ? brands[0]?.id ?? null : null),
+        brandId: current.brandId || workspaceId || null,
         channelId: current.channelId || null,
         language: current.language || 'en',
         contentPillars: (current.contentPillars ?? []).map((p) => p.trim()).filter(Boolean),

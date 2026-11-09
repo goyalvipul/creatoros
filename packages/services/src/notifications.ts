@@ -9,7 +9,7 @@ import {
   type Db,
   type Executor,
 } from '@creatoros/db';
-import { inQuietHours, type EventType } from '@creatoros/domain';
+import { deliveryChoice, inQuietHours, notificationMeta, safeNotificationPath, type EventType } from '@creatoros/domain';
 import { badRequest, type Ctx } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
@@ -25,6 +25,7 @@ export interface NotifyInput {
   deepLink?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
+  accountId?: string | null;
 }
 
 /** When do quiet hours end? Used to hold non-critical notifications back instead of dropping them. */
@@ -38,20 +39,49 @@ export function quietHoursEnd(now: Date, tz: string, start: string | null, end: 
   return null;
 }
 
+/** Next time the clock in `tz` shows `hour`:00. Used to hold digest items until the summary. */
+export function nextLocalHour(now: Date, tz: string, hour: number): Date {
+  const hourOf = (d: Date) =>
+    Number(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hourCycle: 'h23' }).format(d));
+  let t = now.getTime() + 60_000;
+  for (let i = 0; i < 24 * 60; i++) {
+    const at = new Date(t);
+    if (hourOf(at) === hour) return at;
+    t += 60_000;
+  }
+  return new Date(now.getTime() + 60 * 60_000);
+}
+
 export async function notify(db: Executor, input: NotifyInput, now = new Date()): Promise<boolean> {
+  const meta = notificationMeta(input.type);
+  const [pref] = await db
+    .select()
+    .from(notificationPreferences)
+    .where(
+      and(
+        eq(notificationPreferences.orgId, input.orgId),
+        input.userId ? eq(notificationPreferences.userId, input.userId) : sql`true`,
+      ),
+    )
+    .limit(1);
+  const choice = pref
+    ? deliveryChoice({
+        type: input.type,
+        inApp: pref.inApp,
+        browserPush: pref.browserPush,
+        rules: pref.rules,
+        channels: pref.channels,
+        accountId: input.accountId,
+      })
+    : 'in_app';
+  if (choice === 'off') return false;
   let snoozedUntil: Date | null = null;
-  if (input.severity !== 'CRITICAL') {
-    const [pref] = await db
-      .select()
-      .from(notificationPreferences)
-      .where(
-        and(
-          eq(notificationPreferences.orgId, input.orgId),
-          input.userId ? eq(notificationPreferences.userId, input.userId) : sql`true`,
-        ),
-      )
-      .limit(1);
-    if (pref) snoozedUntil = quietHoursEnd(now, pref.timezone, pref.quietStart, pref.quietEnd);
+  if (input.severity !== 'CRITICAL' && pref) {
+    snoozedUntil = quietHoursEnd(now, pref.timezone, pref.quietStart, pref.quietEnd);
+    if (choice === 'digest') {
+      const digestAt = nextLocalHour(now, pref.timezone, pref.digestHour ?? 8);
+      if (!snoozedUntil || digestAt > snoozedUntil) snoozedUntil = digestAt;
+    }
   }
   const rows = await db
     .insert(notifications)
@@ -63,16 +93,30 @@ export async function notify(db: Executor, input: NotifyInput, now = new Date())
       title: input.title,
       body: input.body ?? null,
       severity: input.severity ?? 'INFO',
-      deepLink: input.deepLink ?? null,
+      deepLink: safeNotificationPath(input.deepLink),
       sourceType: input.sourceType ?? null,
       sourceId: input.sourceId ?? null,
+      category: meta.category,
+      priority: meta.priority,
       snoozedUntil,
       deliveredAt: now,
-      deliveredVia: ['in_app'],
+      deliveredVia: [choice === 'push' ? 'in_app' : choice],
     })
     .onConflictDoNothing()
     .returning({ id: notifications.id });
-  return rows.length > 0;
+  const id = rows[0]?.id;
+  if (id && choice === 'push') {
+    const when = snoozedUntil ?? now;
+    const userFilter = input.userId ? sql`and s.user_id = ${input.userId}::uuid` : sql``;
+    await db.execute(sql`
+      insert into notification_deliveries (org_id, notification_id, subscription_id, channel, next_attempt_at)
+      select s.org_id, ${id}::uuid, s.id, 'push', ${when}
+      from push_subscriptions s
+      where s.org_id = ${input.orgId}::uuid and s.revoked_at is null ${userFilter}
+      on conflict (notification_id, subscription_id) do nothing
+    `);
+  }
+  return Boolean(id);
 }
 
 const JOB_KIND: Record<string, string> = {
@@ -101,16 +145,26 @@ export async function notifyGenerationReady(
   });
 }
 
-export async function listNotifications(ctx: Ctx, q: { unreadOnly?: boolean; limit?: number } = {}) {
+export async function listNotifications(
+  ctx: Ctx,
+  q: { unreadOnly?: boolean; filter?: 'all' | 'unread' | 'action' | 'archived'; limit?: number } = {},
+) {
+  const filter = q.filter ?? (q.unreadOnly ? 'unread' : 'all');
   const where = [
     sql`org_id = ${ctx.orgId}`,
     sql`(user_id is null or user_id = ${ctx.userId})`,
     sql`(snoozed_until is null or snoozed_until <= now())`,
   ];
-  if (q.unreadOnly) where.push(sql`read_at is null`);
+  if (filter === 'archived') where.push(sql`archived_at is not null`);
+  else where.push(sql`archived_at is null`);
+  if (filter === 'unread' || q.unreadOnly) where.push(sql`read_at is null`);
+  if (filter === 'action')
+    where.push(
+      sql`(severity in ('WARNING','CRITICAL') or priority in ('high','urgent') or type in ('workflow.approval','deal.reply_required','task.overdue','publish.failed','oauth.expired','workflow.failed'))`,
+    );
   return rowsOf<any>(
     await ctx.db.execute(
-      sql`select id, type, title, body, severity, deep_link as "deepLink", read_at as "readAt", created_at as "createdAt" from notifications where ${sql.join(where, sql` and `)} order by created_at desc limit ${Math.min(q.limit ?? 50, 200)}`,
+      sql`select id, type, category, priority, title, body, severity, deep_link as "deepLink", source_type as "sourceType", source_id as "sourceId", read_at as "readAt", archived_at as "archivedAt", created_at as "createdAt" from notifications where ${sql.join(where, sql` and `)} order by created_at desc limit ${Math.min(q.limit ?? 50, 200)}`,
     ),
   );
 }
@@ -119,22 +173,50 @@ export async function unreadCount(ctx: Ctx) {
   return (
     rowsOf<{ n: number }>(
       await ctx.db.execute(
-        sql`select count(*)::int as n from notifications where org_id = ${ctx.orgId} and (user_id is null or user_id = ${ctx.userId}) and read_at is null and (snoozed_until is null or snoozed_until <= now())`,
+        sql`select count(*)::int as n from notifications where org_id = ${ctx.orgId} and (user_id is null or user_id = ${ctx.userId}) and archived_at is null and read_at is null and (snoozed_until is null or snoozed_until <= now())`,
       ),
     )[0]?.n ?? 0
   );
 }
 
-export async function markRead(ctx: Ctx, ids: string[] | 'all') {
+const ownNotes = (ctx: Ctx) =>
+  sql`org_id = ${ctx.orgId} and (user_id is null or user_id = ${ctx.userId})`;
+
+export async function markRead(ctx: Ctx, ids: string[] | 'all', read = true) {
+  const stamp = read ? sql`now()` : sql`null`;
   if (ids === 'all') {
     const r = await ctx.db.execute(
-      sql`update notifications set read_at = now() where org_id = ${ctx.orgId} and read_at is null`,
+      sql`update notifications set read_at = ${stamp} where ${ownNotes(ctx)} and ${read ? sql`read_at is null` : sql`read_at is not null`}`,
     );
     return { updated: (r as any).rowCount ?? 0 };
   }
   if (!ids.length) return { updated: 0 };
   const r = await ctx.db.execute(
-    sql`update notifications set read_at = now() where org_id = ${ctx.orgId} and id in (${sql.join(
+    sql`update notifications set read_at = ${stamp} where ${ownNotes(ctx)} and id in (${sql.join(
+      ids.map((i) => sql`${i}::uuid`),
+      sql`, `,
+    )})`,
+  );
+  return { updated: (r as any).rowCount ?? 0 };
+}
+
+export async function archiveNotifications(ctx: Ctx, ids: string[], archived = true) {
+  if (!ids.length) return { updated: 0 };
+  const stamp = archived ? sql`now()` : sql`null`;
+  const r = await ctx.db.execute(
+    sql`update notifications set archived_at = ${stamp} where ${ownNotes(ctx)} and id in (${sql.join(
+      ids.map((i) => sql`${i}::uuid`),
+      sql`, `,
+    )})`,
+  );
+  return { updated: (r as any).rowCount ?? 0 };
+}
+
+export async function snoozeNotifications(ctx: Ctx, ids: string[], until: Date) {
+  if (!ids.length) return { updated: 0 };
+  if (until.getTime() < Date.now()) throw badRequest('Snooze time is in the past');
+  const r = await ctx.db.execute(
+    sql`update notifications set snoozed_until = ${until} where ${ownNotes(ctx)} and id in (${sql.join(
       ids.map((i) => sql`${i}::uuid`),
       sql`, `,
     )})`,
@@ -149,7 +231,18 @@ export async function getPrefs(ctx: Ctx) {
     .where(
       and(eq(notificationPreferences.orgId, ctx.orgId), eq(notificationPreferences.userId, ctx.userId!)),
     );
-  return p ?? null;
+  return (
+    p ?? {
+      timezone: 'America/Vancouver',
+      quietStart: null,
+      quietEnd: null,
+      inApp: true,
+      browserPush: false,
+      digestHour: 8,
+      rules: {} as Record<string, boolean>,
+      channels: {} as Record<string, string>,
+    }
+  );
 }
 
 export async function updatePrefs(
@@ -162,8 +255,18 @@ export async function updatePrefs(
     browserPush: boolean;
     digestHour: number;
     rules: Record<string, boolean>;
+    channels: Record<string, string>;
   }>,
 ) {
+  if (patch.channels) {
+    const allowed = new Set(['push', 'in_app', 'digest', 'off']);
+    for (const [key, value] of Object.entries(patch.channels)) {
+      if (key.length > 80 || (key !== 'weeklyDay' && !allowed.has(value)))
+        throw badRequest('A delivery choice is not one of push, in-app, digest, or off');
+      if (key === 'weeklyDay' && !['0', '1', '2', '3', '4', '5', '6'].includes(value))
+        throw badRequest('Weekly summary day must be 0–6');
+    }
+  }
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
   if (patch.quietStart && !hhmm.test(patch.quietStart)) throw badRequest('quietStart must be HH:MM');
   if (patch.quietEnd && !hhmm.test(patch.quietEnd)) throw badRequest('quietEnd must be HH:MM');

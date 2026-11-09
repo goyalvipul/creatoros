@@ -24,6 +24,7 @@ import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { title as titleCase, when } from '@/lib/format';
 import { PROJECT_STAGES, PROJECT_TYPES, projectStageLabel, useBrands } from '@/lib/options';
 import { useMe } from '@/components/shell';
+import { useWorkspace } from '@/lib/workspace';
 import { uxV5 } from '@/components/ux-v5-flag';
 
 type Project = {
@@ -222,7 +223,8 @@ export default function ProductionPage() {
   const me = useMe();
   const isOwner = me.data?.user?.role === 'OWNER';
   const tz = me.data?.organization?.timezone;
-  const projects = useApi<Project[]>('/projects', { query: { limit: 200 } });
+  const { id: workspaceId } = useWorkspace();
+  const projects = useApi<Project[]>(workspaceId ? '/projects' : null, { query: { limit: 200, brandId: workspaceId } });
   const brands = useBrands();
   const [adding, setAdding] = useState(false);
   const [view, setView] = useState<'board' | 'list'>('board');
@@ -248,7 +250,7 @@ export default function ProductionPage() {
     setF({
       title: '',
       type: 'SHORT_FORM',
-      brandId: brands.length === 1 ? brands[0]!.id : '',
+      brandId: workspaceId ?? '',
       dueAt: '',
     });
     setAdding(true);

@@ -24,6 +24,7 @@ import {
 } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
+import { isUpscaleVideo, originalAfterUpscaleFailure, UPSCALE_FAILED, type SavedVideo } from './ltx-history';
 import { notifyGenerationReady } from './notifications';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
@@ -64,6 +65,9 @@ export interface LtxForm {
   loraStrength: number;
   upscaleWidth: number;
   upscaleHeight: number;
+  upscaleResizeType?: 'target dimensions' | 'scale by multiplier';
+  upscaleQuality?: 'LOW' | 'MEDIUM' | 'HIGH' | 'ULTRA';
+  upscaleScale?: number;
   wantUpscale: boolean;
   imageUploadName: string | null;
   imageUploadWorkerId: string | null;
@@ -440,12 +444,16 @@ export async function saveLtxDraft(ctx: Ctx, form: LtxForm) {
   const checked = await checkedForm(ctx, form, { requireMedia: false, requireWorker: false });
   if (checked.errors.length) throw badRequest(checked.errors[0]!.message, checked.errors);
   const now = ctx.now();
+  const draft = { ...form };
+  delete draft.upscaleResizeType;
+  delete draft.upscaleQuality;
+  delete draft.upscaleScale;
   const [row] = await ctx.db
     .insert(ltxDrafts)
-    .values({ orgId: ctx.orgId, ...form, updatedBy: ctx.userId, updatedAt: now })
+    .values({ orgId: ctx.orgId, ...draft, updatedBy: ctx.userId, updatedAt: now })
     .onConflictDoUpdate({
       target: ltxDrafts.orgId,
-      set: { ...form, updatedBy: ctx.userId, updatedAt: now },
+      set: { ...draft, updatedBy: ctx.userId, updatedAt: now },
     })
     .returning();
   return { draft: row!, warnings: checked.warnings };
@@ -495,6 +503,9 @@ export async function generateLtx(ctx: Ctx, form: LtxForm) {
         loraStrength: form.loraStrength,
         upscaleWidth: form.upscaleWidth,
         upscaleHeight: form.upscaleHeight,
+        upscaleResizeType: form.upscaleResizeType ?? 'target dimensions',
+        upscaleQuality: form.upscaleQuality ?? 'ULTRA',
+        upscaleScale: form.upscaleScale ?? 2,
         wantUpscale: form.wantUpscale,
         imageUploadName: form.imageFileId ? null : form.imageUploadName,
         audioUploadName: form.audioFileId ? null : form.audioUploadName,
@@ -537,6 +548,9 @@ interface LtxSettings {
   loraStrength?: number;
   upscaleWidth?: number;
   upscaleHeight?: number;
+  upscaleResizeType?: 'target dimensions' | 'scale by multiplier';
+  upscaleQuality?: 'LOW' | 'MEDIUM' | 'HIGH' | 'ULTRA';
+  upscaleScale?: number;
   wantUpscale?: boolean;
   imageUploadName?: string | null;
   audioUploadName?: string | null;
@@ -707,6 +721,9 @@ export async function submitLtxJob(db: Db, env: ServiceEnv, jobId: string) {
       loraStrength: Number(settings.loraStrength),
       upscaleWidth: Number(settings.upscaleWidth ?? 1152),
       upscaleHeight: Number(settings.upscaleHeight ?? 2048),
+      upscaleResizeType: settings.upscaleResizeType === 'scale by multiplier' ? 'scale by multiplier' : 'target dimensions',
+      upscaleQuality: settings.upscaleQuality ?? 'ULTRA',
+      upscaleScale: Number(settings.upscaleScale ?? 2),
       wantUpscale: settings.wantUpscale !== false,
       filenamePrefix: prefix,
       seed,
@@ -777,7 +794,7 @@ function videosFromHistory(entry: HistoryEntry) {
   const message = (entry.status?.messages ?? []).find((m) => Array.isArray(m) && m[0] === 'execution_error') as
     | [string, { exception_message?: string }]
     | undefined;
-  const outputs: LtxSettings['outputs'] = [];
+  const outputs: SavedVideo[] = [];
   for (const [node, out] of Object.entries(entry.outputs ?? {})) {
     for (const file of [...(out.gifs ?? []), ...(out.videos ?? [])]) {
       if (!file.filename) continue;
@@ -913,7 +930,7 @@ async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
       select file_instance_id as "fileId"
       from generation_outputs
       where job_id = ${job.id}
-      order by case when output_role in ('upscale', 'final') then 0 else 1 end, created_at desc
+      order by case when output_role = 'upscale' then 0 when output_role in ('original', 'final') then 1 else 2 end, created_at desc
       limit 1`),
   );
   const title = project.title.trim() || 'Untitled';
@@ -1008,7 +1025,7 @@ async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVer
       select file_instance_id as "fileId"
       from generation_outputs
       where job_id = ${jobId} and file_instance_id is not null
-      order by case when output_role in ('upscale', 'final') then 0 else 1 end, created_at desc
+      order by case when output_role = 'upscale' then 0 when output_role in ('original', 'final') then 1 else 2 end, created_at desc
       limit 1`),
   );
   if (!file?.fileId) return;
@@ -1049,12 +1066,12 @@ async function linkLtxVariantFile(db: Db, orgId: string, jobId: string, assetVer
     )`);
 }
 
-async function finishLtxSuccess(db: Db, job: ClaimedJob, outputs: NonNullable<LtxSettings['outputs']>) {
+async function finishLtxSuccess(db: Db, job: ClaimedJob, outputs: SavedVideo[], notice?: string | null) {
   const saved = rowsOf<{ id: string }>(
     await db.execute(sql`
       update generation_jobs
-      set status = 'SUCCEEDED', finished_at = now(), updated_at = now(), error = null,
-          settings = settings || ${JSON.stringify({ outputs })}::jsonb
+      set status = 'SUCCEEDED', finished_at = now(), updated_at = now(), error = ${notice ?? null},
+          settings = settings || ${JSON.stringify({ outputs, upscaleFailed: Boolean(notice) })}::jsonb
       where id = ${job.id} and status in ('RUNNING', 'FAILED')
       returning id`),
   );
@@ -1065,7 +1082,7 @@ async function finishLtxSuccess(db: Db, job: ClaimedJob, outputs: NonNullable<Lt
       orgId: job.orgId,
       jobId: job.id,
       node: output.node,
-      outputRole: output.node === '610' ? 'upscale' : 'preview',
+      outputRole: isUpscaleVideo(output) ? 'upscale' : output.node === '400' ? 'original' : 'preview',
       expectedPath: output.subfolder ? `${output.subfolder}/${output.filename}` : output.filename,
     });
   }
@@ -1089,6 +1106,8 @@ async function finishLtxSuccess(db: Db, job: ClaimedJob, outputs: NonNullable<Lt
 }
 
 async function applyHistoryResult(db: Db, job: ClaimedJob, entry: ReturnType<typeof videosFromHistory>, workerBaseUrl: string) {
+  const original = originalAfterUpscaleFailure(entry);
+  if (original) return finishLtxSuccess(db, job, original, UPSCALE_FAILED);
   if (entry.status === 'error' || (entry.completed && entry.error && !entry.outputs.length)) {
     await failJob(db, job.id, entry.error || 'ComfyUI stopped this video.');
     return true;
@@ -1230,7 +1249,39 @@ async function recoverFalseFailedLtx(db: Db) {
     if (!entry?.completed || !entry.outputs.length) {
       entry = await findHistoryByPrefix(worker.baseUrl, job.settings?.filenamePrefix);
     }
-    if (entry?.completed && entry.outputs.length && (await finishLtxSuccess(db, job, entry.outputs))) recovered += 1;
+    const original = entry ? originalAfterUpscaleFailure(entry) : null;
+    if (!original && entry?.completed && entry.status !== 'error' && entry.outputs.length && (await finishLtxSuccess(db, job, entry.outputs))) {
+      recovered += 1;
+    }
+  }
+  return recovered + (await recoverUpscaleFailures(db));
+}
+
+/** A run already marked failed can still have the original clip on the PC. Link that clip. */
+async function recoverUpscaleFailures(db: Db) {
+  const failed = rowsOf<ClaimedJob>(
+    await db.execute(sql`
+      select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", settings, started_at as "startedAt"
+      from generation_jobs
+      where provider = 'comfyui-ltx' and status = 'FAILED'
+        and prompt_id is not null
+        and finished_at > now() - interval '7 days'
+      order by finished_at desc
+      limit 5`),
+  );
+  let recovered = 0;
+  for (const job of failed) {
+    if (!job.promptId) continue;
+    const [worker] = await db
+      .select()
+      .from(gpuWorkers)
+      .where(sql`${gpuWorkers.id} = ${job.settings?.workerId ?? null} and ${gpuWorkers.orgId} = ${job.orgId}`)
+      .limit(1);
+    if (!worker) continue;
+    const loaded = await loadHistoryEntry(worker.baseUrl, job.promptId);
+    const entry = loaded.entry ?? (await findHistoryByPrefix(worker.baseUrl, job.settings?.filenamePrefix));
+    const original = entry ? originalAfterUpscaleFailure(entry) : null;
+    if (original && (await finishLtxSuccess(db, job, original, UPSCALE_FAILED))) recovered += 1;
   }
   return recovered;
 }
@@ -1306,6 +1357,7 @@ export async function openLtxVideo(db: Db, orgId: string, jobId: string, range?:
     outputs.find((o) => o.node === '25' && /\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => o.node === '610' && /-audio\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => o.node === '610' && /\.mp4$/i.test(o.filename)) ??
+    outputs.find((o) => o.node === '400' && /\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => /-audio\.mp4$/i.test(o.filename)) ??
     outputs.find((o) => /\.mp4$/i.test(o.filename));
   if (!video) throw notFound('Video');

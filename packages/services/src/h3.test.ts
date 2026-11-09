@@ -62,6 +62,7 @@ describe('MiniMax H3 graph', () => {
     const audio = track.tracks.find((t) => t.type === 'audio')! as { audio_locked?: boolean; segments: { content: Record<string, unknown> }[] };
     expect(audio.audio_locked).toBe(true);
     expect(audio.segments.map((s) => s.content.file_name)).toEqual(['a.wav', 'b.wav']);
+    expect(Number(audio.segments[0]?.content.duration)).toBeCloseTo(Math.round(8.88 * 24) / 24, 5);
     expect(graph['37']).toBeDefined();
   });
 
@@ -92,5 +93,36 @@ describe('MiniMax H3 graph', () => {
     expect(audio.audio_locked).toBe(false);
     const task = track.tracks.find((t) => t.type === 'task')! as { segments: { content: { ref_image_size?: string } }[] };
     expect(task.segments[0]?.content.ref_image_size).toBe('match');
+  });
+
+  it('places only the trimmed audio length on the segment', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'costrim',
+      seed: 1,
+      segments: [
+        {
+          continuity: 'shot',
+          taskMode: 'ref',
+          prompt: 'She sings.',
+          images: [{ name: 'mehak.png', shared: false }],
+          audioName: 'slice.flac',
+          durationSec: 8,
+          audioSpanSec: 3,
+        },
+      ],
+      aspectRatio: '9:16 (Portrait Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+    });
+    const track = JSON.parse(String(prompt['29']?.inputs?.track_data)) as {
+      tracks: { type: string; segments: { start_frame: number; end_frame: number; content: { duration?: number; file_name?: string } }[] }[];
+    };
+    const task = track.tracks.find((t) => t.type === 'task')!;
+    const audio = track.tracks.find((t) => t.type === 'audio')!;
+    expect(task.segments[0]?.end_frame).toBe(Math.round(8 * 24));
+    expect(audio.segments[0]?.start_frame).toBe(0);
+    expect(audio.segments[0]?.end_frame).toBe(Math.round(3 * 24));
+    expect(audio.segments[0]?.content.file_name).toBe('slice.flac');
+    expect(audio.segments[0]?.content.duration).toBeCloseTo(3, 2);
   });
 });

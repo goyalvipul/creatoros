@@ -9,9 +9,10 @@ import { flushOutbox, onOutboxSynced } from '@/lib/outbox';
 export function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      // v=6 is a new address. Cloudflare is still serving the old worker at /sw.js.
+      // v=7 is a new address so an installed app replaces the worker that had no push handler.
+      // The worker still does not answer page requests.
       navigator.serviceWorker
-        .register('/sw.js?v=6', { scope: '/', updateViaCache: 'none' })
+        .register('/sw.js?v=7', { scope: '/', updateViaCache: 'none' })
         .catch(() => {
           /* the installed app is a bonus, never a requirement */
         });

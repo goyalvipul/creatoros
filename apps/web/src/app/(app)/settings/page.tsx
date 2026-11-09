@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Suspense, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useMe } from '@/components/shell';
 import {
@@ -28,13 +28,15 @@ import {
   useToast,
 } from '@/components/ui';
 import { del, patch, post, put, refresh, useApi } from '@/lib/api';
+import { useWorkspace, WorkspaceMark } from '@/lib/workspace';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
+import { NOTIFICATION_CATALOG, NOTIFICATION_CATEGORIES } from '@creatoros/domain';
 
 type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'workspace', label: 'Workspace' },
   { id: 'team', label: 'Team' },
-  { id: 'reminders', label: 'Reminders' },
+  { id: 'reminders', label: 'Notifications' },
   { id: 'security', label: 'Security' },
   { id: 'backups', label: 'Backups' },
   { id: 'demo', label: 'Demo data' },
@@ -52,7 +54,10 @@ export default function SettingsPage() {
 function Settings() {
   const router = useRouter();
   const sp = useSearchParams();
-  const [tab, setTabState] = useState<Tab>(TABS.find((t) => t.id === sp.get('tab'))?.id ?? 'workspace');
+  const asked = sp.get('tab');
+  const [tab, setTabState] = useState<Tab>(
+    asked === 'notifications' ? 'reminders' : (TABS.find((t) => t.id === asked)?.id ?? 'workspace'),
+  );
   const setTab = (t: Tab) => {
     setTabState(t);
     router.replace(`/settings?tab=${t}`);
@@ -69,6 +74,68 @@ function Settings() {
       {tab === 'demo' && <Demo />}
       {tab === 'system' && <System />}
     </>
+  );
+}
+
+function WorkspacesCard() {
+  const me = useMe();
+  const toast = useToast();
+  const { brands, brand, select, create } = useWorkspace();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const canCreate = me.data?.user.role === 'OWNER' || me.data?.user.role === 'EDITOR';
+  return (
+    <Card>
+      <CardTitle>Workspaces</CardTitle>
+      <p className="mb-3 text-sm text-muted">
+        Switch the workspace you are working in, or add one. Today, Studio, Production, Publishing, and Calendar follow it. The library stays shared.
+      </p>
+      <ul className="mb-3 space-y-1">
+        {brands.map((item) => (
+          <li key={item.id}>
+            <button
+              type="button"
+              className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm ${item.id === brand?.id ? 'bg-panel2 font-semibold' : 'hover:bg-panel2'}`}
+              aria-current={item.id === brand?.id ? 'true' : undefined}
+              onClick={() => select(item.id)}
+            >
+              <WorkspaceMark brand={item} />
+              <span>
+                {item.name}
+                {item.id === brand?.id ? ' · current' : ''}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {canCreate ? (
+        <form
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            const next = name.trim();
+            if (!next) return;
+            setBusy(true);
+            try {
+              await create(next);
+              setName('');
+              toast.ok(`${next} is ready.`);
+            } catch (err) {
+              toast.error(err);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <Field label="New workspace">
+            <Input aria-label="New workspace name" value={name} placeholder="Channel name" onChange={(event) => setName(event.target.value)} />
+          </Field>
+          <Button type="submit" variant="primary" busy={busy}>
+            Create workspace
+          </Button>
+        </form>
+      ) : null}
+    </Card>
   );
 }
 
@@ -93,6 +160,7 @@ function Workspace() {
   const owner = me.data?.user.role === 'OWNER';
   return (
     <div className="space-y-4">
+      <WorkspacesCard />
       <Async res={org}>
         {(o) => {
           const v = f ?? { name: o.name, timezone: o.timezone, baseCurrency: o.baseCurrency };
@@ -452,11 +520,16 @@ function Reminders() {
                 onSubmit={async (e) => {
                   e.preventDefault();
                   try {
+                    const channels = Object.fromEntries(
+                      Object.entries(v.channels ?? {}).filter(([, value]) => value),
+                    );
                     await patch('/notification-preferences', {
-                      quietStart: v.quietStart,
-                      quietEnd: v.quietEnd,
+                      timezone: v.timezone || 'America/Vancouver',
+                      quietStart: v.quietStart || null,
+                      quietEnd: v.quietEnd || null,
                       digestHour: Number(v.digestHour),
                       inApp: v.inApp,
+                      channels,
                     });
                     await refresh('/notification-preferences');
                     setP(null);
@@ -489,14 +562,77 @@ function Reminders() {
                     onChange={(e) => setP({ ...v, digestHour: e.target.value })}
                   />
                 </Field>
+                <Field label="Time zone">
+                  <Input
+                    value={v.timezone ?? 'America/Vancouver'}
+                    onChange={(e) => setP({ ...v, timezone: e.target.value })}
+                  />
+                </Field>
+                <Field label="Weekly summary" hint="0 is Sunday. The daily summary still uses the hour above.">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={6}
+                    value={(v.channels ?? {}).weeklyDay ?? '1'}
+                    onChange={(e) =>
+                      setP({ ...v, channels: { ...(v.channels ?? {}), weeklyDay: e.target.value } })
+                    }
+                  />
+                </Field>
                 <label className="flex items-center gap-2 text-sm sm:col-span-3">
                   <input
                     type="checkbox"
-                    checked={v.inApp}
+                    checked={v.inApp !== false}
                     onChange={(e) => setP({ ...v, inApp: e.target.checked })}
                   />{' '}
                   Show notifications in the app
                 </label>
+                <div className="grid gap-3 sm:col-span-3 sm:grid-cols-2">
+                  {NOTIFICATION_CATEGORIES.map((c) => (
+                    <Field key={c.id} label={c.label}>
+                      <Select
+                        aria-label={c.label}
+                        value={(v.channels ?? {})[c.id] ?? 'in_app'}
+                        onChange={(e) =>
+                          setP({ ...v, channels: { ...(v.channels ?? {}), [c.id]: e.target.value } })
+                        }
+                      >
+                        <option value="push">Push + in-app</option>
+                        <option value="in_app">In-app only</option>
+                        <option value="digest">Digest</option>
+                        <option value="off">Off</option>
+                      </Select>
+                    </Field>
+                  ))}
+                </div>
+                <details className="sm:col-span-3 text-sm">
+                  <summary className="cursor-pointer text-muted">Individual events</summary>
+                  <div className="mt-2 grid gap-2">
+                    {Object.entries(NOTIFICATION_CATALOG).map(([type, meta]) => (
+                      <label key={type} className="flex items-center justify-between gap-3">
+                        <span>{meta.label}</span>
+                        <Select
+                          aria-label={meta.label}
+                          className="!w-40"
+                          value={(v.channels ?? {})[type] ?? ''}
+                          onChange={(e) => {
+                            const next = { ...(v.channels ?? {}) };
+                            if (e.target.value) next[type] = e.target.value;
+                            else delete next[type];
+                            setP({ ...v, channels: next });
+                          }}
+                        >
+                          <option value="">Use category</option>
+                          <option value="push">Push + in-app</option>
+                          <option value="in_app">In-app only</option>
+                          <option value="digest">Digest</option>
+                          <option value="off">Off</option>
+                        </Select>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+                <AccountChannels v={v} setP={setP} />
                 <div className="sm:col-span-3">
                   <Button type="submit" variant="primary" disabled={!p}>
                     Save
@@ -507,8 +643,150 @@ function Reminders() {
           );
         }}
       </Async>
+      <PushDevices />
     </div>
   );
+}
+
+function AccountChannels({ v, setP }: { v: any; setP: (next: any) => void }) {
+  const accounts = useApi<any[]>('/social-accounts');
+  const rows = Array.isArray(accounts.data) ? accounts.data : [];
+  if (!rows.length) return null;
+  return (
+    <div className="grid gap-3 sm:col-span-3 sm:grid-cols-2">
+      {rows.map((a) => (
+        <Field key={a.id} label={`${a.platform ?? 'Account'} ${a.handle ? '@' + a.handle : a.name ?? ''}`}>
+          <Select
+            aria-label={`Delivery for ${a.handle ?? a.name ?? a.id}`}
+            value={(v.channels ?? {})[`account:${a.id}`] ?? ''}
+            onChange={(e) => {
+              const next = { ...(v.channels ?? {}) };
+              const key = `account:${a.id}`;
+              if (e.target.value) next[key] = e.target.value;
+              else delete next[key];
+              setP({ ...v, channels: next });
+            }}
+          >
+            <option value="">Use category</option>
+            <option value="push">Push + in-app</option>
+            <option value="in_app">In-app only</option>
+            <option value="digest">Digest</option>
+            <option value="off">Off</option>
+          </Select>
+        </Field>
+      ))}
+    </div>
+  );
+}
+
+function PushDevices() {
+  const key = useApi<{ publicKey: string | null }>('/notifications/push/key');
+  const devices = useApi<any[]>('/notifications/push/subscriptions');
+  const toast = useToast();
+  const [status, setStatus] = useState('Checking this browser…');
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!('Notification' in window) || !('PushManager' in window) || !('serviceWorker' in navigator)) {
+      setStatus('This browser cannot show push notifications. In-app alerts still work. On iPhone, install Kemokem to the Home Screen (iOS 16.4 or newer) and open that icon.');
+      return;
+    }
+    setStatus(
+      Notification.permission === 'granted'
+        ? 'This browser allowed notifications.'
+        : Notification.permission === 'denied'
+          ? 'This browser blocked notifications. Change that in the browser settings, then come back.'
+          : 'Notifications are off until you turn them on.',
+    );
+  }, []);
+  return (
+    <Card>
+      <CardTitle>This device</CardTitle>
+      <p className="mb-3 text-sm text-muted">{status}</p>
+      <p className="mb-3 text-sm text-muted">
+        Push is delivered by the browser or phone. Kemokem can record that the push service accepted a message. It cannot promise the lock screen showed it.
+      </p>
+      {key.data && !key.data.publicKey && (
+        <p className="mb-3 text-sm text-muted">Push is not configured on this server yet. In-app notifications still work.</p>
+      )}
+      <div className="mb-3 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="primary"
+          disabled={!key.data?.publicKey}
+          onClick={async () => {
+            try {
+              if (!key.data?.publicKey) return;
+              const permission = await Notification.requestPermission();
+              setStatus(permission === 'granted' ? 'This browser allowed notifications.' : 'Permission was not granted.');
+              if (permission !== 'granted') return;
+              const reg = await navigator.serviceWorker.ready;
+              const sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: vapidKey(key.data.publicKey),
+              });
+              const json = sub.toJSON();
+              await post('/notifications/push/subscriptions', { endpoint: json.endpoint, keys: json.keys });
+              await refresh('/notifications/push/subscriptions');
+              toast.ok('This device will receive push');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          Enable notifications
+        </Button>
+        <Button
+          type="button"
+          onClick={async () => {
+            try {
+              const out = await post<{ push: string }>('/notifications/push/test');
+              toast.ok(out.push === 'queued' ? 'Test queued' : 'Saved in the app. No device is subscribed.');
+              await refresh('/notifications');
+            } catch (err) {
+              toast.error(err);
+            }
+          }}
+        >
+          Send a test
+        </Button>
+      </div>
+      <Async res={devices} empty={<p className="text-sm text-muted">No devices saved.</p>}>
+        {(rows) => (
+          <ul className="divide-y divide-border text-sm">
+            {rows.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <span>
+                  {(d.userAgent ?? 'Browser').slice(0, 80)}
+                  {d.revokedAt ? ' · stopped' : ''}
+                  {d.lastError ? ` · ${d.lastError}` : ''}
+                  {d.lastSuccessAt ? ` · last accepted ${ago(d.lastSuccessAt)}` : ''}
+                </span>
+                {!d.revokedAt && (
+                  <button
+                    className="text-xs text-accent"
+                    onClick={async () => {
+                      await post(`/notifications/push/subscriptions/${d.id}/revoke`, {});
+                      await refresh('/notifications/push/subscriptions');
+                    }}
+                  >
+                    Stop
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Async>
+    </Card>
+  );
+}
+
+function vapidKey(base64: string) {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
 }
 
 function Security() {

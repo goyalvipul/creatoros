@@ -110,8 +110,10 @@ describe('LTX API prompt', () => {
       filenamePrefix: 'CreatorOS/ltx_test',
       seed: 7,
     });
+    expect(upscaled['609']?.inputs.resize_type).toBe('target dimensions');
     expect(upscaled['609']?.inputs['resize_type.width']).toBe(1920);
     expect(upscaled['609']?.inputs['resize_type.height']).toBe(1080);
+    expect(upscaled['609']?.inputs.quality).toBe('ULTRA');
     expect(upscaled['609']?.inputs.strength).toBe(1);
     expect(upscaled['609']?.inputs.image_encoding).toBe('8-bit RGB');
     fitRtxUpscaleInputs(upscaled, ['images', 'resize_type', 'quality']);
@@ -121,6 +123,31 @@ describe('LTX API prompt', () => {
     expect(upscaled['446']?.inputs.lora_name).toBe('other.safetensors');
     expect(prompt['400']?.inputs.filename_prefix).toBe('CreatorOS/ltx_test');
     expect(prompt['269']).not.toHaveProperty('_meta');
+    const scaled = buildLtxApiPrompt(api, {
+      imageName: 'clip.png',
+      audioName: 'song.mp3',
+      prompt: 'singing',
+      negativePrompt: 'blur',
+      width: 960,
+      height: 540,
+      fps: 30,
+      durationSec: 8,
+      audioStartSec: 2,
+      loraName: 'other.safetensors',
+      loraStrength: 0.5,
+      upscaleWidth: 1920,
+      upscaleHeight: 1080,
+      upscaleResizeType: 'scale by multiplier',
+      upscaleQuality: 'HIGH',
+      upscaleScale: 2,
+      wantUpscale: true,
+      filenamePrefix: 'CreatorOS/ltx_test',
+      seed: 7,
+    });
+    expect(scaled['609']?.inputs.resize_type).toBe('scale by multiplier');
+    expect(scaled['609']?.inputs['resize_type.scale']).toBe(2);
+    expect(scaled['609']?.inputs['resize_type.width']).toBeUndefined();
+    expect(scaled['609']?.inputs.quality).toBe('HIGH');
   });
 
   it('refuses to build a prompt from the editor graph', () => {

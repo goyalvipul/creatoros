@@ -4,8 +4,9 @@ import clsx from 'clsx';
 import { Link2, MoreHorizontal, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { FileDownload } from '@/components/file-download';
+import { ThumbnailPicker } from '@/components/publish-cover';
 import { VideoTrim } from '@/components/video-trim';
 import { FileActions, LinkDialog, UploadDialog } from '@/components/publish-board';
 import { PublishFields, publishHashtags, publishPrivacy } from '@/components/publish-fields';
@@ -190,14 +191,7 @@ function Title() {
           );
         }}
       </Async>
-      {linkOpen && id && page.data?.assetId && (
-        <LinkDialog
-          variantId={id}
-          assetId={page.data.assetId}
-          assetTitle={page.data.assetTitle}
-          onClose={() => setLinkOpen(false)}
-        />
-      )}
+      {linkOpen && id ? <LinkDialog variantId={id} onClose={() => setLinkOpen(false)} /> : null}
       {uploadOpen && id && <UploadDialog variantId={id} onClose={() => setUploadOpen(false)} />}
       {actions && id && <FileActions variantId={id} item={actions} onClose={() => setActions(null)} />}
     </>
@@ -273,6 +267,17 @@ function LivePreview({
       <div className="mx-auto" style={{ width: stageWidth, maxWidth: '100%' }}>
         {frame}
       </div>
+      {variantId ? (
+        <ThumbnailPicker
+          variantId={variantId}
+          itemId={item.id}
+          fileId={item.fileInstanceId}
+          durationMs={Number(item.durationMs) || 0}
+          online={online}
+          hasCover={Boolean(item.hasCover)}
+          onSaved={() => void refresh(`/variants/${variantId}/publish`)}
+        />
+      ) : null}
       <p className="text-xs text-muted">
         {portrait ? 'Vertical' : square ? 'Square' : measured ? 'Widescreen' : 'Shape appears with the first frame'} · {ratioText}
         {platform === 'youtube' && portrait ? ' · Shorts' : ''}
@@ -407,12 +412,12 @@ function SocialFrame({
 }
 
 function hashLine(tags: string) {
-  const parts = tags
-    .split(/[,\s]+/)
+  return tags
+    .split(',')
     .map((tag) => tag.trim())
     .filter(Boolean)
-    .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`));
-  return parts.join(' ');
+    .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`))
+    .join(' ');
 }
 
 function PublishPanel({
@@ -448,38 +453,69 @@ function PublishPanel({
   const [date, setDate] = useState('');
   const [time, setTime] = useState('19:00');
   const [seed, setSeed] = useState('');
+  const kept = useRef(new Map<string, {
+    title: string;
+    caption: string;
+    tags: string;
+    privacy: string;
+    contentForm: string;
+    playlistIds: string[];
+    aiUse: string;
+    date: string;
+    time: string;
+  }>());
 
   useEffect(() => {
     const key = `${item.id}:${account.id}`;
     if (seed === key) return;
-    setTitle(draft?.title ?? item.fileName ?? '');
-    setCaption(draft?.caption ?? '');
-    setTags((draft?.hashtags ?? []).join(', '));
-    setPrivacy(draft?.privacy ?? '');
-    setContentForm(draft?.contentForm ?? '');
-    setPlaylistIds(draft?.playlistIds ?? []);
-    setAiUse(draft?.aiUse ?? '');
-    const local = wallClockInput(draft?.scheduledAt, tz);
-    if (local) {
-      setDate(local.slice(0, 10));
-      setTime(local.slice(11, 16));
+    if (seed) {
+      kept.current.set(seed, { title, caption, tags, privacy, contentForm, playlistIds: [...playlistIds], aiUse, date, time });
+    }
+    const saved = kept.current.get(key);
+    if (saved) {
+      setTitle(saved.title);
+      setCaption(saved.caption);
+      setTags(saved.tags);
+      setPrivacy(saved.privacy);
+      setContentForm(saved.contentForm);
+      setPlaylistIds(saved.playlistIds);
+      setAiUse(saved.aiUse);
+      setDate(saved.date);
+      setTime(saved.time);
+    } else {
+      setTitle(draft?.title ?? item.fileName ?? '');
+      setCaption(draft?.caption ?? '');
+      setTags((draft?.hashtags ?? []).join(', '));
+      setPrivacy(draft?.privacy ?? '');
+      setContentForm(draft?.contentForm ?? '');
+      setPlaylistIds(draft?.playlistIds ?? []);
+      setAiUse(draft?.aiUse ?? '');
+      const local = wallClockInput(draft?.scheduledAt, tz);
+      if (local) {
+        setDate(local.slice(0, 10));
+        setTime(local.slice(11, 16));
+      } else {
+        setDate('');
+        setTime('19:00');
+      }
     }
     setSeed(key);
-  }, [item.id, account.id, draft, seed, tz, item.fileName]);
+  }, [item.id, account.id, draft, seed, tz, item.fileName, title, caption, tags, privacy, contentForm, playlistIds, aiUse, date, time]);
 
   useEffect(() => {
     onCopy({ title, caption, tags });
   }, [title, caption, tags, onCopy]);
 
   const zone = (tz ?? 'America/Vancouver').split('/').pop()?.replace(/_/g, ' ');
+  const aiReady = aiUse === 'YES' || aiUse === 'NO';
   const detailsReady =
     account.platform === 'youtube'
-      ? Boolean(title.trim() && privacy && contentForm && aiUse)
+      ? Boolean(title.trim() && privacy && contentForm && aiReady)
       : account.platform === 'threads'
-        ? Boolean(aiUse) && threadsTextUnits(caption) <= 500
+        ? aiReady && threadsTextUnits(caption) <= 500
         : account.platform === 'tiktok'
-          ? Boolean(tiktokPrivacy(privacy))
-          : Boolean(caption.trim() || title.trim());
+          ? Boolean(tiktokPrivacy(privacy)) && aiReady
+          : aiReady;
   const body = {
     itemId: item.id,
     socialAccountId: account.id,
@@ -578,7 +614,7 @@ function PublishPanel({
       <div className="flex flex-wrap gap-2">
         <ActionButton
           variant="primary"
-          disabled={!account.canPublish || !date || !time || ((account.platform === 'youtube' || account.platform === 'tiktok') && !detailsReady)}
+          disabled={!account.canPublish || !date || !time || !detailsReady}
           onAction={async () => {
             await post('/publishing/schedule', {
               ...body,
@@ -594,7 +630,7 @@ function PublishPanel({
         </ActionButton>
         <ActionButton
           confirm={`Send ${item.fileName} to ${account.handle} now? This posts the file.`}
-          disabled={!account.canPublish || locked(draft?.uploadState) || ((account.platform === 'youtube' || account.platform === 'tiktok') && !detailsReady)}
+          disabled={!account.canPublish || locked(draft?.uploadState) || !detailsReady}
           onAction={async () => {
             await post('/publishing/publish', { ...body, requestId: crypto.randomUUID() });
             await refresh(`/variants/${variantId}/publish`, '/publishing/matrix');

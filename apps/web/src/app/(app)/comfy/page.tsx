@@ -7,8 +7,11 @@ import { FileDownload } from '@/components/file-download';
 import { VideoTrim } from '@/components/video-trim';
 import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
+import { LTX_UPSCALE_QUALITIES, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
+import { clipBounds, clipPlayback } from '@/lib/audio-clip';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
+import { useWorkspace } from '@/lib/workspace';
 
 type Issue = { field: string; message: string };
 type Worker = {
@@ -23,7 +26,7 @@ type Worker = {
   comfyVersion: string | null;
   deviceName: string | null;
   enabled: boolean;
-  /** Checked once when the page loads. busy = red, free = green. */
+  /** Live ComfyUI queue. busy = red, free = green. Absent until this page has checked. */
   queue?: 'busy' | 'free' | 'offline';
 };
 
@@ -94,28 +97,44 @@ function gpuTitle(w: Pick<Worker, 'label' | 'expectedVramGb'>) {
   return w.expectedVramGb != null ? `${w.expectedVramGb}GB (${short})` : short;
 }
 
-function usePcQueue(workerId: string | null) {
+function usePcQueue(workerIds: string[]) {
+  const key = workerIds.slice().sort().join(',');
   const [queues, setQueues] = useState<Record<string, NonNullable<Worker['queue']>>>({});
   useEffect(() => {
-    if (!workerId) return;
+    const ids = key ? key.split(',') : [];
+    if (!ids.length) return;
     let gone = false;
     const tick = () => {
-      api<{ queue: 'busy' | 'free' | 'offline' }>(`/comfy/workers/${workerId}/queue`)
-        .then((r) => {
-          if (!gone) setQueues((q) => ({ ...q, [workerId]: r.queue }));
-        })
-        .catch(() => {
-          if (!gone) setQueues((q) => ({ ...q, [workerId]: 'offline' }));
-        });
+      if (document.visibilityState === 'hidden') return;
+      for (const id of ids) {
+        api<{ queue: 'busy' | 'free' | 'offline' }>(`/comfy/workers/${id}/queue`)
+          .then((r) => {
+            if (!gone) setQueues((q) => ({ ...q, [id]: r.queue }));
+          })
+          .catch(() => {
+            if (!gone) setQueues((q) => ({ ...q, [id]: 'offline' }));
+          });
+      }
     };
     tick();
-    const timer = setInterval(tick, 4000);
+    const timer = setInterval(tick, 8000);
+    const onShow = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onShow);
     return () => {
       gone = true;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onShow);
     };
-  }, [workerId]);
+  }, [key]);
   return [queues, setQueues] as const;
+}
+
+function comfyLabel(queue: Worker['queue'] | undefined) {
+  if (queue === 'busy') return 'Rendering';
+  if (queue === 'free') return 'Available';
+  return 'Offline';
 }
 
 function WorkerRail({
@@ -127,6 +146,7 @@ function WorkerRail({
   selectedId: string | null;
   queues: Record<string, 'busy' | 'free' | 'offline' | undefined>;
 }) {
+  const paired = useApi<{ devices: PairedPc[] }>('/comfy/windows-tasks', { refreshInterval: 15_000 });
   if (!uxV5()) return null;
   return (
     <aside>
@@ -134,13 +154,15 @@ function WorkerRail({
       {workers.length === 0 && <p className="text-xs text-[#aebdb9]">No PC is saved yet. Add one under Settings.</p>}
       {workers.map((w) => {
         const queue = queues[w.id] ?? w.queue;
+        const agent = agentFor(w, paired.data?.devices ?? []);
         const selected = w.id === selectedId;
         return (
           <div key={w.id} className="mb-2 rounded-[10px] border border-[#334647] bg-[#202b2d] p-3">
             <b className="block text-[12px]">{gpuTitle(w)}</b>
             <small className="text-[#a4b9b1]">
-              {queue === 'busy' ? 'Rendering' : queue === 'free' ? 'Available' : 'Offline'}
+              {comfyLabel(queue)}
               {w.expectedVramGb ? ` · ${w.expectedVramGb} GB` : ''}
+              {` · ${agent.label}`}
               {selected ? ' · selected' : ''}
             </small>
           </div>
@@ -300,7 +322,8 @@ type Studio = {
     createdAt: string;
     settings: SavedClip['settings'] & {
       progress?: { phase: string; value: number | null; max: number | null; detail: string };
-      outputs?: { filename: string }[];
+      outputs?: { filename: string; node?: string }[];
+      upscaleFailed?: boolean;
       projectTitle?: string | null;
     };
     files: {
@@ -330,6 +353,9 @@ type Form = {
   loraStrength: number;
   upscaleWidth: number;
   upscaleHeight: number;
+  upscaleResizeType: LtxResizeType;
+  upscaleQuality: LtxUpscaleQuality;
+  upscaleScale: number;
   wantUpscale: boolean;
   imageUploadName: string | null;
   imageUploadWorkerId: string | null;
@@ -510,12 +536,26 @@ function jobLabel(status: string, progress?: { phase?: string } | null) {
   return status;
 }
 
+function useWorkspaceProjectIds() {
+  const { id } = useWorkspace();
+  const projects = useApi<{ id: string }[]>(id ? '/projects' : null, { query: { brandId: id ?? undefined, limit: 200 } });
+  const ids = new Set((projects.data ?? []).map((project) => project.id));
+  return { ready: Boolean(id && projects.data), ids, workspaceId: id };
+}
+
+function inWorkspace(job: { projectId?: string | null }, scope: { ready: boolean; ids: Set<string> }) {
+  if (!scope.ready || !job.projectId) return true;
+  return scope.ids.has(job.projectId);
+}
+
 function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
+  const scope = useWorkspaceProjectIds();
   const ltx = useApi<Studio>('/comfy/ltx');
   const h3 = useApi<{ jobs: Studio['jobs'] }>('/comfy/h3');
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [trimFile, setTrimFile] = useState<{ id: string; projectId: string | null } | null>(null);
   const clips = [...(ltx.data?.jobs ?? []).map((job) => ({ ...job, kind: 'LTX' as const })), ...(h3.data?.jobs ?? []).map((job) => ({ ...job, kind: 'MiniMax' as const }))]
+    .filter((job) => inWorkspace(job, scope))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 10);
   const rendering = clips.some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
@@ -589,7 +629,11 @@ function HistoryTab({ onUse }: { onUse: (clip: SavedClip) => void }) {
                     ) : null}
                   </div>
                 ) : null}
-                {job.error ? <p className="mt-2 text-sm text-muted">{job.error}</p> : null}
+                {job.kind === 'LTX' && (s.upscaleFailed || job.error === 'Upscaling Failed') ? (
+                  <p className="mt-2 text-sm font-medium">Upscaling Failed</p>
+                ) : job.error ? (
+                  <p className="mt-2 text-sm text-muted">{job.error}</p>
+                ) : null}
                 {job.status === 'SUCCEEDED' && s.outputs?.length ? (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <VideoThumb src={`/api/v1/comfy/jobs/${job.id}/video`} className="w-full max-w-sm" />
@@ -769,8 +813,23 @@ function WindowsTasks() {
   );
 }
 
+type PairedPc = { id: string; displayName: string; hostname: string | null; state: string; lastSeenAt: string | null };
+
+function agentFor(worker: Worker, devices: PairedPc[]) {
+  const gb = worker.expectedVramGb != null ? String(worker.expectedVramGb) : '';
+  const hit = devices.find((device) => {
+    const name = `${device.displayName} ${device.hostname ?? ''}`;
+    return gb !== '' && name.includes(gb);
+  });
+  if (!hit) return { label: 'No scanner paired', online: false, seen: null as string | null, name: null as string | null };
+  const seen = hit.lastSeenAt ? new Date(hit.lastSeenAt).getTime() : 0;
+  const online = hit.state === 'ONLINE' && seen > Date.now() - 180_000;
+  return { label: online ? 'Agent online' : 'Agent offline', online, seen: hit.lastSeenAt, name: hit.displayName };
+}
+
 function MachineSetup() {
   const studio = useApi<Studio>('/comfy/ltx');
+  const paired = useApi<{ devices: PairedPc[] }>('/comfy/windows-tasks', { refreshInterval: 15_000 });
   const [machine, setMachine] = useState({ label: '', baseUrl: '', role: 'primary', expectedVramGb: '24' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -779,17 +838,20 @@ function MachineSetup() {
     <Async res={studio}>
       {(data) => {
         const workers = Array.isArray(data.workers) ? data.workers : [];
+        const devices = paired.data?.devices ?? [];
         return (
           <Card>
             <CardTitle>Machines</CardTitle>
             <p className="mb-3 text-sm text-muted">
-              Add the 3090, the 3060, or any other PC that runs ComfyUI. Use its Tailscale or LAN address. The LTX graph was built for a 24GB card. A 12GB card stays selectable and is warned when the models may not fit.
+              Add the 3090, the 3060, or any other PC that runs ComfyUI. Use its Tailscale or LAN address. The LTX graph was built for a 24GB card. A 12GB card stays selectable and is warned when the models may not fit. Agent online is the Windows scanner, separate from the ComfyUI connection.
             </p>
             {workers.length === 0 ? (
               <EmptyState title="No PC yet">Add the address of a ComfyUI you can reach from this server.</EmptyState>
             ) : (
               <ul className="mb-4 space-y-2">
-                {workers.map((w) => (
+                {workers.map((w) => {
+                  const agent = agentFor(w, devices);
+                  return (
                   <li key={w.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border p-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2 font-medium">
@@ -799,9 +861,11 @@ function MachineSetup() {
                         <span className="text-xs font-normal text-muted">
                           {w.queue === 'busy' ? 'Rendering' : w.queue === 'free' ? 'Free' : 'Offline'}
                         </span>
+                        <span className={`text-xs font-normal ${agent.online ? 'text-ok' : 'text-muted'}`}>· {agent.label}</span>
                       </div>
                       <div className="truncate text-xs text-muted">{w.baseUrl}</div>
                       <div className="text-xs text-muted">
+                        {agent.name ? `Scanner ${agent.name}, seen ${ago(agent.seen)}. ` : 'No scanner agent is paired for this PC. '}
                         {w.lastOk == null
                           ? 'Not checked yet.'
                           : w.lastOk
@@ -831,7 +895,8 @@ function MachineSetup() {
                       </ActionButton>
                     </div>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
             <div className="grid gap-3 md:grid-cols-2">
@@ -890,6 +955,7 @@ function MachineSetup() {
 }
 
 function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory: () => void }) {
+  const scope = useWorkspaceProjectIds();
   const studio = useApi<Studio>('/comfy/ltx');
   const [form, setForm] = useState<Form | null>(null);
   const [imageName, setImageName] = useState<string | null>(null);
@@ -898,7 +964,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loras, setLoras] = useState<string[]>([]);
-  const [queues, setQueues] = usePcQueue(form?.workerId ?? null);
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
   const [clipNote, setClipNote] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [picking, setPicking] = useState<'image' | 'audio' | null>(null);
@@ -906,6 +972,10 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const clipOn = useRef(false);
+  const holding = useRef(false);
+  const clipTimer = useRef<number | null>(null);
+  const boundsRef = useRef({ start: 0, end: 0 });
   const stageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -936,6 +1006,9 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
       loraStrength: d?.loraStrength ?? p.loraStrength,
       upscaleWidth: d?.upscaleWidth ?? p.upscale.width,
       upscaleHeight: d?.upscaleHeight ?? p.upscale.height,
+      upscaleResizeType: 'target dimensions',
+      upscaleQuality: 'ULTRA',
+      upscaleScale: 2,
       wantUpscale: d?.wantUpscale ?? true,
       imageUploadName: d?.imageUploadName ?? null,
       imageUploadWorkerId: d?.imageUploadWorkerId ?? null,
@@ -973,6 +1046,9 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
         loraStrength: PRESET_FALLBACK.loraStrength,
         upscaleWidth: PRESET_FALLBACK.upscale.width,
         upscaleHeight: PRESET_FALLBACK.upscale.height,
+        upscaleResizeType: 'target dimensions',
+        upscaleQuality: 'ULTRA',
+        upscaleScale: 2,
         wantUpscale: true,
         imageUploadName: null,
         imageUploadWorkerId: null,
@@ -998,6 +1074,9 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
         loraStrength: num(s.loraStrength, base.loraStrength),
         upscaleWidth: num(s.upscaleWidth, base.upscaleWidth),
         upscaleHeight: num(s.upscaleHeight, base.upscaleHeight),
+        upscaleResizeType: s.upscaleResizeType === 'scale by multiplier' ? 'scale by multiplier' : 'target dimensions',
+        upscaleQuality: s.upscaleQuality === 'LOW' || s.upscaleQuality === 'MEDIUM' || s.upscaleQuality === 'HIGH' || s.upscaleQuality === 'ULTRA' ? s.upscaleQuality : 'ULTRA',
+        upscaleScale: num(s.upscaleScale, base.upscaleScale),
         wantUpscale: s.wantUpscale !== false,
         imageUploadName: imageFileId ? null : (s.imageUploadName ?? null),
         imageUploadWorkerId: imageFileId ? null : (s.workerId ?? null),
@@ -1026,16 +1105,85 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
       ? `/api/v1/comfy/workers/${form.audioUploadWorkerId || form.workerId}/input?name=${encodeURIComponent(form.audioUploadName)}`
       : null;
 
+  boundsRef.current = form ? clipBounds(form.audioStartSec, form.durationSec) : boundsRef.current;
+
+  function seekableEnd(el: HTMLAudioElement) {
+    if (!el.seekable.length) return null;
+    return el.seekable.end(el.seekable.length - 1);
+  }
+
+  function stopClip() {
+    clipOn.current = false;
+    holding.current = false;
+    if (clipTimer.current != null) {
+      window.clearInterval(clipTimer.current);
+      clipTimer.current = null;
+    }
+    audioRef.current?.pause();
+    setPlaying(false);
+  }
+
+  /** Keep the playhead inside the trim. The file itself is unchanged. */
+  function enforceClip() {
+    const el = audioRef.current;
+    if (!el || !clipOn.current) return;
+    const { start, end } = boundsRef.current;
+    const action = clipPlayback(el.currentTime, start, end, seekableEnd(el));
+    if (action === 'restart') {
+      holding.current = false;
+      el.pause();
+      try {
+        el.currentTime = start;
+      } catch {
+        /* the file cannot move yet */
+      }
+      clipOn.current = false;
+      if (clipTimer.current != null) {
+        window.clearInterval(clipTimer.current);
+        clipTimer.current = null;
+      }
+      setPlaying(false);
+      setClipNote('');
+      return;
+    }
+    if (action === 'seek' || action === 'wait') {
+      holding.current = true;
+      if (!el.paused) el.pause();
+      if (action === 'seek') {
+        try {
+          el.currentTime = start;
+        } catch {
+          /* try again on the next tick */
+        }
+      } else setClipNote('Loading the selected part…');
+      return;
+    }
+    if (el.paused && holding.current) {
+      holding.current = false;
+      setClipNote('');
+      void el.play().catch(() => {
+        stopClip();
+        setClipNote('The browser could not play this audio. The PC that holds it may be off.');
+      });
+    }
+  }
+
   useEffect(() => {
     const el = audioRef.current;
-    if (!el || !form || el.readyState < 1 || !el.paused) return;
-    const start = Math.max(0, form.audioStartSec);
+    if (!el || !form || el.readyState < 1 || !el.paused || clipOn.current) return;
+    const { start } = clipBounds(form.audioStartSec, form.durationSec);
     if (Number.isFinite(el.duration) && start >= el.duration) {
       setClipNote(`This file is ${el.duration.toFixed(1)}s, so it cannot start at ${start}s.`);
       return;
     }
-    el.currentTime = start;
+    try {
+      el.currentTime = start;
+    } catch {
+      /* metadata is not ready to seek */
+    }
   }, [audioSrc, form?.audioStartSec, form?.durationSec]);
+
+  useEffect(() => () => stopClip(), []);
 
   useEffect(() => {
     if (!form?.workerId) {
@@ -1083,23 +1231,28 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
       setClipNote('Choose an audio file first.');
       return;
     }
-    if (!el.paused) {
-      el.pause();
+    if (clipOn.current) {
+      const { start } = boundsRef.current;
+      stopClip();
+      try {
+        el.currentTime = start;
+      } catch {
+        /* leave the playhead where it is */
+      }
       return;
     }
-    const start = Math.max(0, form.audioStartSec);
-    const end = start + Math.max(0.2, form.durationSec);
-    const place = () => {
-      if (Number.isFinite(el.duration) && start >= el.duration) {
-        el.currentTime = 0;
-        setClipNote(`This file is ${el.duration.toFixed(1)}s, so playback starts at the beginning.`);
-        return;
-      }
-      if (el.currentTime < start || el.currentTime >= end - 0.05) el.currentTime = start;
-    };
-    place();
+    const { start } = clipBounds(form.audioStartSec, form.durationSec);
+    if (el.readyState >= 1 && Number.isFinite(el.duration) && start >= el.duration - 0.05) {
+      setClipNote(`This file is ${el.duration.toFixed(1)}s, so it cannot start at ${start}s.`);
+      return;
+    }
+    clipOn.current = true;
+    holding.current = true;
+    setPlaying(true);
     setClipNote('');
-    void el.play().then(place).catch(() => setClipNote('The browser could not play this audio. The PC that holds it may be off.'));
+    if (clipTimer.current != null) window.clearInterval(clipTimer.current);
+    clipTimer.current = window.setInterval(enforceClip, 100);
+    enforceClip();
   }
 
   async function uploadToPc(kind: 'image' | 'audio', file: File) {
@@ -1170,7 +1323,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
         const preset = data.preset ?? PRESET_FALLBACK;
         if (!form) return <Spinner />;
         if (uxV5()) {
-          const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+          const recent = [...data.jobs].filter((job) => inWorkspace(job, scope)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
           const shown = recent.find((job) => job.id === previewId) ?? recent[0] ?? null;
           const other = recent.find((job) => job.id !== shown?.id) ?? null;
           const imageSrc = form.imageFileId
@@ -1199,6 +1352,9 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
               loraStrength: num(s.loraStrength, form.loraStrength),
               upscaleWidth: num(s.upscaleWidth, form.upscaleWidth),
               upscaleHeight: num(s.upscaleHeight, form.upscaleHeight),
+              upscaleResizeType: s.upscaleResizeType === 'scale by multiplier' ? 'scale by multiplier' : 'target dimensions',
+              upscaleQuality: s.upscaleQuality === 'LOW' || s.upscaleQuality === 'MEDIUM' || s.upscaleQuality === 'HIGH' || s.upscaleQuality === 'ULTRA' ? s.upscaleQuality : 'ULTRA',
+              upscaleScale: num(s.upscaleScale, form.upscaleScale),
               wantUpscale: s.wantUpscale !== false,
               imageUploadName: s.imageFileId ? null : (s.imageUploadName ?? null),
               imageUploadWorkerId: s.imageFileId ? null : (s.workerId ?? null),
@@ -1394,13 +1550,16 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                           height={form.height}
                           onPick={(width, height) => set({ width, height })}
                         />
-                        <SizePick
-                          label="Upscale size"
-                          rows={UPSCALE_SIZES}
-                          width={form.upscaleWidth}
-                          height={form.upscaleHeight}
-                          onPick={(upscaleWidth, upscaleHeight) => set({ upscaleWidth, upscaleHeight })}
-                        />
+                        {form.wantUpscale ? <UpscaleChoices form={form} set={set} /> : null}
+                        {form.wantUpscale && form.upscaleResizeType === 'target dimensions' ? (
+                          <SizePick
+                            label="Upscale size"
+                            rows={UPSCALE_SIZES}
+                            width={form.upscaleWidth}
+                            height={form.upscaleHeight}
+                            onPick={(upscaleWidth, upscaleHeight) => set({ upscaleWidth, upscaleHeight })}
+                          />
+                        ) : null}
                         <div className="grid grid-cols-2 gap-2">
                           <Field label="Frame rate">
                             <LooseNumber value={form.fps} onValue={(fps) => set({ fps })} />
@@ -1431,19 +1590,34 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                       onLoadedMetadata={(e) => {
                         const el = e.currentTarget;
                         if (Number.isFinite(el.duration)) setAudioSeconds(el.duration);
-                      }}
-                      onPlay={() => setPlaying(true)}
-                      onPause={() => setPlaying(false)}
-                      onEnded={() => setPlaying(false)}
-                      onTimeUpdate={(e) => {
-                        const el = e.currentTarget;
-                        const start = Math.max(0, form.audioStartSec);
-                        const end = start + form.durationSec;
-                        if (el.currentTime >= end - 0.02 && el.currentTime > start + 0.15) {
-                          el.pause();
-                          el.currentTime = start;
+                        const { start } = boundsRef.current;
+                        if (el.paused && start < el.duration) {
+                          try {
+                            el.currentTime = start;
+                          } catch {
+                            /* seek when the browser allows it */
+                          }
                         }
                       }}
+                      onPlay={() => {
+                        if (!clipOn.current) {
+                          clipOn.current = true;
+                          holding.current = true;
+                          if (clipTimer.current == null) clipTimer.current = window.setInterval(enforceClip, 100);
+                        }
+                        setPlaying(true);
+                      }}
+                      onPause={() => {
+                        if (holding.current) return;
+                        clipOn.current = false;
+                        if (clipTimer.current != null) {
+                          window.clearInterval(clipTimer.current);
+                          clipTimer.current = null;
+                        }
+                        setPlaying(false);
+                      }}
+                      onEnded={() => stopClip()}
+                      onTimeUpdate={() => enforceClip()}
                     />
                   ) : null}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
@@ -1611,28 +1785,37 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                     onLoadedMetadata={(e) => {
                       const el = e.currentTarget;
                       if (Number.isFinite(el.duration)) setAudioSeconds(el.duration);
-                      const start = Math.max(0, form.audioStartSec);
+                      const { start, end } = boundsRef.current;
                       if (Number.isFinite(el.duration) && start >= el.duration) {
                         setClipNote(`This file is ${el.duration.toFixed(1)}s, so it cannot start at ${start}s.`);
                         return;
                       }
-                      el.currentTime = start;
-                      setClipNote(`Playing from ${start}s for ${form.durationSec}s.`);
-                    }}
-                    onTimeUpdate={(e) => {
-                      const el = e.currentTarget;
-                      const end = form.audioStartSec + form.durationSec;
-                      if (el.currentTime >= end) {
-                        el.pause();
-                        el.currentTime = Math.max(0, form.audioStartSec);
+                      try {
+                        el.currentTime = start;
+                      } catch {
+                        /* seek when the browser allows it */
                       }
+                      setClipNote(`Playing from ${start}s for ${Math.round((end - start) * 10) / 10}s.`);
                     }}
-                    onPlay={(e) => {
-                      const el = e.currentTarget;
-                      const start = Math.max(0, form.audioStartSec);
-                      const end = start + form.durationSec;
-                      if (el.currentTime < start || el.currentTime >= end - 0.05) el.currentTime = start;
+                    onTimeUpdate={() => enforceClip()}
+                    onPlay={() => {
+                      if (!clipOn.current) {
+                        clipOn.current = true;
+                        holding.current = true;
+                        if (clipTimer.current == null) clipTimer.current = window.setInterval(enforceClip, 100);
+                      }
+                      setPlaying(true);
                     }}
+                    onPause={() => {
+                      if (holding.current) return;
+                      clipOn.current = false;
+                      if (clipTimer.current != null) {
+                        window.clearInterval(clipTimer.current);
+                        clipTimer.current = null;
+                      }
+                      setPlaying(false);
+                    }}
+                    onEnded={() => stopClip()}
                   />
                   {clipNote ? <p className="mt-1 text-xs text-muted">{clipNote}</p> : null}
                 </div>
@@ -1661,17 +1844,24 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
               {form.wantUpscale ? (
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <div className="md:col-span-2">
-                    <SizeChart title="Upscale resolution" rows={UPSCALE_SIZES} onPick={(upscaleWidth, upscaleHeight) => set({ upscaleWidth, upscaleHeight })} />
+                    <UpscaleChoices form={form} set={set} />
                   </div>
-                  <Field label="Upscale width">
-                    <LooseNumber value={form.upscaleWidth} onValue={(upscaleWidth) => set({ upscaleWidth })} />
-                  </Field>
-                  <Field label="Upscale height">
-                    <LooseNumber value={form.upscaleHeight} onValue={(upscaleHeight) => set({ upscaleHeight })} />
-                  </Field>
+                  {form.upscaleResizeType === 'target dimensions' ? (
+                    <>
+                      <div className="md:col-span-2">
+                        <SizeChart title="Upscale resolution" rows={UPSCALE_SIZES} onPick={(upscaleWidth, upscaleHeight) => set({ upscaleWidth, upscaleHeight })} />
+                      </div>
+                      <Field label="Upscale width">
+                        <LooseNumber value={form.upscaleWidth} onValue={(upscaleWidth) => set({ upscaleWidth })} />
+                      </Field>
+                      <Field label="Upscale height">
+                        <LooseNumber value={form.upscaleHeight} onValue={(upscaleHeight) => set({ upscaleHeight })} />
+                      </Field>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
-              {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
+              {!uxV5() && <LastOnMachine jobs={data.jobs.filter((job) => inWorkspace(job, scope))} workerId={form.workerId} kind="video" />}
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button busy={busy === 'draft'} onClick={() => run('draft')}>
                   Save draft
@@ -1718,7 +1908,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                   <span className="px-6 text-center text-xs text-[#9fb1a7]">The starting image and the last finished video show here.</span>
                 )}
               </div>
-              <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />
+              <LastOnMachine jobs={data.jobs.filter((job) => inWorkspace(job, scope))} workerId={form.workerId} kind="video" />
               <div className="flex flex-wrap gap-2">
                 <Link href="/library" className="rounded-lg border border-[#40565a] px-2 py-1 text-[11px] font-bold">Open in Library</Link>
                 <Link href="/publishing" className="rounded-lg border border-[#40565a] px-2 py-1 text-[11px] font-bold">Prepare publishing</Link>
@@ -2033,6 +2223,37 @@ function clsxCard(on: boolean) {
   return `cursor-pointer rounded-xl border px-2 py-2 text-left ${on ? 'border-accent' : 'border-border'}`;
 }
 
+function UpscaleChoices({ form, set }: { form: Form; set: (patch: Partial<Form>) => void }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <Field label="Resize">
+        <Select
+          aria-label="Resize"
+          value={form.upscaleResizeType}
+          onChange={(e) => set({ upscaleResizeType: e.target.value as LtxResizeType })}
+        >
+          <option value="target dimensions">Target dimensions</option>
+          <option value="scale by multiplier">Scale by multiplier</option>
+        </Select>
+      </Field>
+      <Field label="Quality">
+        <Select aria-label="Quality" value={form.upscaleQuality} onChange={(e) => set({ upscaleQuality: e.target.value as LtxUpscaleQuality })}>
+          {LTX_UPSCALE_QUALITIES.map((quality) => (
+            <option key={quality} value={quality}>
+              {quality}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {form.upscaleResizeType === 'scale by multiplier' ? (
+        <Field label="Scale" hint="2 doubles the width and the height. 4 is the maximum.">
+          <LooseNumber value={form.upscaleScale} onValue={(upscaleScale) => set({ upscaleScale })} />
+        </Field>
+      ) : null}
+    </div>
+  );
+}
+
 function SizePick({
   label,
   rows,
@@ -2250,7 +2471,8 @@ function ProjectPick({
   compact?: boolean;
   quiet?: boolean;
 }) {
-  const projects = useApi<{ id: string; title: string }[]>('/projects', { query: { limit: 200 } });
+  const { id: workspaceId } = useWorkspace();
+  const projects = useApi<{ id: string; title: string }[]>(workspaceId ? '/projects' : null, { query: { limit: 200, brandId: workspaceId } });
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState('');
   const [made, setMade] = useState<{ id: string; title: string }[]>([]);
@@ -2302,7 +2524,7 @@ function ProjectPick({
               setBusy(true);
               setError('');
               try {
-                const created = await post<{ id: string; title: string }>('/projects', { title: name, type: 'OTHER' });
+                const created = await post<{ id: string; title: string }>('/projects', { title: name, type: 'OTHER', brandId: workspaceId ?? undefined });
                 setMade((items) => [{ id: created.id, title: created.title || name }, ...items]);
                 onChange(created.id);
                 setCreating(false);
@@ -2384,6 +2606,7 @@ function LastOnMachine({
 }
 
 function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
+  const scope = useWorkspaceProjectIds();
   const studio = useApi<{
     ready: boolean;
     blockReason: string | null;
@@ -2415,7 +2638,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
     targetText: string;
     audioName: string | null;
   } | null>(null);
-  const [queues, setQueues] = usePcQueue(form?.workerId ?? null);
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
 
@@ -2507,7 +2730,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
           targetText: form.targetText,
         };
         if (uxV5()) {
-          const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+          const recent = [...data.jobs].filter((job) => inWorkspace(job, scope)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
           const shown = recent.find((job) => job.id === audioPreview) ?? recent[0] ?? null;
           const other = recent.find((job) => job.id !== shown?.id) ?? null;
           return (
@@ -2518,7 +2741,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
                   <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} quiet />
                   <Field label="Run on">
                     <div className="flex items-center gap-2">
-                      <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
+                      <GpuDot status={form.workerId ? (queues[form.workerId] ?? workers.find((w) => w.id === form.workerId)?.queue) : undefined} />
                       <Select
                         className="min-w-0 flex-1"
                         aria-label="PC"
@@ -2664,7 +2887,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
               <ProjectPick value={form.projectId} onChange={(projectId) => set({ projectId })} />
               <Field label="Run on" hint="Green is free. Red is rendering. Choosing a PC checks it again.">
                 <div className="flex items-center gap-2">
-                  <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
+                  <GpuDot status={form.workerId ? (queues[form.workerId] ?? workers.find((w) => w.id === form.workerId)?.queue) : undefined} />
                   <Select
                     className="min-w-0 flex-1"
                     value={form.workerId ?? ''}
@@ -2737,7 +2960,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
             <Field label="What to say" className="mt-3">
               <Textarea rows={5} value={form.targetText} onChange={(e) => set({ targetText: e.target.value })} />
             </Field>
-            {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="audio" />}
+            {!uxV5() && <LastOnMachine jobs={data.jobs.filter((job) => inWorkspace(job, scope))} workerId={form.workerId} kind="audio" />}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 busy={busy === 'draft'}
@@ -2807,6 +3030,10 @@ type H3Clip = {
   audioUploadName: string | null;
   audioUploadWorkerId: string | null;
   audioName: string | null;
+  audioTrim: boolean;
+  audioStartSec: number;
+  audioUseSec: number;
+  audioSeconds: number | null;
   durationSec: string;
   images: H3Image[];
 };
@@ -2851,6 +3078,8 @@ function parseTimecode(value: string): number | null {
   return mm * 60 + ss + ff / 24;
 }
 
+const H3_MAX_SECONDS = 30;
+
 /** Minutes : seconds : frames at 24 fps. 00:08:00 is 8 seconds. */
 function formatTimecode(seconds: number): string {
   const framesTotal = Math.max(0, Math.round(seconds * 24));
@@ -2885,12 +3114,170 @@ function blankH3Clip(prompt: string, continuity: H3Join): H3Clip {
     audioUploadName: null,
     audioUploadWorkerId: null,
     audioName: null,
+    audioTrim: false,
+    audioStartSec: 0,
+    audioUseSec: 0,
+    audioSeconds: null,
     durationSec: '00:08:00',
     images: [],
   };
 }
 
+function h3AudioFields(clip: H3Clip) {
+  return {
+    audioFileId: clip.audioFileId,
+    audioUploadName: clip.audioUploadName,
+    audioUploadWorkerId: clip.audioUploadWorkerId,
+    audioName: clip.audioName,
+    audioTrim: clip.audioTrim,
+    audioStartSec: clip.audioStartSec,
+    audioUseSec: clip.audioUseSec,
+    audioSeconds: clip.audioSeconds,
+  };
+}
+
+function h3AudioLabel(clip: H3Clip, locked: boolean) {
+  if (!clip.audioName) return 'MiniMax audio';
+  const lock = locked ? ' 🔒' : '';
+  if (clip.audioTrim && clip.audioUseSec > 0) return `${clockShort(clip.audioStartSec)}–${clockShort(clip.audioStartSec + clip.audioUseSec)}${lock}`;
+  return `${clip.audioName}${lock}`;
+}
+
+function H3AudioTrim({
+  clip,
+  workerId,
+  segmentSec,
+  onChange,
+}: {
+  clip: H3Clip;
+  workerId: string | null;
+  segmentSec: number;
+  onChange: (patch: Partial<H3Clip>) => void;
+}) {
+  const src = clip.audioFileId
+    ? `/api/v1/files/${clip.audioFileId}/stream`
+    : clip.audioUploadName && (clip.audioUploadWorkerId || workerId)
+      ? `/api/v1/comfy/workers/${clip.audioUploadWorkerId || workerId}/input?name=${encodeURIComponent(clip.audioUploadName)}`
+      : null;
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const total = clip.audioSeconds;
+  const cap = Math.min(H3_MAX_SECONDS, total != null && total > 0 ? total : H3_MAX_SECONDS);
+  function setTrim(start: number, length: number) {
+    const file = total != null && total > 0 ? total : start + Math.max(length, cap);
+    const nextStart = Math.max(0, Math.min(start, Math.max(0, file - 0.2)));
+    const room = Math.min(H3_MAX_SECONDS, Math.max(0.2, file - nextStart));
+    const nextLen = Math.round(Math.max(0.2, Math.min(length, room)) * 10) / 10;
+    onChange({
+      audioStartSec: Math.round(nextStart * 10) / 10,
+      audioUseSec: nextLen,
+      durationSec: formatTimecode(nextLen),
+    });
+  }
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={clip.audioTrim}
+          onChange={(e) => {
+            const on = e.target.checked;
+            const use = clip.audioUseSec > 0 ? Math.min(clip.audioUseSec, cap) : Math.min(cap, segmentSec);
+            onChange(
+              on
+                ? {
+                    audioTrim: true,
+                    audioStartSec: clip.audioStartSec || 0,
+                    audioUseSec: use,
+                    durationSec: formatTimecode(use),
+                  }
+                : { audioTrim: false },
+            );
+          }}
+        />
+        Trim this audio
+      </label>
+      <p className="text-xs text-muted">
+        {clip.audioTrim
+          ? 'The shot length matches this trim. Change the trim or the Length box and the other follows. The rest of the file stays where it is.'
+          : 'The whole uploaded file is added to this segment. The shot length stays as you set it.'}
+      </p>
+      {clip.audioTrim ? (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Start (seconds)">
+              <LooseNumber value={clip.audioStartSec} onValue={(audioStartSec) => setTrim(audioStartSec, clip.audioUseSec || cap)} />
+            </Field>
+            <Field label="Use (seconds)">
+              <LooseNumber value={clip.audioUseSec || cap} onValue={(audioUseSec) => setTrim(clip.audioStartSec, audioUseSec)} />
+            </Field>
+          </div>
+          {total != null && total > 0 ? (
+            <TrimBar total={total} start={clip.audioStartSec} length={clip.audioUseSec || cap} onChange={setTrim} />
+          ) : (
+            <p className="text-xs text-muted">The length appears once the audio has loaded.</p>
+          )}
+          {src ? (
+            <button
+              type="button"
+              className="text-xs font-semibold text-accent"
+              onClick={() => {
+                const el = audioRef.current;
+                if (!el) return;
+                if (!el.paused) {
+                  el.pause();
+                  return;
+                }
+                const { start } = clipBounds(clip.audioStartSec, clip.audioUseSec || cap);
+                try {
+                  el.currentTime = start;
+                } catch {
+                  /* metadata is still loading */
+                }
+                void el.play().catch(() => setPlaying(false));
+              }}
+            >
+              {playing ? 'Pause the trim' : 'Play the trim'}
+            </button>
+          ) : null}
+          {src ? (
+            <audio
+              ref={audioRef}
+              className="sr-only"
+              src={src}
+              preload="metadata"
+              onLoadedMetadata={(e) => {
+                const duration = e.currentTarget.duration;
+                if (Number.isFinite(duration)) {
+                  const room = Math.min(H3_MAX_SECONDS, Math.max(0.2, duration - clip.audioStartSec));
+                  const use = Math.min(clip.audioUseSec > 0 ? clip.audioUseSec : Math.min(H3_MAX_SECONDS, duration), room);
+                  onChange({
+                    audioSeconds: duration,
+                    ...(clip.audioTrim ? { audioUseSec: use, durationSec: formatTimecode(use) } : {}),
+                  });
+                }
+              }}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onTimeUpdate={(e) => {
+                const el = e.currentTarget;
+                const { start, end } = clipBounds(clip.audioStartSec, clip.audioUseSec || cap);
+                const action = clipPlayback(el.currentTime, start, end, el.seekable.length ? el.seekable.end(el.seekable.length - 1) : null);
+                if (action === 'restart') {
+                  el.pause();
+                  el.currentTime = start;
+                } else if (action === 'seek') el.currentTime = start;
+              }}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
+  const scope = useWorkspaceProjectIds();
   const studio = useApi<{
     ready: boolean;
     blockReason: string | null;
@@ -2906,6 +3293,9 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
       segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName'> & {
         durationSec: number | null;
         audioName?: string | null;
+        audioTrim?: boolean;
+        audioStartSec?: number | null;
+        audioUseSec?: number | null;
         images: Omit<H3Image, 'key'>[];
       })[];
     } | null;
@@ -2925,7 +3315,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
   const [browser, setBrowser] = useState(false);
   const [photoQ, setPhotoQ] = useState('');
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const [queues, setQueues] = usePcQueue(form?.workerId ?? null);
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
   const h3Stage = useRef<HTMLDivElement>(null);
@@ -2955,6 +3345,10 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
       audioUploadName: segment.audioUploadName,
       audioUploadWorkerId: segment.audioUploadWorkerId,
       audioName: segment.audioName ?? segment.audioUploadName,
+      audioTrim: segment.audioTrim === true,
+      audioStartSec: typeof segment.audioStartSec === 'number' ? segment.audioStartSec : 0,
+      audioUseSec: typeof segment.audioUseSec === 'number' ? segment.audioUseSec : 0,
+      audioSeconds: null,
       durationSec: segment.durationSec != null ? formatTimecode(segment.durationSec) : '00:08:00',
       images: (segment.images ?? []).map((image) => ({
         ...image,
@@ -2990,7 +3384,14 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
     setForm((current) => {
       if (!current) return current;
       const share = current.view === 'combined';
-      const audioChange = patch.audioFileId !== undefined || patch.audioUploadName !== undefined || patch.audioName !== undefined;
+      const audioChange =
+        patch.audioFileId !== undefined ||
+        patch.audioUploadName !== undefined ||
+        patch.audioName !== undefined ||
+        patch.audioTrim !== undefined ||
+        patch.audioStartSec !== undefined ||
+        patch.audioUseSec !== undefined ||
+        patch.audioSeconds !== undefined;
       return {
         ...current,
         clips: current.clips.map((item, i) => {
@@ -3002,6 +3403,11 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
               ...(patch.audioUploadName !== undefined ? { audioUploadName: patch.audioUploadName } : {}),
               ...(patch.audioUploadWorkerId !== undefined ? { audioUploadWorkerId: patch.audioUploadWorkerId } : {}),
               ...(patch.audioName !== undefined ? { audioName: patch.audioName } : {}),
+              ...(patch.audioTrim !== undefined ? { audioTrim: patch.audioTrim } : {}),
+              ...(patch.audioStartSec !== undefined ? { audioStartSec: patch.audioStartSec } : {}),
+              ...(patch.audioUseSec !== undefined ? { audioUseSec: patch.audioUseSec } : {}),
+              ...(patch.audioSeconds !== undefined ? { audioSeconds: patch.audioSeconds } : {}),
+              ...(patch.audioUseSec !== undefined && patch.durationSec !== undefined ? { durationSec: patch.durationSec } : {}),
             };
           }
           if (!share) return item;
@@ -3038,7 +3444,13 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
       const json = (await res.json().catch(() => null)) as { data?: { name?: string }; error?: { message?: string } } | null;
       if (!res.ok || !json?.data?.name) throw new Error(json?.error?.message ?? 'That file was not saved on the PC.');
       if (kind === 'audio') {
-        updateClip(index, { audioFileId: null, audioUploadName: json.data.name, audioUploadWorkerId: form.workerId, audioName: file.name });
+        updateClip(index, {
+          audioFileId: null,
+          audioUploadName: json.data.name,
+          audioUploadWorkerId: form.workerId,
+          audioName: file.name,
+          audioSeconds: null,
+        });
       } else if (clip.images.length < 8) {
         updateClip(index, {
           images: [
@@ -3095,6 +3507,9 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
             audioFileId: item.audioFileId,
             audioUploadName: item.audioUploadName,
             audioUploadWorkerId: item.audioUploadWorkerId,
+            audioTrim: item.audioTrim,
+            audioStartSec: item.audioTrim ? item.audioStartSec : null,
+            audioUseSec: item.audioTrim ? item.audioUseSec : null,
             durationSec: (() => {
               const seconds = parseTimecode(item.durationSec);
               return seconds != null && seconds > 0 ? seconds : 8;
@@ -3107,7 +3522,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
             })),
           })),
         };
-        const recent = [...data.jobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
+        const recent = [...data.jobs].filter((job) => inWorkspace(job, scope)).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 2);
         const shown = recent.find((job) => job.id === h3Preview) ?? recent[0] ?? null;
         const other = recent.find((job) => job.id !== shown?.id) ?? null;
         const formPane = (
@@ -3133,7 +3548,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
             />
             <Field label="Run on" hint={uxV5() ? undefined : 'Green is free. Red is rendering. Choosing a PC checks it again.'}>
               <div className="flex items-center gap-2">
-                <GpuDot status={form.workerId ? queues[form.workerId] : undefined} />
+                <GpuDot status={form.workerId ? (queues[form.workerId] ?? workers.find((w) => w.id === form.workerId)?.queue) : undefined} />
                 <Select
                   className="min-w-0 flex-1"
                   value={form.workerId ?? ''}
@@ -3340,7 +3755,14 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
               </Button>
             </div>
             <div className="studio-clip mt-3">
-              <Field label="Length" hint="00:08:00 is 8 seconds. The boxes are minutes, seconds, then frames.">
+              <Field
+                label="Length"
+                hint={
+                  clip.audioTrim
+                    ? 'Matches the trimmed audio. 00:08:00 is 8 seconds. 30 seconds is the longest shot.'
+                    : '00:08:00 is 8 seconds. The boxes are minutes, seconds, then frames. 30 seconds is the longest shot.'
+                }
+              >
                 <Input
                   className="font-mono"
                   inputMode="numeric"
@@ -3349,7 +3771,15 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                   onChange={(e) => updateClip(index, { durationSec: e.target.value })}
                   onBlur={() => {
                     const seconds = parseTimecode(clip.durationSec);
-                    if (seconds != null && seconds > 0) updateClip(index, { durationSec: formatTimecode(seconds) });
+                    if (seconds == null || seconds <= 0) return;
+                    if (!clip.audioTrim) {
+                      updateClip(index, { durationSec: formatTimecode(Math.min(H3_MAX_SECONDS, seconds)) });
+                      return;
+                    }
+                    const file = clip.audioSeconds;
+                    const room = Math.min(H3_MAX_SECONDS, file != null && file > clip.audioStartSec ? file - clip.audioStartSec : H3_MAX_SECONDS);
+                    const use = Math.round(Math.max(0.2, Math.min(seconds, room)) * 10) / 10;
+                    updateClip(index, { durationSec: formatTimecode(use), audioStartSec: clip.audioStartSec, audioUseSec: use });
                   }}
                 />
               </Field>
@@ -3404,17 +3834,23 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                 ))}
               </div>
               <div className="mt-0.5 flex min-w-[36rem] gap-0.5">
-                {form.clips.map((item, i) => (
-                  <button
-                    key={`${item.key}-audio`}
-                    type="button"
-                    className={`min-w-[5.5rem] truncate rounded px-2 py-1.5 text-left text-xs text-white ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
-                    style={{ flex: h3Seconds(item) }}
-                    onClick={() => setSelected(i)}
-                  >
-                    {item.audioName ? `${item.audioName}${form.audioLocked ? ' 🔒' : ''}` : 'MiniMax audio'}
-                  </button>
-                ))}
+                {form.clips.map((item, i) => {
+                  const span = h3Seconds(item);
+                  const slice = item.audioTrim && item.audioUseSec > 0 ? Math.min(span, item.audioUseSec) : span;
+                  return (
+                    <div key={`${item.key}-audio`} className="min-w-[5.5rem]" style={{ flex: span }}>
+                      <button
+                        type="button"
+                        title={item.audioName ?? 'MiniMax audio'}
+                        className={`block max-w-full truncate rounded px-2 py-1.5 text-left text-xs text-white ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
+                        style={{ width: `${Math.max(8, (slice / span) * 100)}%` }}
+                        onClick={() => setSelected(i)}
+                      >
+                        {h3AudioLabel(item, form.audioLocked)}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
@@ -3430,12 +3866,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                         key: crypto.randomUUID(),
                         shared: true,
                       }));
-                      if (current.shareAudio) {
-                        next.audioFileId = clip.audioFileId;
-                        next.audioUploadName = clip.audioUploadName;
-                        next.audioUploadWorkerId = clip.audioUploadWorkerId;
-                        next.audioName = clip.audioName;
-                      }
+                      if (current.shareAudio) Object.assign(next, h3AudioFields(clip));
                       setSelected(current.clips.length);
                       return { ...current, clips: [...current.clips, next] };
                     })
@@ -3472,15 +3903,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                       return {
                         ...current,
                         shareAudio,
-                        clips: shareAudio
-                          ? current.clips.map((item) => ({
-                              ...item,
-                              audioFileId: clip.audioFileId,
-                              audioUploadName: clip.audioUploadName,
-                              audioUploadWorkerId: clip.audioUploadWorkerId,
-                              audioName: clip.audioName,
-                            }))
-                          : current.clips,
+                        clips: shareAudio ? current.clips.map((item) => ({ ...item, ...h3AudioFields(clip) })) : current.clips,
                       };
                     });
                   }}
@@ -3507,11 +3930,20 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                     audioUploadName: null,
                     audioUploadWorkerId: null,
                     audioName: file.fileName,
+                    audioSeconds: typeof file.tech?.durationMs === 'number' ? file.tech.durationMs / 1000 : null,
                     durationSec: clip.durationSec || (file.tech?.durationMs ? String(Math.round((file.tech.durationMs / 1000) * 100) / 100) : ''),
                   })
                 }
                 onUpload={(file) => void upload('audio', file, index)}
               />
+              {clip.audioFileId || clip.audioUploadName ? (
+                <H3AudioTrim
+                  clip={clip}
+                  workerId={form.workerId}
+                  segmentSec={h3Seconds(clip)}
+                  onChange={(patch) => updateClip(index, patch)}
+                />
+              ) : null}
             </div>
             <Dialog open={browser} onClose={() => setBrowser(false)} title="Photos" wide>
               <div className="p-4">
@@ -3572,7 +4004,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                 </div>
               </div>
             </Dialog>
-            {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
+            {!uxV5() && <LastOnMachine jobs={data.jobs.filter((job) => inWorkspace(job, scope))} workerId={form.workerId} kind="video" />}
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 busy={busy === 'draft'}
@@ -3611,7 +4043,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
               </Button>
             </div>
             {error ? <p className="mt-3 text-sm text-bad">{error}</p> : null}
-          {!uxV5() && <LastOnMachine jobs={data.jobs} workerId={form.workerId} kind="video" />}
+          {!uxV5() && <LastOnMachine jobs={data.jobs.filter((job) => inWorkspace(job, scope))} workerId={form.workerId} kind="video" />}
           </div>
         );
         if (uxV5()) {

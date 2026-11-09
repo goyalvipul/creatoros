@@ -241,7 +241,7 @@ export function VideoTrim({
         : edit?.status === 'FAILED'
           ? edit.error || 'The trim failed. The original was not changed.'
           : edit?.status === 'RUNNING'
-            ? `Cutting the clip… ${edit.progressPct}%`
+            ? `Cutting on that PC… ${edit.progressPct || 0}%`
             : edit?.status === 'PENDING'
               ? 'Waiting to cut this clip.'
               : null;

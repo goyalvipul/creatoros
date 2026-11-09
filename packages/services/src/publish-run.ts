@@ -25,6 +25,8 @@ import {
   refreshThreadsToken,
   tiktokConnector,
   UploadOutcome,
+  setFacebookThumbnail,
+  setYoutubeThumbnail,
   uploadFacebookVideo,
   uploadInstagramReel,
   uploadThreadsPost,
@@ -33,8 +35,10 @@ import {
   youtubeUploadText,
   type UploadBytes,
 } from '@creatoros/connectors';
+import { notify } from './notifications';
 import { audit } from './audit';
 import { signMediaToken } from './crypto';
+import { readPublishCover, signCoverToken } from './publish-cover';
 import { openAgentFile } from './agent-file';
 import { placeVideoOnPlaylists } from './youtube-playlists';
 import { connectorContext, loadCredentials } from './integrations';
@@ -102,7 +106,9 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
              f.size::float8 as size, d.display_name as "deviceName", d.state as "deviceState",
              nullif(f.tech->>'width', '')::int as width,
              nullif(f.tech->>'height', '')::int as height,
-             nullif(f.tech->>'durationMs', '')::float8 as "durationMs"
+             nullif(f.tech->>'durationMs', '')::float8 as "durationMs",
+             i.cover_source as "coverSource", i.cover_offset_ms as "coverOffsetMs",
+             (i.cover_path is not null) as "hasCover"
       from publish_items i
       join file_instances f on f.id = i.file_instance_id
       join devices d on d.id = f.device_id
@@ -198,16 +204,11 @@ function youtubeChoices(
   input: { playlistIds?: string[]; aiUse?: 'YES' | 'NO' | null },
   existing?: { playlistIds: string[] | null; aiUse: string | null } | null,
 ) {
-  if (platform === 'threads') {
-    const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
-    if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this post should show the Threads AI label.');
-    return { playlistIds: [] as string[], aiUse: ai };
-  }
-  if (platform !== 'youtube') return { playlistIds: [] as string[], aiUse: null as 'YES' | 'NO' | null };
+  const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
+  if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this post is AI.');
+  if (platform !== 'youtube') return { playlistIds: [] as string[], aiUse: ai };
   const playlistIds =
     input.playlistIds === undefined ? (existing?.playlistIds ?? []) : cleanPlaylistIds(input.playlistIds);
-  const ai = input.aiUse === undefined ? existing?.aiUse ?? null : input.aiUse;
-  if (ai !== 'YES' && ai !== 'NO') throw badRequest('Choose whether this video uses AI.');
   return { playlistIds, aiUse: ai };
 }
 
@@ -593,6 +594,19 @@ export async function executePublish(
           ),
         );
     }
+    await notify(ctx.db, {
+      orgId: ctx.orgId,
+      userId: ctx.userId,
+      type: 'publish.failed',
+      dedupeKey: `publish.failed:${claimed.id}`,
+      title: state === 'UNCERTAIN' ? 'A post may have been sent' : 'A post did not send',
+      body: error.slice(0, 180),
+      severity: 'WARNING',
+      deepLink: '/publishing',
+      sourceType: 'publish_draft',
+      sourceId: claimed.id,
+      accountId: claimed.socialAccountId,
+    });
     return { ...draftView(claimed), uploadState: state, error };
   };
   try {
@@ -630,6 +644,12 @@ export async function executePublish(
       if (fresh.accessToken && fresh.accessToken !== creds.accessToken) await cctx.onCredentials?.(fresh);
     }
     const caption = [claimed.caption, ...(claimed.hashtags ?? []).map((h) => `#${h}`)].filter(Boolean).join('\n');
+    const coverRow = rowsOf<{ source: string | null; atMs: number | null }>(
+      await ctx.db.execute(sql`
+        select cover_source as source, cover_offset_ms as "atMs" from publish_items where id = ${item.id}`),
+    )[0];
+    const coverFile = coverRow?.source ? await readPublishCover(ctx, item.id, ctx.orgId) : null;
+    const coverBytes = coverFile ? new Uint8Array(coverFile.bytes) : null;
     const youtube =
       account.platform === 'youtube'
         ? youtubeUploadText({
@@ -653,12 +673,20 @@ export async function executePublish(
       const videoUrl = `${base}/api/v1/files/${item.fileInstanceId}/stream?token=${encodeURIComponent(mediaToken)}`;
       if (typeof (file.body as ReadableStream).cancel === 'function')
         await (file.body as ReadableStream).cancel().catch(() => undefined);
+      const coverUrl =
+        coverRow?.source === 'upload' && coverFile
+          ? `${base}/api/v1/publish-items/${item.id}/cover?token=${encodeURIComponent(signCoverToken(ctx.env.agentPairingSecret, item.id, exp))}`
+          : null;
       result = await uploadInstagramReel(fetchImpl, {
         version: 'v23.0',
         igUserId: conn.principalHint ?? '',
         accessToken: token,
         caption,
         videoUrl,
+        thumbOffsetMs: coverRow?.source === 'frame' ? coverRow.atMs : null,
+        coverUrl,
+        trial: claimed.contentForm === 'TRIAL',
+        aiGenerated: claimed.aiUse === 'YES',
       });
     } else if (account.platform === 'youtube') {
       const privacy = claimed.privacy === 'PUBLIC' ? 'public' : claimed.privacy === 'PRIVATE' ? 'private' : 'unlisted';
@@ -731,17 +759,44 @@ export async function executePublish(
         disableDuet: info.duetDisabled || !flags.duet,
         disableStitch: info.stitchDisabled || !flags.stitch,
         username: info.username,
+        coverTimestampMs: coverRow?.source === 'frame' ? coverRow.atMs : null,
+        isAigc: claimed.aiUse === 'YES' ? true : claimed.aiUse === 'NO' ? false : undefined,
       });
     } else return fail('FAILED', 'Publishing is not available for this platform.');
 
     let playlistNote: string | null = null;
+    if (coverBytes && account.platform === 'youtube') {
+      try {
+        await setYoutubeThumbnail(fetchImpl, {
+          accessToken: token,
+          videoId: result.externalId,
+          bytes: coverBytes,
+          mime: coverFile!.mime,
+        });
+      } catch (e) {
+        playlistNote = `The video is on YouTube. The thumbnail was not set. ${(e as Error).message}`.slice(0, 500);
+      }
+    }
+    if (coverBytes && account.platform === 'facebook') {
+      try {
+        await setFacebookThumbnail(fetchImpl, {
+          version: 'v23.0',
+          videoId: result.externalId,
+          accessToken: token,
+          bytes: coverBytes,
+          mime: coverFile!.mime,
+        });
+      } catch (e) {
+        playlistNote = `The video is on the Page. The thumbnail was not set. ${(e as Error).message}`.slice(0, 500);
+      }
+    }
     if (account.platform === 'youtube' && claimed.playlistIds.length) {
       try {
         const missed = await placeVideoOnPlaylists(token, result.externalId, claimed.playlistIds);
         if (missed.length)
-          playlistNote = `The video is on YouTube. It was not added to every playlist. ${missed.join(' ')}`.slice(0, 500);
+          playlistNote = [playlistNote, `It was not added to every playlist. ${missed.join(' ')}`].filter(Boolean).join(' ').slice(0, 500);
       } catch (e) {
-        playlistNote = `The video is on YouTube. The playlists were not updated. ${(e as Error).message}`.slice(0, 500);
+        playlistNote = [playlistNote, `The playlists were not updated. ${(e as Error).message}`].filter(Boolean).join(' ').slice(0, 500);
       }
     }
 
@@ -802,6 +857,18 @@ export async function executePublish(
     await audit(ctx, 'publish.uploaded', { type: 'publication', id: rec!.id }, undefined, {
       platform: account.platform,
       externalId: result.externalId,
+    });
+    await notify(ctx.db, {
+      orgId: ctx.orgId,
+      userId: ctx.userId,
+      type: 'publish.sent',
+      dedupeKey: `publish.sent:${claimed.id}`,
+      title: 'A post was sent',
+      body: claimed.title ? claimed.title.slice(0, 140) : account.platform,
+      deepLink: '/publishing',
+      sourceType: 'publish_draft',
+      sourceId: claimed.id,
+      accountId: claimed.socialAccountId,
     });
     return { ...draftView({ ...claimed, uploadState: 'PUBLISHED', publicationId: rec!.id, error: null }), url: result.url };
   } catch (e) {

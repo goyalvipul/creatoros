@@ -233,7 +233,7 @@ func imageProbe(path string) (*protocol.Probe, error) {
 	return p, nil
 }
 
-// Thumbnail renders a JPEG preview (max 480px wide). Source files are only read.
+// Thumbnail renders a JPEG preview (long edge at most 1280px). Source files are only read.
 func (t Tools) Thumbnail(ctx context.Context, path string, durationMs float64) ([]byte, error) {
 	if t.FFmpeg == "" {
 		return nil, errors.New("ffmpeg not installed")
@@ -258,7 +258,7 @@ func (t Tools) Thumbnail(ctx context.Context, path string, durationMs float64) (
 		if ss != "" {
 			args = append(args, "-ss", ss)
 		}
-		args = append(args, "-i", scan.LongPath(path), "-frames:v", "1", "-vf", "scale='min(480,iw)':-2", "-q:v", "4", "-f", "image2pipe", "-vcodec", "mjpeg", "-")
+		args = append(args, "-i", scan.LongPath(path), "-frames:v", "1", "-vf", "scale='min(1280,iw)':-2", "-q:v", "2", "-f", "image2pipe", "-vcodec", "mjpeg", "-")
 		cmd := exec.CommandContext(cctx, t.FFmpeg, args...)
 		hide(cmd)
 		var out, stderr bytes.Buffer

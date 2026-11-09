@@ -28,6 +28,22 @@ import {
   generateRecommendations,
   startExperiment,
   briefing,
+  getTodayBoard,
+  addPlanItem,
+  removePlanItem,
+  updatePlanItem,
+  setCapacity,
+  startFocus,
+  pauseFocusSession,
+  resumeFocusSession,
+  resetFocusSession,
+  saveFocusNote,
+  saveReview,
+  carryForward,
+  saveWorkspaceCover,
+  clearWorkspaceCover,
+  readWorkspaceCover,
+  readWorkspaceCoverSource,
   changeDealStage,
   completeAction,
   completeOAuth,
@@ -75,6 +91,8 @@ import {
   getDeal,
   getInvoice,
   getPrefs,
+  archiveNotifications,
+  snoozeNotifications,
   getThread,
   goalProgress,
   ingestMessage,
@@ -90,6 +108,11 @@ import {
   listIntegrations,
   listInvoices,
   listNotifications,
+  listPushSubscriptions,
+  savePushSubscription,
+  revokePushSubscription,
+  sendTestNotification,
+  pushPublicKey,
   listTaskLinks,
   listThreads,
   manualIntake,
@@ -127,7 +150,8 @@ import {
   updatePrefs,
   voidInvoice,
 } from '@creatoros/services';
-import { idParam, makeRouter, RAW, withMeta, type AppDeps } from '../http';
+import { ctxFor, idParam, makeRouter, RAW, withMeta, type AppDeps } from '../http';
+import { unauthorized } from '@creatoros/services';
 
 const date = z.coerce.date();
 const uuid = z.uuid();
@@ -885,6 +909,100 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
   route(
     {
       method: 'GET',
+      url: '/today/board',
+      tag: 'Today',
+      summary: 'Today command center',
+      query: z.object({ brandId: uuid.optional() }),
+    },
+    ({ ctx, query }) => getTodayBoard(ctx, ctx.now(), query.brandId),
+  );
+  route(
+    { method: 'POST', url: '/today/plan/items', tag: 'Today', summary: 'Add an existing task to today', body: z.object({ actionId: uuid }) },
+    ({ ctx, body }) => addPlanItem(ctx, body.actionId),
+  );
+  route(
+    { method: 'DELETE', url: '/today/plan/items/:id', tag: 'Today', summary: 'Remove a task from today without deleting it', params: idParam },
+    ({ ctx, params }) => removePlanItem(ctx, params.id),
+  );
+  route(
+    {
+      method: 'PATCH',
+      url: '/today/plan/items/:id',
+      tag: 'Today',
+      summary: 'Edit effort, next action, or a time block',
+      params: idParam,
+      body: z.object({
+        effortMinutes: z.number().int().min(5).max(480).nullable().optional(),
+        nextAction: z.string().max(500).nullable().optional(),
+        blockAt: z.string().datetime().nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => updatePlanItem(ctx, params.id, body),
+  );
+  route(
+    { method: 'PUT', url: '/today/capacity', tag: 'Today', summary: 'Set focused-work capacity for today', body: z.object({ minutes: z.number().int().min(30).max(720) }) },
+    ({ ctx, body }) => setCapacity(ctx, body.minutes),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/today/focus',
+      tag: 'Today',
+      summary: 'Start one focus session',
+      body: z.object({ actionId: uuid, minutes: z.union([z.literal(15), z.literal(25), z.literal(50)]) }),
+    },
+    ({ ctx, body }) => startFocus(ctx, body.actionId, body.minutes),
+  );
+  route({ method: 'POST', url: '/today/focus/pause', tag: 'Today', summary: 'Pause the focus session' }, ({ ctx }) => pauseFocusSession(ctx));
+  route({ method: 'POST', url: '/today/focus/resume', tag: 'Today', summary: 'Resume the focus session' }, ({ ctx }) => resumeFocusSession(ctx));
+  route({ method: 'POST', url: '/today/focus/reset', tag: 'Today', summary: 'End the focus session' }, ({ ctx }) => resetFocusSession(ctx));
+  route(
+    { method: 'PUT', url: '/today/focus/note', tag: 'Today', summary: 'Save a resume note', body: z.object({ note: z.string().max(2000) }) },
+    ({ ctx, body }) => saveFocusNote(ctx, body.note),
+  );
+  route(
+    {
+      method: 'PUT',
+      url: '/today/review',
+      tag: 'Today',
+      summary: 'Save the daily review',
+      body: z.object({ notes: z.string().max(8000), checks: z.record(z.string(), z.boolean()) }),
+    },
+    ({ ctx, body }) => saveReview(ctx, body.notes, body.checks),
+  );
+  route(
+    { method: 'POST', url: '/today/review/carry', tag: 'Today', summary: 'Move selected unfinished work to tomorrow morning', body: z.object({ actionIds: z.array(uuid).max(20) }) },
+    ({ ctx, body }) => carryForward(ctx, body.actionIds),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/today/cover',
+      tag: 'Today',
+      summary: 'Set the workspace photo',
+      bodyLimit: 36 * 1024 * 1024,
+      body: z.object({
+        mime: z.string().max(80).optional(),
+        data: z.string().min(16).max(17_000_000),
+        source: z.string().min(16).max(17_000_000).optional(),
+        brandId: uuid.optional(),
+      }),
+    },
+    ({ ctx, body }) => saveWorkspaceCover(ctx, body.mime ?? '', body.data, body.source, body.brandId),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/today/cover',
+      tag: 'Today',
+      summary: 'Remove the workspace photo',
+      query: z.object({ brandId: uuid.optional() }),
+    },
+    ({ ctx, query }) => clearWorkspaceCover(ctx, query.brandId),
+  );
+  route(
+    {
+      method: 'GET',
       url: '/actions',
       tag: 'Today',
       summary: 'Action queue',
@@ -1043,6 +1161,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
           .enum(['true', 'false'])
           .transform((v) => v === 'true')
           .optional(),
+        filter: z.enum(['all', 'unread', 'action', 'archived']).optional(),
         limit: z.coerce.number().int().max(200).optional(),
       }),
     },
@@ -1054,13 +1173,101 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       method: 'POST',
       url: '/notifications/read',
       tag: 'Today',
-      summary: 'Mark notifications read',
-      body: z.object({ ids: z.union([z.array(uuid).max(200), z.literal('all')]) }),
+      summary: 'Mark notifications read or unread',
+      role: 'VIEWER',
+      body: z.object({
+        ids: z.union([z.array(uuid).max(200), z.literal('all')]).optional(),
+        all: z.literal(true).optional(),
+        read: z.boolean().optional(),
+      }),
     },
     async ({ ctx, body }) => {
-      await markRead(ctx, body.ids);
+      const ids = body.all || body.ids === undefined ? 'all' : body.ids;
+      await markRead(ctx, ids, body.read !== false);
       return { unread: await unreadCount(ctx) };
     },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/archive',
+      tag: 'Today',
+      summary: 'Archive or restore notifications',
+      role: 'VIEWER',
+      body: z.object({ ids: z.array(uuid).min(1).max(200), archived: z.boolean().optional() }),
+    },
+    ({ ctx, body }) => archiveNotifications(ctx, body.ids, body.archived !== false),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/snooze',
+      tag: 'Today',
+      summary: 'Hide notifications until a time',
+      role: 'VIEWER',
+      body: z.object({ ids: z.array(uuid).min(1).max(200), until: z.string().datetime() }),
+    },
+    ({ ctx, body }) => snoozeNotifications(ctx, body.ids, new Date(body.until)),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/notifications/push/key',
+      tag: 'Today',
+      summary: 'Public VAPID key for this browser. Empty when push is not configured.',
+    },
+    ({ ctx }) => ({ publicKey: pushPublicKey(ctx.env) }),
+  );
+  route(
+    {
+      method: 'GET',
+      url: '/notifications/push/subscriptions',
+      tag: 'Today',
+      summary: 'This user push devices. Endpoints stay on the server.',
+    },
+    ({ ctx }) => listPushSubscriptions(ctx),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/push/subscriptions',
+      tag: 'Today',
+      summary: 'Save this browser push subscription',
+      role: 'VIEWER',
+      body: z.object({
+        endpoint: z.string().min(8).max(2000),
+        keys: z.object({ p256dh: z.string().min(8).max(200), auth: z.string().min(8).max(200) }),
+      }),
+    },
+    async ({ ctx, body, req }) => {
+      const saved = await savePushSubscription(ctx, {
+        ...body,
+        userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
+      });
+      await updatePrefs(ctx, { browserPush: true });
+      return saved;
+    },
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/push/subscriptions/:id/revoke',
+      tag: 'Today',
+      summary: 'Stop push to one device',
+      role: 'VIEWER',
+      params: idParam,
+    },
+    ({ ctx, params }) => revokePushSubscription(ctx, params.id),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/notifications/push/test',
+      tag: 'Today',
+      summary: 'Send one test notification',
+      role: 'VIEWER',
+    },
+    ({ ctx }) => sendTestNotification(ctx),
   );
   route(
     {
@@ -1092,6 +1299,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
           browserPush: z.boolean(),
           digestHour: z.number().int().min(0).max(23),
           rules: z.record(z.string(), z.boolean()),
+          channels: z.record(z.string().max(80), z.string().max(20)),
         })
         .partial(),
     },
@@ -1692,6 +1900,26 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
     ({ ctx, params }) => getBackup(ctx, params.id),
   );
 
+  const coverBrand = (req: { query: unknown }) => {
+    const raw = req.query && typeof req.query === 'object' && 'brandId' in req.query ? String((req.query as { brandId?: string }).brandId ?? '') : '';
+    return z.uuid().safeParse(raw).success ? raw : undefined;
+  };
+  app.get('/today/cover/source', async (req, reply) => {
+    if (!req.session) throw unauthorized();
+    const file = await readWorkspaceCoverSource(ctxFor(deps, req), coverBrand(req));
+    if (!file) return reply.status(404).send();
+    reply.header('content-type', file.mime);
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.send(file.bytes);
+  });
+  app.get('/today/cover', async (req, reply) => {
+    if (!req.session) throw unauthorized();
+    const file = await readWorkspaceCover(ctxFor(deps, req), coverBrand(req));
+    if (!file) return reply.status(404).send();
+    reply.header('content-type', file.mime);
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.send(file.bytes);
+  });
   void connectorContext;
   void createBackup;
   void goalProgress;

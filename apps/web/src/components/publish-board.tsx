@@ -21,7 +21,7 @@ import {
   Notice,
   Select,
 } from '@/components/ui';
-import { ApiError, del, post, refresh, useApi } from '@/lib/api';
+import { ApiError, api, del, post, qs, refresh, useApi } from '@/lib/api';
 import { bytes, title as titleCase, when } from '@/lib/format';
 import { PlatformLogo } from '@/components/platform-logo';
 import { useRoots } from '@/lib/options';
@@ -154,7 +154,7 @@ function VariantCard({
               <li key={a.id} className="text-center">
                 <PlatformLogo platform={a.platform} className="mx-auto size-6" />
                 <div className="text-muted">
-                  {cell?.active ?? 0}/{row.attached} active
+                  {Math.min(cell?.active ?? cell?.published ?? 0, row.attached)}/{row.attached} active
                 </div>
               </li>
             );
@@ -317,12 +317,7 @@ function FileList({ variantId, data, tz }: { variantId: string; data: any; tz?: 
         Originals remain on their source PCs. Unlinking is not deleting. Publishing always requires your explicit confirmation.
       </p>
       {linkOpen && (
-        <LinkDialog
-          variantId={variantId}
-          assetId={data.assetId}
-          assetTitle={data.assetTitle}
-          onClose={() => setLinkOpen(false)}
-        />
+        <LinkDialog variantId={variantId} onClose={() => setLinkOpen(false)} />
       )}
       {uploadOpen && <UploadDialog variantId={variantId} onClose={() => setUploadOpen(false)} />}
       {actions && (
@@ -621,29 +616,24 @@ export function UploadDialog({ variantId, onClose }: { variantId: string; onClos
   );
 }
 
-export function LinkDialog({
-  variantId,
-  assetId,
-  assetTitle,
-  onClose,
-}: {
-  variantId: string;
-  assetId: string;
-  assetTitle?: string;
-  onClose: () => void;
-}) {
+export function LinkDialog({ variantId, onClose }: { variantId: string; onClose: () => void }) {
   const [q, setQ] = useState('');
-  const files = useApi<{ items: any[] }>('/library', {
-    query: { kind: 'VIDEO', assetId, sameFolder: true, q, limit: 200 },
+  const [extra, setExtra] = useState<{ q: string; items: any[]; next: string | null } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const files = useApi<{ items: any[]; nextCursor: string | null }>('/library', {
+    query: { kind: 'VIDEO', q, limit: 50 },
   });
+  const tail = extra && extra.q === q.trim() ? extra : null;
+  const items = [...(files.data?.items ?? []), ...(tail?.items ?? [])];
+  const next = tail ? tail.next : (files.data?.nextCursor ?? null);
   return (
     <FormDialog open onClose={onClose} title="Link a video" submitLabel="Close" onSubmit={async () => {}}>
-      <p className="text-sm text-muted">Videos already indexed in the same folder as {assetTitle || 'this asset'}.</p>
+      <p className="text-sm text-muted">Every video in the library. Search by file name or path.</p>
       <Field label="Search">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="File name or path" />
       </Field>
-      <ul className="max-h-64 space-y-1 overflow-auto">
-        {(files.data?.items ?? []).map((f) => (
+      <ul className="max-h-80 space-y-1 overflow-auto">
+        {items.map((f) => (
           <li key={f.id}>
             <button
               type="button"
@@ -661,10 +651,30 @@ export function LinkDialog({
             </button>
           </li>
         ))}
-        {files.data && files.data.items.length === 0 && (
-          <li className="text-sm text-muted">No videos in this asset match that search.</li>
-        )}
+        {files.data && items.length === 0 && <li className="text-sm text-muted">No videos in the library match that search.</li>}
       </ul>
+      {next ? (
+        <Button
+          busy={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const page = await api<{ items: any[]; nextCursor: string | null }>(
+                `/library${qs({ kind: 'VIDEO', q, limit: 50, cursor: next })}`,
+              );
+              setExtra({
+                q: q.trim(),
+                items: [...(tail?.items ?? []), ...(page.items ?? [])],
+                next: page.nextCursor,
+              });
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          More videos
+        </Button>
+      ) : null}
     </FormDialog>
   );
 }

@@ -33,6 +33,7 @@ export const organizations = pgTable('organizations', {
   baseCurrency: text('base_currency').notNull().default('CAD'),
   timezone: text('timezone').notNull().default('America/Vancouver'),
   settings: jsonb('settings').$type<Record<string, unknown>>().notNull().default({}),
+  coverPath: text('cover_path'),
   setupStep: text('setup_step').notNull().default('welcome'),
   setupCompletedAt: ts('setup_completed_at'),
   createdAt: createdAt(),
@@ -93,6 +94,7 @@ export const brands = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     active: boolean('active').notNull().default(true),
+    coverPath: text('cover_path'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     deletedAt: deletedAt(),

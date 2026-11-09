@@ -85,7 +85,21 @@ async function readError(res: Response): Promise<string> {
  */
 export async function uploadInstagramReel(
   fetchImpl: FetchFn,
-  input: { version: string; igUserId: string; accessToken: string; caption: string; videoUrl: string },
+  input: {
+    version: string;
+    igUserId: string;
+    accessToken: string;
+    caption: string;
+    videoUrl: string;
+    /** A frame from the video, in milliseconds. */
+    thumbOffsetMs?: number | null;
+    /** A JPEG Instagram can download. Used when the owner uploaded a picture. */
+    coverUrl?: string | null;
+    /** Shown to non-followers first. The owner graduates it in the Instagram app. */
+    trial?: boolean;
+    /** Instagram is_ai_generated. Sent only when the owner answered Yes. */
+    aiGenerated?: boolean;
+  },
 ): Promise<UploadResult> {
   const call = bounded(fetchImpl);
   const base = `https://graph.instagram.com/${input.version}`;
@@ -97,6 +111,10 @@ export async function uploadInstagramReel(
     caption: input.caption,
     access_token: input.accessToken,
   });
+  if (input.coverUrl) startQuery.set('cover_url', input.coverUrl);
+  else if (input.thumbOffsetMs != null) startQuery.set('thumb_offset', String(Math.max(0, Math.round(input.thumbOffsetMs))));
+  if (input.trial) startQuery.set('trial_params', JSON.stringify({ graduation_strategy: 'MANUAL' }));
+  if (input.aiGenerated) startQuery.set('is_ai_generated', 'true');
   const start = await call(`${base}/${encodeURIComponent(input.igUserId)}/media?${startQuery}`, {
     method: 'POST',
   });
@@ -229,6 +247,44 @@ export async function uploadYoutubeVideo(
       throw new UploadOutcome(`YouTube upload outcome is unknown: ${(e as Error).message}`, true);
     throw e;
   }
+}
+
+/** YouTube custom thumbnail. The channel must be allowed to set one. A refusal does not remove the video. */
+export async function setYoutubeThumbnail(
+  fetchImpl: FetchFn,
+  input: { accessToken: string; videoId: string; bytes: Uint8Array; mime: string },
+): Promise<void> {
+  const call = bounded(fetchImpl);
+  const res = await call(
+    `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(input.videoId)}&uploadType=media`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${input.accessToken}`,
+        'content-type': input.mime || 'image/jpeg',
+        'content-length': String(input.bytes.byteLength),
+      },
+      body: input.bytes as unknown as BodyInit,
+    },
+  );
+  if (!res.ok) throw new Error(await readError(res));
+}
+
+/** Facebook Page preferred thumbnail. A refusal does not remove the video. */
+export async function setFacebookThumbnail(
+  fetchImpl: FetchFn,
+  input: { version: string; videoId: string; accessToken: string; bytes: Uint8Array; mime: string },
+): Promise<void> {
+  const call = bounded(fetchImpl);
+  const body = new FormData();
+  body.set('access_token', input.accessToken);
+  body.set('is_preferred', 'true');
+  body.set('source', new Blob([input.bytes as unknown as BlobPart], { type: input.mime || 'image/jpeg' }), 'cover.jpg');
+  const res = await call(`https://graph.facebook.com/${input.version}/${encodeURIComponent(input.videoId)}/thumbnails`, {
+    method: 'POST',
+    body,
+  });
+  if (!res.ok) throw new Error(await readError(res));
 }
 
 /** Facebook Page video, resumable start/transfer/finish. Needs pages_manage_posts on the Page token. */
@@ -433,11 +489,20 @@ export interface TikTokCreatorInfo {
   maxVideoSeconds: number | null;
 }
 
-async function tiktokJson<T>(res: Response, sent: boolean): Promise<T> {
+function tiktokRefusal(code: string | undefined, message: string, status: number, privacy?: string): string {
+  if (code === 'unaudited_client_can_only_post_to_private_accounts' || /integration guidelines/i.test(message)) {
+    return privacy === 'SELF_ONLY'
+      ? 'TikTok has not reviewed this app yet. In the TikTok app, set this account to Private, keep Who can watch on Only me, and publish again.'
+      : 'TikTok has not reviewed this app yet. Set Who can watch to Only me, and in the TikTok app set this account to Private, then publish again.';
+  }
+  return `TikTok refused the post: ${message || `HTTP ${status}`}`;
+}
+
+async function tiktokJson<T>(res: Response, sent: boolean, privacy?: string): Promise<T> {
   const body = (await res.json().catch(() => ({}))) as { data?: T; error?: { code?: string; message?: string } };
   const code = body.error?.code;
   if (!res.ok || (code && code !== 'ok'))
-    throw new UploadOutcome(`TikTok refused the post: ${body.error?.message || `HTTP ${res.status}`}`, sent);
+    throw new UploadOutcome(tiktokRefusal(code, body.error?.message ?? '', res.status, privacy), sent);
   return (body.data ?? {}) as T;
 }
 
@@ -481,6 +546,10 @@ export async function uploadTikTokVideo(
     disableDuet: boolean;
     disableStitch: boolean;
     username?: string | null;
+    /** Frame time in milliseconds. TikTok does not accept a separate picture. */
+    coverTimestampMs?: number | null;
+    /** TikTok post_info.is_aigc. Omitted until the owner answers. */
+    isAigc?: boolean;
   },
 ): Promise<UploadResult> {
   const call = bounded(fetchImpl);
@@ -496,6 +565,10 @@ export async function uploadTikTokVideo(
         disable_comment: input.disableComment,
         disable_duet: input.disableDuet,
         disable_stitch: input.disableStitch,
+        brand_content_toggle: false,
+        brand_organic_toggle: false,
+        ...(typeof input.isAigc === 'boolean' ? { is_aigc: input.isAigc } : {}),
+        ...(input.coverTimestampMs != null ? { video_cover_timestamp_ms: Math.max(0, Math.round(input.coverTimestampMs)) } : {}),
       },
       source_info: {
         source: 'FILE_UPLOAD',
@@ -505,7 +578,7 @@ export async function uploadTikTokVideo(
       },
     }),
   });
-  const started = await tiktokJson<{ publish_id?: string; upload_url?: string }>(init, false);
+  const started = await tiktokJson<{ publish_id?: string; upload_url?: string }>(init, false, input.privacyLevel);
   if (!started.publish_id || !started.upload_url) throw new UploadOutcome('TikTok did not return an upload.', false);
   let sent = false;
   try {

@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* Follow the in-app theme, not the phone's system appearance. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
 :root {
   --bg: #f6f7fb;
   --panel: #ffffff;

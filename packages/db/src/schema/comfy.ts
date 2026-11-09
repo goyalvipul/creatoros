@@ -103,6 +103,10 @@ export interface H3SegmentDraft {
   audioFileId: string | null;
   audioUploadName: string | null;
   audioUploadWorkerId: string | null;
+  /** When true, only audioStartSec for audioUseSec seconds is sent. Off sends the whole file. */
+  audioTrim?: boolean;
+  audioStartSec?: number | null;
+  audioUseSec?: number | null;
   /** Seconds. Null means use the scanned file length. */
   durationSec: number | null;
   images: H3ImageDraft[];

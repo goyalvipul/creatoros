@@ -22,6 +22,8 @@ import {
   Textarea,
 } from '@/components/ui';
 import { ImageThumb, VideoThumb, cardWidth, isImageName } from '@/components/video-thumb';
+import { ThumbnailPicker } from '@/components/publish-cover';
+import { VideoTrim } from '@/components/video-trim';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { PlatformLogo } from '@/components/platform-logo';
@@ -766,6 +768,8 @@ function VariantPanel({
             <AssetTile
               key={item.id}
               item={item}
+              projectId={projectId}
+              variantId={variantId}
               playing={playing === item.fileInstanceId}
               onPlay={() => setPlaying(item.fileInstanceId)}
             />
@@ -778,6 +782,8 @@ function VariantPanel({
           drafts={data.drafts ?? []}
           selected={selected}
           playing={playing}
+          projectId={projectId}
+          variantId={variantId}
           tz={tz}
           onSelect={(id) => {
             setSelected(id);
@@ -819,6 +825,8 @@ function PublishDesk({
   drafts,
   selected,
   playing,
+  projectId,
+  variantId,
   tz,
   onSelect,
   onPlay,
@@ -829,6 +837,8 @@ function PublishDesk({
   drafts: any[];
   selected: string | null;
   playing: string | null;
+  projectId: string;
+  variantId: string;
   tz?: string;
   onSelect: (id: string) => void;
   onPlay: (fileId: string) => void;
@@ -836,6 +846,7 @@ function PublishDesk({
 }) {
   const current = items.find((item) => item.id === selected) ?? items[0];
   const [ratio, setRatio] = useState<number | null>(null);
+  const [trim, setTrim] = useState(false);
   useEffect(() => setRatio(null), [current?.fileInstanceId]);
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)]">
@@ -862,11 +873,32 @@ function PublishDesk({
         <div className="overflow-hidden rounded-xl" style={{ width: cardWidth(ratio), maxWidth: '100%' }}>
           <FilePreview item={current} playing={playing === current.fileInstanceId} onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
         </div>
+        {isVideoFile(current.fileName) ? (
+          <div className="mt-3">
+            <ThumbnailPicker
+              variantId={variantId}
+              itemId={current.id}
+              fileId={current.fileInstanceId}
+              durationMs={Number(current.durationMs) || 0}
+              online={current.deviceState === 'ONLINE'}
+              hasCover={Boolean(current.hasCover)}
+              onSaved={() => void refresh(`/variants/${variantId}/publish`)}
+            />
+          </div>
+        ) : null}
         <p className="mt-2 truncate text-sm font-medium">{current.fileName}</p>
         <p className="text-xs text-muted">
           {current.deviceName}
           {current.deviceState !== 'ONLINE' ? ' · machine offline' : ''}
         </p>
+        {isVideoFile(current.fileName) ? (
+          <Button size="sm" className="mt-2" onClick={() => setTrim(true)}>
+            Edit video
+          </Button>
+        ) : null}
+        {trim && isVideoFile(current.fileName) ? (
+          <VideoTrim fileId={current.fileInstanceId} projectId={projectId} variantId={variantId} onClose={() => setTrim(false)} />
+        ) : null}
       </div>
       <ul className="space-y-2">
         {accounts.length === 0 && <li className="text-sm text-muted">No social accounts yet. Add them in Channels.</li>}
@@ -910,10 +942,24 @@ function PublishDesk({
   );
 }
 
-function AssetTile({ item, playing, onPlay }: { item: any; playing: boolean; onPlay: () => void }) {
+function AssetTile({
+  item,
+  projectId,
+  variantId,
+  playing,
+  onPlay,
+}: {
+  item: any;
+  projectId: string;
+  variantId: string;
+  playing: boolean;
+  onPlay: () => void;
+}) {
   const [ratio, setRatio] = useState<number | null>(null);
+  const [trim, setTrim] = useState(false);
   const online = item.deviceState === 'ONLINE';
   const image = isImageName(item.fileName);
+  const video = isVideoFile(item.fileName);
   return (
     <li className="overflow-hidden rounded-xl border border-border bg-panel" style={{ width: cardWidth(ratio) }}>
       {image ? (
@@ -924,9 +970,21 @@ function AssetTile({ item, playing, onPlay }: { item: any; playing: boolean; onP
       <div className="px-3 py-2">
         <div className="truncate text-sm font-medium">{item.fileName}</div>
         <div className="truncate text-xs text-muted">{item.deviceName}</div>
+        {video ? (
+          <Button size="sm" className="mt-2" onClick={() => setTrim(true)}>
+            Edit video
+          </Button>
+        ) : null}
       </div>
+      {trim && video ? (
+        <VideoTrim fileId={item.fileInstanceId} projectId={projectId} variantId={variantId} onClose={() => setTrim(false)} />
+      ) : null}
     </li>
   );
+}
+
+function isVideoFile(name?: string) {
+  return /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name ?? '');
 }
 
 function FrameStill({ fileId, online, name }: { fileId: string; online: boolean; name?: string }) {
@@ -1153,7 +1211,8 @@ function shrinkImage(file: File) {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, 480 / img.width);
+      const edge = 1600;
+      const scale = Math.min(1, edge / Math.max(img.width, img.height));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(img.width * scale));
       canvas.height = Math.max(1, Math.round(img.height * scale));
@@ -1162,9 +1221,11 @@ function shrinkImage(file: File) {
         reject(new Error('Could not read that image'));
         return;
       }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.72));
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);

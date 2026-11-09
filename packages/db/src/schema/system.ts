@@ -150,6 +150,10 @@ export const notifications = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
+    category: text('category').notNull().default('system'),
+    priority: text('priority').notNull().default('normal'),
+    action: jsonb('action').$type<{ label?: string; href?: string } | null>(),
+    archivedAt: ts('archived_at'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -175,10 +179,59 @@ export const notificationPreferences = pgTable(
     browserPush: boolean('browser_push').notNull().default(false),
     digestHour: integer('digest_hour').notNull().default(8),
     rules: jsonb('rules').$type<Record<string, boolean>>().notNull().default({}),
+    channels: jsonb('channels').$type<Record<string, string>>().notNull().default({}),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [uniqueIndex('notification_prefs_uq').on(t.orgId, t.userId)],
+);
+
+/** One browser installation. The endpoint and keys are encrypted. */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    endpointHash: text('endpoint_hash').notNull(),
+    secretRef: text('secret_ref').notNull(),
+    userAgent: text('user_agent'),
+    revokedAt: ts('revoked_at'),
+    lastSuccessAt: ts('last_success_at'),
+    lastError: text('last_error'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('push_subscriptions_endpoint_uq').on(t.endpointHash),
+    index('push_subscriptions_user_idx').on(t.orgId, t.userId),
+  ],
+);
+
+/** One attempt to hand a notification to a push service. Sent is not the same as the user opening it. */
+export const notificationDeliveries = pgTable(
+  'notification_deliveries',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    notificationId: uuid('notification_id')
+      .notNull()
+      .references(() => notifications.id, { onDelete: 'cascade' }),
+    subscriptionId: uuid('subscription_id').references(() => pushSubscriptions.id, { onDelete: 'cascade' }),
+    channel: text('channel').notNull().default('push'),
+    state: text('state').notNull().default('PENDING'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    nextAttemptAt: ts('next_attempt_at').notNull().defaultNow(),
+    sentAt: ts('sent_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('notification_deliveries_uq').on(t.notificationId, t.subscriptionId),
+    index('notification_deliveries_due_idx').on(t.state, t.nextAttemptAt),
+  ],
 );
 
 export const goals = pgTable(
@@ -449,4 +502,80 @@ export const providerWebhookEvents = pgTable(
     uniqueIndex('provider_webhook_events_dedupe_uq').on(t.provider, t.dedupeKey),
     index('provider_webhook_events_status_idx').on(t.status, t.receivedAt),
   ],
+);
+
+/** One plan per person per local calendar day. The tasks themselves stay in internal_actions. */
+export const dailyPlans = pgTable(
+  'daily_plans',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    localDate: text('local_date').notNull(),
+    capacityMinutes: integer('capacity_minutes').notNull().default(180),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('daily_plans_user_day_uq').on(t.orgId, t.userId, t.localDate)],
+);
+
+export const dailyPlanItems = pgTable(
+  'daily_plan_items',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    planId: uuid('plan_id')
+      .notNull()
+      .references(() => dailyPlans.id, { onDelete: 'cascade' }),
+    actionId: uuid('action_id')
+      .notNull()
+      .references(() => internalActions.id, { onDelete: 'cascade' }),
+    effortMinutes: integer('effort_minutes'),
+    nextAction: text('next_action'),
+    blockAt: ts('block_at'),
+    ordinal: integer('ordinal').notNull().default(0),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('daily_plan_items_uq').on(t.planId, t.actionId)],
+);
+
+/** One running or paused session per person. Done rows stay as history. */
+export const focusSessions = pgTable(
+  'focus_sessions',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    actionId: uuid('action_id').references(() => internalActions.id, { onDelete: 'set null' }),
+    state: text('state').notNull().default('running'),
+    durationMs: integer('duration_ms').notNull(),
+    accumulatedMs: integer('accumulated_ms').notNull().default(0),
+    startedAt: ts('started_at'),
+    resumeNote: text('resume_note'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('focus_sessions_user_idx').on(t.orgId, t.userId, t.state)],
+);
+
+export const dailyReviews = pgTable(
+  'daily_reviews',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    localDate: text('local_date').notNull(),
+    notes: text('notes').notNull().default(''),
+    checks: jsonb('checks').$type<Record<string, boolean>>().notNull().default({}),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('daily_reviews_user_day_uq').on(t.orgId, t.userId, t.localDate)],
 );

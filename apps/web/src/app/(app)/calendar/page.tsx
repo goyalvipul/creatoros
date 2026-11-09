@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { Async, Button, Card, EmptyState, PageHeader, StateBadge } from '@/components/ui';
 import { useApi } from '@/lib/api';
+import { useWorkspace } from '@/lib/workspace';
 import { parseDate } from '@/lib/format';
 import { PlatformLogo } from '@/components/platform-logo';
 
@@ -25,8 +26,9 @@ export default function CalendarPage() {
   const [cursor, setCursor] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const gridStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1 - cursor.getDay());
   const gridEnd = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + 42);
-  const res = useApi<any>('/calendar', {
-    query: { from: gridStart.toISOString(), to: gridEnd.toISOString() },
+  const { id: workspaceId } = useWorkspace();
+  const res = useApi<any>(workspaceId ? '/calendar' : null, {
+    query: { from: gridStart.toISOString(), to: gridEnd.toISOString(), brandId: workspaceId },
   });
   const [selected, setSelected] = useState(key(now));
   const shift = (n: number) => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + n, 1));

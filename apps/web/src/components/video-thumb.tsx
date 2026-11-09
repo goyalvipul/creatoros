@@ -77,7 +77,7 @@ function captureStill(src: string): Promise<string | null> {
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    video.style.cssText = 'position:fixed;left:-9999px;width:320px;height:180px;opacity:0;pointer-events:none';
+    video.style.cssText = 'position:fixed;left:-9999px;opacity:0;pointer-events:none';
     document.body.appendChild(video);
     let settled = false;
     const done = (url: string | null) => {
@@ -94,14 +94,16 @@ function captureStill(src: string): Promise<string | null> {
       const w = video.videoWidth;
       const h = video.videoHeight;
       if (!w || !h) return done(null);
-      const scale = Math.min(1, 480 / w);
+      const scale = Math.min(1, 1280 / Math.max(w, h));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(w * scale));
       canvas.height = Math.max(1, Math.round(h * scale));
       const ctx = canvas.getContext('2d');
       if (!ctx) return done(null);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => done(blob ? URL.createObjectURL(blob) : null), 'image/jpeg', 0.72);
+      canvas.toBlob((blob) => done(blob ? URL.createObjectURL(blob) : null), 'image/jpeg', 0.88);
     };
     const timer = window.setTimeout(() => done(null), 12000);
     video.addEventListener('error', () => done(null), { once: true });
@@ -109,6 +111,8 @@ function captureStill(src: string): Promise<string | null> {
       'loadeddata',
       () => {
         const dur = Number.isFinite(video.duration) ? video.duration : 0;
+        video.style.width = `${video.videoWidth}px`;
+        video.style.height = `${video.videoHeight}px`;
         const at = dur > 1 ? Math.min(0.8, dur * 0.12) : 0;
         if (at > 0.05) {
           video.addEventListener('seeked', () => draw(), { once: true });

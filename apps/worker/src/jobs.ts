@@ -10,6 +10,8 @@ import {
   listConnectionsForSync,
   markStaleDevicesOffline,
   notify,
+  scanReminders,
+  deliverQueuedPushes,
   processFacebookWebhookEvents,
   processMetaWebhookEvents,
   processTikTokWebhookEvents,
@@ -124,7 +126,19 @@ export async function jobActions(d: WorkerDeps) {
     resolved += out.resolved;
     await linkPendingGenerationOutputs(d.db, orgId);
   });
-  return { orgs: ids.length, created, resolved, ...r };
+  let reminders = { created: 0 };
+  let push: { sent: number; failed: number; skipped?: string } = { sent: 0, failed: 0 };
+  try {
+    reminders = await scanReminders(d.db, now);
+  } catch (e) {
+    log(d, 'error', 'notification scan failed', { err: String(e) });
+  }
+  try {
+    push = await deliverQueuedPushes(d.db, d.env);
+  } catch (e) {
+    log(d, 'error', 'push delivery failed', { err: String(e) });
+  }
+  return { orgs: ids.length, created, resolved, reminders: reminders.created, push, ...r };
 }
 
 /** Provider syncs. `fast` = mailbox/Todo (every 5 minutes), `slow` = platform imports (every 30 minutes). */

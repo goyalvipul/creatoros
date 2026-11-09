@@ -27,9 +27,32 @@ export function shortNote(item: { width?: number | null; height?: number | null;
 
 export function parseTags(tags: string): string[] {
   return String(tags)
-    .split(/[,\s]+/)
-    .map((t) => t.replace(/^#/, ''))
+    .split(',')
+    .map((t) => t.trim().replace(/^#/, ''))
     .filter(Boolean);
+}
+
+function AiChoice({
+  aiUse,
+  setAiUse,
+  note,
+}: {
+  aiUse?: string;
+  setAiUse?: (v: string) => void;
+  note: string;
+}) {
+  return (
+    <>
+      <Field label="Is this AI?">
+        <Select required value={aiUse ?? ''} onChange={(e) => setAiUse?.(e.target.value)}>
+          <option value="">Choose…</option>
+          <option value="YES">Yes</option>
+          <option value="NO">No</option>
+        </Select>
+      </Field>
+      <p className="text-xs text-muted">{note}</p>
+    </>
+  );
 }
 
 export function publishHashtags(platform: string, tags: string): string[] {
@@ -93,9 +116,9 @@ export function PublishFields({
           <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
         </Field>
         <Field label="Tags">
-          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song, mehak" />
+          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song name, mehak" />
         </Field>
-        <p className="text-xs text-muted">Tags are sent as YouTube tags. The description is only the text above.</p>
+        <p className="text-xs text-muted">A comma starts the next tag. A space stays inside the tag. Tags are sent as YouTube tags. The description is only the text above.</p>
         <Field label="Type">
           <Select required value={contentForm} onChange={(e) => setContentForm(e.target.value)}>
             <option value="">Choose…</option>
@@ -123,16 +146,11 @@ export function PublishFields({
         {accountId && setPlaylistIds ? (
           <YoutubePlaylists accountId={accountId} playlistIds={playlistIds ?? []} setPlaylistIds={setPlaylistIds} />
         ) : null}
-        <Field label="AI use">
-          <Select required value={aiUse ?? ''} onChange={(e) => setAiUse?.(e.target.value)}>
-            <option value="">Choose…</option>
-            <option value="YES">Yes</option>
-            <option value="NO">No</option>
-          </Select>
-        </Field>
-        <p className="text-xs text-muted">
-          YouTube asks if the video uses altered or synthetic media. Yes and No are sent with the upload. Nothing is sent until you schedule or publish.
-        </p>
+        <AiChoice
+          aiUse={aiUse}
+          setAiUse={setAiUse}
+          note="Required. YouTube receives Yes or No as the altered or synthetic media label. Nothing is sent until you choose."
+        />
       </>
     );
   }
@@ -146,9 +164,25 @@ export function PublishFields({
           <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
         </Field>
         <Field label="Hashtags">
-          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="music, newrelease" />
+          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="music video, newrelease" />
         </Field>
-        <p className="text-xs text-muted">Posted as a Reel. The title is kept with the draft. The caption is what Instagram shows.</p>
+        <p className="text-xs text-muted">A comma starts the next hashtag. A space stays inside it. Posted as a Reel. The title is kept with the draft. The caption is what Instagram shows.</p>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={contentForm === 'TRIAL'}
+            onChange={(e) => setContentForm(e.target.checked ? 'TRIAL' : '')}
+          />
+          Post as a trial reel
+        </label>
+        <p className="text-xs text-muted">
+          A trial reel is shown to non-followers first. It does not join your profile until you graduate it in the Instagram app.
+        </p>
+        <AiChoice
+          aiUse={aiUse}
+          setAiUse={setAiUse}
+          note="Required. Yes asks Instagram to mark the reel as AI-generated. No sends no AI label."
+        />
       </>
     );
   }
@@ -175,14 +209,11 @@ export function PublishFields({
             ))}
           </Select>
         </Field>
-        <Field label="AI label">
-          <Select required value={aiUse ?? ''} onChange={(e) => setAiUse?.(e.target.value)}>
-            <option value="">Choose…</option>
-            <option value="YES">Yes, label this as AI</option>
-            <option value="NO">No</option>
-          </Select>
-        </Field>
-        <p className="text-xs text-muted">Yes asks Threads to show the AI info label. A link card is only available on a text-only post, so this file post does not attach one.</p>
+        <AiChoice
+          aiUse={aiUse}
+          setAiUse={setAiUse}
+          note="Required. Yes asks Threads to show the AI info label. A link card is only available on a text-only post, so this file post does not attach one."
+        />
       </>
     );
   }
@@ -198,6 +229,8 @@ export function PublishFields({
         setPrivacy={setPrivacy}
         contentForm={contentForm}
         setContentForm={setContentForm}
+        aiUse={aiUse}
+        setAiUse={setAiUse}
       />
     );
   }
@@ -210,13 +243,21 @@ export function PublishFields({
         <Field label="Description">
           <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
         </Field>
+        <AiChoice
+          aiUse={aiUse}
+          setAiUse={setAiUse}
+          note="Required before this video is sent. Facebook's video upload does not take an AI label, so the answer is kept on the draft."
+        />
       </>
     );
   }
   return (
-    <Field label="Caption">
-      <Textarea rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
-    </Field>
+    <>
+      <Field label="Caption">
+        <Textarea rows={3} value={caption} onChange={(e) => setCaption(e.target.value)} />
+      </Field>
+      <AiChoice aiUse={aiUse} setAiUse={setAiUse} note="Required before this post is sent." />
+    </>
   );
 }
 
@@ -230,6 +271,8 @@ function TikTokFields({
   setPrivacy,
   contentForm,
   setContentForm,
+  aiUse,
+  setAiUse,
 }: {
   accountId?: string;
   caption: string;
@@ -240,6 +283,8 @@ function TikTokFields({
   setPrivacy: (v: string) => void;
   contentForm: string;
   setContentForm: (v: string) => void;
+  aiUse?: string;
+  setAiUse?: (v: string) => void;
 }) {
   const flags = tiktokInteractions(contentForm);
   const [options, setOptions] = useState<{
@@ -299,8 +344,9 @@ function TikTokFields({
         <Textarea rows={4} value={caption} onChange={(e) => setCaption(e.target.value)} />
       </Field>
       <Field label="Hashtags">
-        <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song, mehak" />
+        <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="song name, mehak" />
       </Field>
+      <p className="text-xs text-muted">A comma starts the next hashtag. A space stays inside it.</p>
       <p className={length > 2200 ? 'text-xs text-bad' : 'text-xs text-muted'}>{length} / 2200, including hashtags. TikTok shows this as the video caption.</p>
       <Field label="Who can watch">
         <Select required value={choices.some((row) => row.id === privacy) ? privacy : ''} onChange={(e) => setPrivacy(e.target.value)}>
@@ -312,7 +358,9 @@ function TikTokFields({
           ))}
         </Select>
       </Field>
-      <p className="text-xs text-muted">An app TikTok has not audited is often allowed to post as Only me. The list is what TikTok returns for this account.</p>
+      <p className="text-xs text-muted">
+        TikTok has not reviewed this app yet, so Who can watch has to be Only me. In the TikTok app, set this account to Private before publishing. Everyone, Friends, and Followers are refused until that review is done.
+      </p>
       {notice ? <p className="text-xs text-warn">{notice}</p> : null}
       <div className="flex flex-wrap gap-4 text-sm">
         <label className="flex items-center gap-2">
@@ -329,6 +377,11 @@ function TikTokFields({
         </label>
       </div>
       <p className="text-xs text-muted">A box TikTok turns off for this account stays off. Nothing is sent until you schedule or publish.</p>
+      <AiChoice
+        aiUse={aiUse}
+        setAiUse={setAiUse}
+        note="Required. Yes tells TikTok this video is AI-generated. No tells TikTok it is not."
+      />
     </>
   );
 }

@@ -25,6 +25,9 @@ const form = z.object({
   loraStrength: z.number().min(0).max(2),
   upscaleWidth: z.number().int().min(64).max(4096),
   upscaleHeight: z.number().int().min(64).max(4096),
+  upscaleResizeType: z.enum(['target dimensions', 'scale by multiplier']).optional().default('target dimensions'),
+  upscaleQuality: z.enum(['LOW', 'MEDIUM', 'HIGH', 'ULTRA']).optional().default('ULTRA'),
+  upscaleScale: z.number().min(1).max(4).optional().default(2),
   wantUpscale: z.boolean(),
   imageUploadName: z.string().max(300).nullable(),
   imageUploadWorkerId: uuid.nullable(),
@@ -95,7 +98,10 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     audioFileId: uuid.nullable(),
     audioUploadName: z.string().max(300).nullable(),
     audioUploadWorkerId: uuid.nullable(),
-    durationSec: z.number().positive().max(20).nullable(),
+    audioTrim: z.boolean().optional().default(false),
+    audioStartSec: z.number().min(0).max(3600).nullable().optional(),
+    audioUseSec: z.number().positive().max(30).nullable().optional(),
+    durationSec: z.number().positive().max(30).nullable(),
     images: z.array(h3Image).max(8),
   });
   const h3Form = z.object({

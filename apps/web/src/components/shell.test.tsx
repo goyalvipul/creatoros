@@ -79,10 +79,10 @@ describe('Shell session states', () => {
     me.data = session;
     show();
     expect(host.textContent).toContain('Workspace body');
-    expect(host.textContent).toContain('Search projects, assets, people…');
+    expect(host.textContent).toContain('Search workspace');
     const bell = host.querySelector('button[aria-label="Notifications"]') as HTMLButtonElement;
     act(() => bell.click());
-    expect(host.textContent).toContain('Nothing new. Quiet is good.');
+    expect(document.body.textContent).toContain('Nothing new. Quiet is good.');
   });
 
   it('shows an error with a retry when the session request fails', () => {

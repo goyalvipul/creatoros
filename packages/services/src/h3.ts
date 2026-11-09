@@ -1,6 +1,9 @@
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   generationJobs,
   generationOutputs,
@@ -24,7 +27,13 @@ const WORKFLOW = 'MINIMAX H3 Motion Context FINAL API.json';
 const MISSING = `The MiniMax workflow ${WORKFLOW} is not in this install.`;
 const FPS = 24;
 const MAX_SEGMENTS = 8;
-const MAX_SECONDS = 20;
+const MAX_SECONDS = 30;
+
+/** Frames of audio on a segment. A trim cannot run past the segment. */
+export function h3AudioFrames(segmentFrames: number, spanSec: number | null): number {
+  if (spanSec == null) return segmentFrames;
+  return Math.max(1, Math.min(segmentFrames, Math.round(spanSec * FPS)));
+}
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 
@@ -62,6 +71,8 @@ interface BuiltSegment {
   images: { name: string; shared: boolean }[];
   audioName: string | null;
   durationSec: number;
+  /** Trimmed audio length. Null means the whole file, spanning this segment. */
+  audioSpanSec?: number | null;
 }
 
 let cached: { path: string; mtimeMs: number; sha256: string; graph: Graph; prompt: string } | null = null;
@@ -145,10 +156,11 @@ export function buildH3Prompt(
   }));
   const audioSegments = input.segments.flatMap((segment, i) => {
     if (!segment.audioName) return [];
+    const span = h3AudioFrames(frames[i]!, segment.audioSpanSec ?? null);
     return [{
       id: randomUUID(),
       start_frame: ranges[i]!.start,
-      end_frame: ranges[i]!.end,
+      end_frame: ranges[i]!.start + span,
       color: 'var(--highlight)',
       content: {
         media_type: 'audio',
@@ -157,7 +169,7 @@ export function buildH3Prompt(
         file_name: segment.audioName,
         muted: false,
         volume_db: 0,
-        duration: segment.durationSec,
+        duration: span / FPS,
         shared_reference: false,
       },
     }];
@@ -336,6 +348,9 @@ function normalizeSegments(raw: unknown, fallbackPrompt: string, fallbackImage: 
       audioFileId: row.audioFileId ?? null,
       audioUploadName: row.audioUploadName ?? null,
       audioUploadWorkerId: row.audioUploadWorkerId ?? null,
+      audioTrim: row.audioTrim === true,
+      audioStartSec: typeof row.audioStartSec === 'number' ? row.audioStartSec : null,
+      audioUseSec: typeof row.audioUseSec === 'number' ? row.audioUseSec : null,
       durationSec: typeof row.durationSec === 'number' ? row.durationSec : null,
       images,
     };
@@ -355,6 +370,13 @@ function checkForm(form: H3Form) {
     if (!CONTINUITY.has(segment.continuity)) throw badRequest(`Segment ${i + 1} has an unknown join.`);
     if (segment.durationSec != null && (segment.durationSec <= 0 || segment.durationSec > MAX_SECONDS)) {
       throw badRequest(`Segment ${i + 1} must be between 0 and ${MAX_SECONDS} seconds.`);
+    }
+    if (segment.audioTrim) {
+      if (!segment.audioFileId && !segment.audioUploadName) throw badRequest(`Choose audio before trimming segment ${i + 1}.`);
+      const start = segment.audioStartSec ?? -1;
+      const use = segment.audioUseSec ?? 0;
+      if (start < 0 || start > 3600) throw badRequest(`Segment ${i + 1} trim must start at zero or later.`);
+      if (use <= 0 || use > MAX_SECONDS) throw badRequest(`Segment ${i + 1} trim must be between 0 and ${MAX_SECONDS} seconds.`);
     }
   });
 }
@@ -425,6 +447,67 @@ async function readStream(body: ReadableStream<Uint8Array>, name: string, mime: 
   }
   const base = (name.split(/[/\\]/).pop() || 'file').replace(/[^A-Za-z0-9._-]+/g, '_');
   return { bytes: Buffer.concat(chunks), name: `cos_${jobId.slice(0, 8)}_${base}`, mime: mime || 'application/octet-stream' };
+}
+
+async function loadAudioBytes(
+  db: Db,
+  env: ServiceEnv,
+  orgId: string,
+  baseUrl: string,
+  segment: H3SegmentDraft,
+  label: string,
+) {
+  if (segment.audioFileId) {
+    const opened = await openAgentFile(db, env, orgId, segment.audioFileId);
+    return readStream(opened.body, opened.name, opened.mime, `${orgId}-${segment.audioFileId}`, label);
+  }
+  const name = segment.audioUploadName;
+  if (!name || name.includes('..') || name.includes('\\') || name.startsWith('/')) throw badRequest(`${label} is not on the PC.`);
+  const slash = name.lastIndexOf('/');
+  const filename = slash >= 0 ? name.slice(slash + 1) : name;
+  const subfolder = slash >= 0 ? name.slice(0, slash) : '';
+  const url = new URL('/view', baseUrl);
+  url.searchParams.set('filename', filename);
+  url.searchParams.set('type', 'input');
+  if (subfolder) url.searchParams.set('subfolder', subfolder);
+  const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+  if (!res.ok || !res.body) throw badRequest(`${label} could not be read back from the PC.`);
+  return readStream(res.body, filename, res.headers.get('content-type') || 'application/octet-stream', name, label);
+}
+
+/** Writes a new file that contains only [start, start+use). The upload on the PC is not changed. */
+async function cutAudio(bytes: Buffer, name: string, start: number, use: number) {
+  const dir = await mkdtemp(join(tmpdir(), 'h3-audio-'));
+  const src = join(dir, 'in');
+  const out = join(dir, 'clip.flac');
+  try {
+    await writeFile(src, bytes);
+    const err = await new Promise<string>((resolve) => {
+      const child = spawn('ffmpeg', ['-y', '-v', 'error', '-i', src, '-ss', String(start), '-t', String(use), '-vn', '-c:a', 'flac', out], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      let text = '';
+      let settled = false;
+      const finish = (value: string) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      child.stderr.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+      child.on('error', (e: NodeJS.ErrnoException) =>
+        finish(e.code === 'ENOENT' ? 'ffmpeg is not installed, so the audio was not cut.' : e.message),
+      );
+      child.on('close', (code) => finish(code === 0 ? '' : text.trim().split('\n').pop() || 'ffmpeg failed'));
+    });
+    if (err) throw badRequest(`The audio trim failed. The original file was not changed. ${err.trim().split('\n').pop() ?? ''}`.slice(0, 300));
+    const cut = await readFile(out);
+    const base = (name.split(/[/\\]/).pop() || 'audio').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+    return { bytes: cut, name: `${base}_${start.toFixed(1)}s.flac`, mime: 'audio/flac' };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 async function durationOf(db: Db, orgId: string, fileId: string | null, given: number | null) {
@@ -509,7 +592,18 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         if (name) imageNames.push({ name, shared: image.shared === true });
       }
       if (!imageNames.length) throw badRequest(`Segment ${i + 1} has no picture.`);
-      const audioName = await place(segment.audioFileId, segment.audioUploadName, `Segment ${i + 1} audio`);
+      let audioName: string | null = null;
+      let audioSpanSec: number | null = null;
+      if (segment.audioTrim && (segment.audioFileId || segment.audioUploadName)) {
+        const start = segment.audioStartSec ?? 0;
+        const use = segment.audioUseSec ?? 0;
+        const raw = await loadAudioBytes(db, env, claimed.orgId, worker.baseUrl, segment, `Segment ${i + 1} audio`);
+        const cut = await cutAudio(raw.bytes, raw.name, start, use);
+        audioName = await uploadBytes(worker.baseUrl, cut);
+        audioSpanSec = use;
+      } else {
+        audioName = await place(segment.audioFileId, segment.audioUploadName, `Segment ${i + 1} audio`);
+      }
       const durationSec = await durationOf(db, claimed.orgId, segment.audioFileId, segment.durationSec);
       if (durationSec == null) throw badRequest(`Enter how many seconds segment ${i + 1} is. Its length was not scanned.`);
       if (durationSec > MAX_SECONDS) throw badRequest(`Segment ${i + 1} is longer than ${MAX_SECONDS} seconds.`);
@@ -521,6 +615,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         images: imageNames,
         audioName,
         durationSec,
+        audioSpanSec,
       });
     }
     const projectName = `cos${claimed.id.replace(/-/g, '').slice(0, 12)}`;

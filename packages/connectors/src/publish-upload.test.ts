@@ -170,9 +170,33 @@ describe('uploadInstagramReel', () => {
     expect(start.get('media_type')).toBe('REELS');
     expect(start.get('video_url')).toBe('https://os.example/api/v1/files/file/stream?token=abc');
     expect(start.has('upload_type')).toBe(false);
+    expect(start.has('trial_params')).toBe(false);
+    expect(start.has('is_ai_generated')).toBe(false);
     expect(new URL(calls.find((u) => u.includes('media_publish'))!).searchParams.get('creation_id')).toBe('container');
     expect(result.externalId).toBe('post1');
     expect(result.url).toBe('https://www.instagram.com/reel/AbC123/');
+  });
+
+  it('sends a trial reel and the AI label only when the owner chose them', async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('/media?')) return new Response(JSON.stringify({ id: 'container' }));
+      if (String(url).includes('status_code')) return new Response(JSON.stringify({ status_code: 'FINISHED' }));
+      return new Response(JSON.stringify({ id: 'post1' }));
+    };
+    await uploadInstagramReel(fetchImpl, {
+      version: 'v23.0',
+      igUserId: 'ig',
+      accessToken: 'token',
+      caption: 'hello',
+      videoUrl: 'https://os.example/video.mp4',
+      trial: true,
+      aiGenerated: true,
+    });
+    const start = new URL(calls[0]!).searchParams;
+    expect(JSON.parse(start.get('trial_params')!)).toEqual({ graduation_strategy: 'MANUAL' });
+    expect(start.get('is_ai_generated')).toBe('true');
   });
 });
 
@@ -255,7 +279,13 @@ describe('uploadTikTokVideo', () => {
       post_info: { title: string; privacy_level: string; disable_duet: boolean };
       source_info: { source: string; video_size: number; chunk_size: number; total_chunk_count: number };
     };
-    expect(init.post_info).toMatchObject({ title: 'hello #song', privacy_level: 'SELF_ONLY', disable_duet: true });
+    expect(init.post_info).toMatchObject({
+      title: 'hello #song',
+      privacy_level: 'SELF_ONLY',
+      disable_duet: true,
+      brand_content_toggle: false,
+      brand_organic_toggle: false,
+    });
     expect(init.source_info).toEqual({ source: 'FILE_UPLOAD', video_size: 4, chunk_size: 4, total_chunk_count: 1 });
     expect(seen[1]?.range).toBe('bytes 0-3/4');
     expect(result).toEqual({ externalId: '12345', url: 'https://www.tiktok.com/@mehakviking/video/12345' });

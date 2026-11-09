@@ -7,6 +7,11 @@
 export const LTX_GENERATION_BLOCK =
   'BLOCKED: this workflow is the ComfyUI editor file. Creator OS will not send it to ComfyUI. Export the API format from the ComfyUI that already runs this graph, then generation can be connected to that file.';
 
+export const LTX_RESIZE_TYPES = ['target dimensions', 'scale by multiplier'] as const;
+export const LTX_UPSCALE_QUALITIES = ['LOW', 'MEDIUM', 'HIGH', 'ULTRA'] as const;
+export type LtxResizeType = (typeof LTX_RESIZE_TYPES)[number];
+export type LtxUpscaleQuality = (typeof LTX_UPSCALE_QUALITIES)[number];
+
 export const LTX_REQUIRED_MODELS = [
   'ltx-2.3-22b-distilled-1.1-Q5_K_M.gguf',
   'mehaklora-ltx.safetensors',
@@ -194,6 +199,9 @@ export interface LtxDraftInput {
   loraStrength: number;
   upscaleWidth: number;
   upscaleHeight: number;
+  upscaleResizeType?: LtxResizeType;
+  upscaleQuality?: LtxUpscaleQuality;
+  upscaleScale?: number;
   workerId?: string | null;
   expectedVramGb?: number | null;
   wantUpscale?: boolean;
@@ -259,6 +267,16 @@ export function validateLtxDraft(
   need('loraStrength', input.loraStrength >= 0 && input.loraStrength <= 2, 'LoRA strength must be from 0 to 2.');
   need('upscaleWidth', Number.isInteger(input.upscaleWidth) && input.upscaleWidth >= 64 && input.upscaleWidth <= 4096, 'Upscale width must be a whole number from 64 to 4096.');
   need('upscaleHeight', Number.isInteger(input.upscaleHeight) && input.upscaleHeight >= 64 && input.upscaleHeight <= 4096, 'Upscale height must be a whole number from 64 to 4096.');
+  if (input.upscaleResizeType != null) {
+    need('upscaleResizeType', LTX_RESIZE_TYPES.includes(input.upscaleResizeType), 'Choose target dimensions or scale by multiplier.');
+  }
+  if (input.upscaleQuality != null) {
+    need('upscaleQuality', LTX_UPSCALE_QUALITIES.includes(input.upscaleQuality), 'Choose LOW, MEDIUM, HIGH, or ULTRA.');
+  }
+  if ((input.upscaleResizeType ?? 'target dimensions') === 'scale by multiplier') {
+    const scale = input.upscaleScale ?? 2;
+    need('upscaleScale', scale >= 1 && scale <= 4, 'Scale has to be from 1 to 4.');
+  }
   if (opts.requireWorker && !input.workerId) {
     errors.push({ field: 'workerId', message: 'Choose the PC that should run this.' });
   } else if (!input.workerId) {
@@ -378,6 +396,9 @@ export interface LtxPromptPatch {
   loraStrength: number;
   upscaleWidth: number;
   upscaleHeight: number;
+  upscaleResizeType?: LtxResizeType;
+  upscaleQuality?: LtxUpscaleQuality;
+  upscaleScale?: number;
   wantUpscale: boolean;
   filenamePrefix: string;
   seed: number;
@@ -408,8 +429,18 @@ export function buildLtxApiPrompt(graph: unknown, patch: LtxPromptPatch): Record
   set('346', 'noise_seed', patch.seed);
   set('400', 'filename_prefix', patch.filenamePrefix);
   if (patch.wantUpscale) {
-    set('609', 'resize_type.width', patch.upscaleWidth);
-    set('609', 'resize_type.height', patch.upscaleHeight);
+    const resize = patch.upscaleResizeType ?? 'target dimensions';
+    set('609', 'resize_type', resize);
+    set('609', 'quality', patch.upscaleQuality ?? 'ULTRA');
+    if (resize === 'scale by multiplier') {
+      set('609', 'resize_type.scale', patch.upscaleScale ?? 2);
+      delete prompt['609'].inputs['resize_type.width'];
+      delete prompt['609'].inputs['resize_type.height'];
+    } else {
+      set('609', 'resize_type.width', patch.upscaleWidth);
+      set('609', 'resize_type.height', patch.upscaleHeight);
+      delete prompt['609'].inputs['resize_type.scale'];
+    }
     set('610', 'filename_prefix', `${patch.filenamePrefix}_upscale`);
     set('610', 'frame_rate', patch.fps);
     // The 3090's RTX Video Super Resolution node requires these. The 3060's older node does not.

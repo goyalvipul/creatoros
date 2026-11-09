@@ -234,9 +234,55 @@ export async function cancelVideoTrim(ctx: Ctx, editId: string) {
   return { ok: true };
 }
 
-/** The scanner on these PCs does not have ffmpeg. The worker cuts the file and uploads the new clip. */
-export async function claimVideoEdits(_db: Db, _agent: AuthedAgent) {
-  return [];
+/** One encode per PC, on that PC. A second save stays pending until this one reports back. */
+export async function claimVideoEdits(db: Db, agent: AuthedAgent) {
+  return db.transaction(async (tx) => {
+    const rows = rowsOf<{
+      id: string;
+      mode: string;
+      fromPath: string;
+      toPath: string;
+      startMs: number;
+      endMs: number;
+      size: number | string;
+      rotate: number | null;
+      replaceOriginal: boolean;
+    }>(
+      await tx.execute(sql`
+        update video_edits e
+        set status = 'RUNNING'::video_edit_status, started_at = coalesce(e.started_at, now()), updated_at = now()
+        where e.id = (
+          select id from video_edits
+          where device_id = ${agent.deviceId} and status = 'PENDING'
+            and not exists (
+              select 1 from video_edits r
+              where r.device_id = ${agent.deviceId} and r.status = 'RUNNING'
+            )
+          order by created_at
+          limit 1
+          for update skip locked
+        )
+        returning e.id, e.mode, e.start_ms as "startMs", e.end_ms as "endMs",
+          e.replace_original as "replaceOriginal",
+          (select f.display_path from file_instances f where f.id = e.source_file_instance_id) as "fromPath",
+          e.output_display_path as "toPath",
+          (select f.size from file_instances f where f.id = e.source_file_instance_id) as size,
+          nullif(e.source_probe->>'rotation', '')::float as rotate`),
+    );
+    return rows.map((row) => {
+      const sameFile = row.replaceOriginal && sameTrimPath(row.toPath, row.fromPath);
+      return {
+        id: row.id,
+        mode: row.mode,
+        fromPath: row.fromPath,
+        toPath: sameFile ? siblingPath(row.fromPath, `cos-trim-${row.id.slice(0, 8)}.mp4`) : row.toPath,
+        startMs: row.startMs,
+        endMs: row.endMs,
+        size: Number(row.size) || 0,
+        rotate: row.rotate ?? 0,
+      };
+    });
+  });
 }
 
 export async function progressVideoEdit(db: Db, agent: AuthedAgent, input: { id: string; progressPct: number }) {
@@ -275,13 +321,19 @@ export async function finishVideoEdit(
     canonical: string;
     rootId: string;
     fps: number | null;
+    replaceOriginal: boolean;
+    sourcePath: string;
+    sourceSize: number;
   }>(
     await db.execute(sql`
       select e.id, e.status, e.mode, e.org_id as "orgId", e.device_id as "deviceId",
              e.source_file_instance_id as "sourceId", e.project_id as "projectId", e.variant_id as "variantId",
              e.start_ms as "startMs", e.end_ms as "endMs", e.output_display_path as "toPath",
              e.output_canonical_path as canonical, e.output_root_id as "rootId",
-             nullif(e.source_probe->>'fps', '')::float as fps
+             e.replace_original as "replaceOriginal",
+             nullif(e.source_probe->>'fps', '')::float as fps,
+             (select f.display_path from file_instances f where f.id = e.source_file_instance_id) as "sourcePath",
+             (select f.size::float8 from file_instances f where f.id = e.source_file_instance_id) as "sourceSize"
       from video_edits e
       where e.id = ${input.id} and e.device_id = ${agent.deviceId}`),
   )[0];
@@ -302,7 +354,13 @@ export async function finishVideoEdit(
   };
   if (!input.ok) return fail(input.error || 'The PC could not trim this video.');
   const reported = (input.toPath || '').trim();
-  if (!reported || reported !== edit.toPath) return fail('The PC reported a different output path.');
+  const staged = siblingPath(edit.sourcePath || edit.toPath, `cos-trim-${edit.id.slice(0, 8)}.mp4`);
+  const replacing = Boolean(
+    edit.replaceOriginal && edit.sourcePath && sameTrimPath(edit.toPath, edit.sourcePath) && sameTrimPath(reported, staged),
+  );
+  if (!reported || (!replacing && reported !== edit.toPath)) return fail('The PC reported a different output path.');
+  const savedPath = replacing ? staged : edit.toPath;
+  const savedKey = replacing ? canonicalPath(staged, edit.sourcePath.includes('\\') ? 'windows' : 'posix') : edit.canonical;
   const probe = input.probe ?? {};
   const actualMs = num(probe.durationMs);
   if (actualMs == null || !trimDurationOk(edit.mode, edit.endMs - edit.startMs, actualMs, edit.fps)) {
@@ -310,15 +368,15 @@ export async function finishVideoEdit(
   }
   const size = Number(input.size);
   if (!Number.isFinite(size) || size < 1000) return fail('The new clip was empty.');
-  const fileName = edit.toPath.split(/[/\\]/).pop() || 'clip.mp4';
+  const fileName = savedPath.split(/[/\\]/).pop() || 'clip.mp4';
   const [row] = await db
     .insert(fileInstances)
     .values({
       orgId: edit.orgId,
       rootId: edit.rootId,
       deviceId: edit.deviceId,
-      canonicalPath: edit.canonical,
-      displayPath: edit.toPath,
+      canonicalPath: savedKey,
+      displayPath: savedPath,
       fileName,
       ext: 'mp4',
       size,
@@ -371,6 +429,18 @@ export async function finishVideoEdit(
       order by v.created_at asc
       limit 1
       on conflict (asset_version_id, file_instance_id) do nothing`);
+  }
+  if (replacing) {
+    await replaceOriginalWithClip(
+      db,
+      edit,
+      { displayPath: edit.sourcePath, size: Number(edit.sourceSize) || 0 },
+      row.id,
+      size,
+      staged,
+      edit.sourcePath.includes('\\') ? 'windows' : 'posix',
+    );
+    return { ok: true, fileInstanceId: row.id };
   }
   await db.execute(sql`
     update video_edits
@@ -494,10 +564,7 @@ export async function runServerVideoTrims(db: Db, env: ServiceEnv): Promise<numb
           started_at = coalesce(e.started_at, now()), updated_at = now()
       where e.id = (
         select id from video_edits
-        where (
-          status = 'PENDING'
-          or (status = 'FAILED' and error ilike '%ffmpeg is not installed%')
-        )
+        where status = 'FAILED' and error ilike '%ffmpeg is not installed%'
           and not exists (select 1 from video_edits r where r.status = 'RUNNING')
         order by created_at
         limit 1

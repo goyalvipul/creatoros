@@ -6,15 +6,17 @@ import { Bell, LogOut, Menu, Moon, Plus, Search, Sun, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { api, post, refresh, setUnauthorizedHandler, useApi } from '@/lib/api';
 import { clearOutboxErrors, flushOutbox, useOutbox } from '@/lib/outbox';
 import { canOpen, NAV_GROUPS, navFor } from './nav';
 import { CommandPalette, QuickAdd } from './palette';
 import { Button, useToast } from './ui';
 import { uxV5 } from './ux-v5-flag';
+import { WorkspaceBar, WorkspaceSwitch } from '@/lib/workspace';
 
 const MOBILE_PRIMARY = ['/', '/today', '/production', '/library'];
-const MOBILE_V5 = ['/', '/content', '/production', '/publishing'];
+const MOBILE_V5 = ['/', '/comfy', '/production', '/publishing'];
 
 export function useMe() {
   return useApi<{
@@ -80,6 +82,7 @@ export function ThemeToggle() {
         const next = theme === 'dark' ? 'light' : 'dark';
         document.documentElement.dataset.theme = next;
         localStorage.setItem('cos-theme', next);
+        document.querySelector('meta[name="theme-color"]')?.setAttribute('content', next === 'dark' ? '#101816' : '#f7f7f3');
         setTheme(next);
       }}
     >
@@ -130,33 +133,33 @@ function NotificationBell() {
         variant="ghost"
         size="sm"
         aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
+        className="relative shrink-0"
         onClick={() => setOpen((o) => !o)}
       >
         <Bell className="size-4" />
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 grid min-w-4 place-items-center rounded-full bg-bad px-1 text-[10px] font-semibold text-white">
+          <span className="absolute top-0.5 right-0.5 grid min-w-4 place-items-center rounded-full bg-bad px-1 text-[10px] font-semibold text-white">
             {unread > 9 ? '9+' : unread}
           </span>
         )}
       </Button>
-      {open && (
+      {open &&
+        createPortal(
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-50 mt-2 w-[min(22rem,calc(100vw-1.5rem))] rounded-xl border border-border bg-panel shadow-xl">
-            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div className="fixed inset-x-3 z-50 max-h-[70dvh] overflow-hidden rounded-xl border border-border bg-panel text-text shadow-xl top-[calc(env(safe-area-inset-top)+4.5rem)] md:inset-x-auto md:right-3 md:w-[22rem]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
               <span className="flex items-center gap-2 text-sm font-semibold">
                 Notifications
-                {uxV5() && (
-                  <Link href="/notifications" className="text-xs font-medium text-accent" onClick={() => setOpen(false)}>
-                    Open page
-                  </Link>
-                )}
+                <Link href="/notifications" className="text-xs font-medium text-accent" onClick={() => setOpen(false)}>
+                  Open page
+                </Link>
               </span>
               {unread > 0 && (
                 <button
                   className="text-xs text-accent"
                   onClick={async () => {
-                    await post('/notifications/read', { all: true });
+                    await post('/notifications/read', { ids: 'all' });
                     await mutate();
                   }}
                 >
@@ -186,7 +189,8 @@ function NotificationBell() {
               ))}
             </ul>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );
@@ -334,15 +338,15 @@ export function Shell({ children }: { children: ReactNode }) {
                   .join('')
                   .toUpperCase()}
               </span>
-              <span className="min-w-0">
-                <span className="block truncate font-medium text-text">{me.data.organization.name}</span>
+              <span className="min-w-0 flex-1">
+                <WorkspaceSwitch canCreate={role === 'OWNER' || role === 'EDITOR'} />
                 <span className="block truncate">{me.data.user.role === 'OWNER' ? 'Owner' : me.data.user.role}</span>
               </span>
             </div>
           ) : (
             <>
               <div className="truncate font-medium text-text">{me.data.user.name}</div>
-              <div className="truncate">{me.data.organization.name}</div>
+              <WorkspaceSwitch canCreate={role === 'OWNER' || role === 'EDITOR'} />
             </>
           )}
         </div>
@@ -351,7 +355,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <div className="min-w-0">
         <header className={clsx('sticky top-0 z-30 border-b border-border backdrop-blur', v5 ? 'bg-bg/95' : 'bg-panel/95')}>
           <div className="safe-top md:hidden" />
-          <div className={clsx('flex items-center gap-3', v5 ? 'min-h-[70px] px-4 md:px-[30px]' : 'px-3 py-2 md:px-6')}>
+          <div className={clsx('flex flex-wrap items-center gap-1.5 md:flex-nowrap md:gap-3', v5 ? 'min-h-[70px] px-3 py-2 md:px-[30px]' : 'px-3 py-2 md:px-6')}>
           <Link
             href="/"
             className="mr-1 md:hidden"
@@ -359,29 +363,20 @@ export function Shell({ children }: { children: ReactNode }) {
           >
             {installed ? <BrandSymbol className="size-9" /> : <BrandLogo className="h-11" />}
           </Link>
-          {v5 && (
-            <p className="hidden min-w-0 text-sm text-muted md:block">
-              <span>Workspace</span>
-              <span className="px-1">/</span>
-              <span className="text-text">
-                {path.startsWith('/notifications')
-                  ? 'Notifications'
-                  : labelOf(nav.find((n) => isActive(path, n.href)) ?? nav[0]!)}
-              </span>
-            </p>
-          )}
+          {v5 && <WorkspaceBar canCreate={role === 'OWNER' || role === 'EDITOR'} />}
           <button
             onClick={() => setPaletteOpen(true)}
+            aria-label="Search workspace"
             className={clsx(
-              'flex min-h-10 min-w-0 flex-1 items-center gap-2 border border-border px-3 text-left text-sm text-muted',
-              v5 ? 'ml-auto max-w-none rounded-[10px] bg-panel md:max-w-[230px]' : 'rounded-full bg-bg md:max-w-md',
+              'flex min-h-10 min-w-0 flex-1 items-center gap-2 overflow-hidden border border-border px-3 text-left text-sm text-muted',
+              v5 ? 'order-last basis-full rounded-[10px] bg-panel md:order-none md:basis-auto md:max-w-[230px]' : 'rounded-full bg-bg md:max-w-md',
             )}
           >
-            <Search className="size-4" aria-hidden />
-            <span className="flex-1 truncate">{v5 ? 'Search projects, assets, people…' : 'Search everything…'}</span>
+            <Search className="size-4 shrink-0" aria-hidden />
+            <span className="flex-1 truncate">{v5 ? 'Search workspace' : 'Search everything…'}</span>
             <kbd className="hidden rounded border border-border px-1.5 text-[10px] md:inline">Ctrl K</kbd>
           </button>
-          <div className="flex items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-0.5 md:ml-0 md:gap-2">
             {!v5 && (
               <Button variant="primary" size="sm" onClick={() => setAddOpen(true)} aria-label="Quick add">
                 <Plus className="size-4" /> <span className="hidden sm:inline">Quick add</span>
@@ -455,7 +450,7 @@ export function Shell({ children }: { children: ReactNode }) {
               )}
             >
               <n.icon className="size-5" aria-hidden />
-              {labelOf(n).split(' ')[0]}
+              {n.href === '/comfy' ? 'Studio' : labelOf(n).split(' ')[0]}
             </Link>
           ))}
         <button
@@ -472,8 +467,9 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-label="All sections">
           <div className={clsx('absolute inset-0', v5 ? 'bg-bg' : 'bg-black/50')} onClick={() => setMoreOpen(false)} />
           <div className={clsx('safe-bottom bg-panel p-4', v5 ? 'absolute inset-0 overflow-y-auto' : 'absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border')}>
+            <WorkspaceSwitch canCreate={role === 'OWNER' || role === 'EDITOR'} layout="inline" />
             <div className="mb-3 flex items-center justify-between">
-              <span className="font-semibold">{v5 ? 'All workspaces' : 'All sections'}</span>
+              <span className="font-semibold">All sections</span>
               <button
                 onClick={() => setMoreOpen(false)}
                 aria-label="Close"

@@ -26,6 +26,7 @@ import { del, patch, post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
 import { hasIdeaDraft } from '@/lib/idea-draft';
 import { IDEA_STATUSES, PROJECT_TYPES, useBrands } from '@/lib/options';
+import { useWorkspace } from '@/lib/workspace';
 
 function preview(idea: { conceptDetail?: string | null; pitch?: string | null }) {
   const text = richHtmlToText(idea.conceptDetail ?? '') || idea.pitch || '';
@@ -40,7 +41,11 @@ export default function ContentPage() {
 function ContentList() {
   const router = useRouter();
   const [status, setStatus] = useState('');
+  const { id: workspaceId } = useWorkspace();
   const [brandId, setBrandId] = useState('');
+  useEffect(() => {
+    if (workspaceId) setBrandId(workspaceId);
+  }, [workspaceId]);
   const [q, setQ] = useState('');
   const ideas = useApi<any[]>('/ideas', {
     query: { status: status || undefined, brandId: brandId || undefined, q: q || undefined, limit: 200 },

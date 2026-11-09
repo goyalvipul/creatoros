@@ -155,6 +155,9 @@ export const publishItems = pgTable(
     fileInstanceId: uuid('file_instance_id')
       .notNull()
       .references(() => fileInstances.id, { onDelete: 'restrict' }),
+    coverPath: text('cover_path'),
+    coverOffsetMs: integer('cover_offset_ms'),
+    coverSource: text('cover_source'),
     createdAt: createdAt(),
   },
   (t) => [

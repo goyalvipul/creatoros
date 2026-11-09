@@ -9,6 +9,7 @@ import { patch, post, refresh, useApi } from '@/lib/api';
 import { blankIdea, clearIdeaDraft, readIdeaDraft, writeIdeaDraft, type IdeaFormState } from '@/lib/idea-draft';
 import { IDEA_FORMATS, PRIORITIES, useBrands } from '@/lib/options';
 import { uxV5 } from '@/components/ux-v5-flag';
+import { useWorkspace } from '@/lib/workspace';
 
 function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -43,15 +44,19 @@ export function IdeaEditor({ ideaId }: { ideaId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const started = useRef(false);
+  const { id: workspaceId, ready } = useWorkspace();
 
   useEffect(() => {
     if (started.current) return;
     if (!isNew && !existing.data) return;
+    if (isNew && !ready) return;
     started.current = true;
     const draft = readIdeaDraft(ideaId);
-    setForm(draft ?? (isNew ? blankIdea() : fromIdea(existing.data)));
+    const base = draft ?? (isNew ? blankIdea() : fromIdea(existing.data));
+    if (isNew && !base.brandId && workspaceId) base.brandId = workspaceId;
+    setForm(base);
     setRestored(Boolean(draft));
-  }, [ideaId, isNew, existing.data]);
+  }, [ideaId, isNew, existing.data, ready, workspaceId]);
 
   const update = (next: IdeaFormState) => {
     setForm(next);

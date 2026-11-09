@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { useMe } from '@/components/shell';
+import { useWorkspace } from '@/lib/workspace';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { ActivityList, PublishStat, VariantBoard } from '@/components/publish-board';
 import { VideoThumb } from '@/components/video-thumb';
@@ -74,9 +75,8 @@ function Publishing() {
     setTabState(next);
     router.replace(next === 'variants' ? '/publishing' : `/publishing?tab=${next}`);
   };
-  const [brandId, setBrandId] = useState('');
-  const catalog = useApi<any[]>('/catalog');
-  const matrix = useApi<any>('/publishing/matrix', { query: brandId ? { brandId } : {} });
+  const { id: brandId, brands, select } = useWorkspace();
+  const matrix = useApi<any>(brandId ? '/publishing/matrix' : null, { query: { brandId } });
   const unmatched = useApi<any[]>('/publications/unmatched');
   const [cell, setCell] = useState<{ row: any; account: any; cell: any } | null>(null);
   const [addVariant, setAddVariant] = useState(false);
@@ -90,13 +90,12 @@ function Publishing() {
         actions={
           <>
             <Select
-              aria-label="Brand"
-              value={brandId}
-              onChange={(e) => setBrandId(e.target.value)}
+              aria-label="Workspace"
+              value={brandId ?? ''}
+              onChange={(e) => select(e.target.value)}
               className="max-w-[14rem]"
             >
-              <option value="">All brands</option>
-              {(catalog.data ?? []).map((b) => (
+              {brands.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
@@ -321,7 +320,7 @@ function Publishing() {
       <VariantDialog
         open={addVariant}
         brandId={brandId || null}
-        brandName={(catalog.data ?? []).find((b) => b.id === brandId)?.name ?? null}
+        brandName={brands.find((b) => b.id === brandId)?.name ?? null}
         onClose={() => setAddVariant(false)}
       />
       <ExistingDialog open={existing} onClose={() => setExisting(false)} />
@@ -650,7 +649,7 @@ function SchedulePost({
       <div className="mt-3">
         <ActionButton
           variant="primary"
-          disabled={!whenLocal || acct?.canPublish === false || (account.platform === 'youtube' && !aiUse) || (account.platform === 'threads' && !aiUse) || (account.platform === 'tiktok' && !privacy)}
+          disabled={!whenLocal || acct?.canPublish === false || (aiUse !== 'YES' && aiUse !== 'NO') || (account.platform === 'tiktok' && !privacy)}
           onAction={async () => {
             await post('/publishing/schedule', {
               itemId: (chosen ?? items[0]).id,

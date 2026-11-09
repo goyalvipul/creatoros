@@ -41,6 +41,10 @@ import {
   createVariant,
   deleteVariant,
   getPublishTitle,
+  savePublishCover,
+  clearPublishCover,
+  readPublishCover,
+  verifyCoverToken,
   linkPublishFile,
   detectNearDuplicates,
   getAsset,
@@ -1005,6 +1009,32 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   route(
     {
       method: 'POST',
+      url: '/variants/:id/files/:itemId/cover',
+      tag: 'Publishing',
+      summary: 'Save the thumbnail used when this video is posted',
+      params: z.object({ id: uuid, itemId: uuid }),
+      bodyLimit: 4 * 1024 * 1024,
+      body: z.object({
+        data: z.string().min(16).max(3_000_000),
+        source: z.enum(['frame', 'upload']),
+        atMs: z.number().int().min(0).max(6 * 60 * 60 * 1000).nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => savePublishCover(ctx, params.id, params.itemId, body),
+  );
+  route(
+    {
+      method: 'DELETE',
+      url: '/variants/:id/files/:itemId/cover',
+      tag: 'Publishing',
+      summary: 'Clear the thumbnail for this video',
+      params: z.object({ id: uuid, itemId: uuid }),
+    },
+    ({ ctx, params }) => clearPublishCover(ctx, params.id, params.itemId),
+  );
+  route(
+    {
+      method: 'POST',
       url: '/publishing/publish',
       tag: 'Publishing',
       summary: 'Publish one attached video to one account. Nothing is sent until this is called.',
@@ -1224,10 +1254,26 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
       url: '/calendar',
       tag: 'Publishing',
       summary: 'Planned and published items grouped by local day',
-      query: z.object({ from: date, to: date, tz: z.string().max(64).optional() }),
+      query: z.object({ from: date, to: date, tz: z.string().max(64).optional(), brandId: uuid.optional() }),
     },
-    ({ ctx, query }) => calendar(ctx, query.from, query.to, query.tz),
+    ({ ctx, query }) => calendar(ctx, query.from, query.to, query.tz, query.brandId),
   );
+
+  app.get('/publish-items/:id/cover', async (req, reply) => {
+    const { id } = idParam.parse(req.params);
+    const token = (req.query as { token?: string }).token;
+    const signed = token ? verifyCoverToken(deps.config.env.agentPairingSecret, token) : null;
+    if (!req.session && (!signed || signed.itemId !== id)) throw unauthorized();
+    const file = await readPublishCover(
+      { db, env: deps.config.env },
+      id,
+      req.session && !signed ? req.session.orgId : undefined,
+    );
+    if (!file) return reply.status(404).send();
+    reply.header('content-type', file.mime);
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.send(file.bytes);
+  });
 
   app.addContentTypeParser('application/x-creatoros-file', (_req, payload, done) => {
     done(null, payload);

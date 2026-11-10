@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -11,7 +12,9 @@ import {
   forbidden,
   getLongVideo,
   listLongVideos,
+  longVideoClipParts,
   openLongVideoFile,
+  openLtxVideo,
   queueLongVideoScene,
   rebalanceLongVideo,
   removeLongVideoRef,
@@ -23,7 +26,9 @@ import {
   updateLongVideo,
   updateLongVideoScene,
 } from '@creatoros/services';
+import { attachmentHeaders } from '../attachment';
 import { ctxFor, type AppDeps } from '../http';
+import { zipStored } from '../zip-store';
 
 const idParam = z.object({ id: z.string().uuid() });
 const sceneParam = z.object({ id: z.string().uuid(), sceneId: z.string().uuid() });
@@ -109,16 +114,46 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
     if (!req.session) throw unauthorized();
     const { id } = idParam.parse(req.params);
     const file = await openLongVideoFile(ctxFor(deps, req), id, 'export');
-    reply.header('content-type', 'video/mp4');
-    reply.header('content-disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
+    for (const [key, value] of Object.entries(attachmentHeaders(file.name))) reply.header(key, value);
     return reply.send(createReadStream(file.abs));
+  });
+
+  app.get('/long-videos/:id/scenes.zip', async (req, reply) => {
+    if (!req.session) throw unauthorized();
+    const { id } = idParam.parse(req.params);
+    const pack = await longVideoClipParts(ctxFor(deps, req), id);
+    const files: { name: string; open: () => Readable }[] = [];
+    for (const part of pack.parts) {
+      if (part.abs) {
+        files.push({ name: part.name, open: () => createReadStream(part.abs!) });
+        continue;
+      }
+      if (!part.jobId) continue;
+      let upstream: Response;
+      try {
+        upstream = (await openLtxVideo(deps.db, req.session.orgId, part.jobId)).upstream;
+      } catch {
+        continue;
+      }
+      if (!upstream.ok || !upstream.body) continue;
+      const body = upstream.body;
+      files.push({ name: part.name, open: () => Readable.fromWeb(body as import('stream/web').ReadableStream) });
+    }
+    if (!files.length) throw badRequest('No section video could be read.');
+    const safe = pack.title.replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').slice(0, 60) || 'long-video';
+    for (const [key, value] of Object.entries(attachmentHeaders(`${safe}.zip`))) reply.header(key, value);
+    return reply.send(zipStored(files));
   });
 
   app.get('/long-videos/:id/scenes/:sceneId/video', async (req, reply) => {
     if (!req.session) throw unauthorized();
     const params = sceneParam.parse(req.params);
-    const which = z.enum(['current', 'prior']).optional().parse((req.query as { take?: string }).take) ?? 'current';
-    const file = await openLongVideoFile(ctxFor(deps, req), params.id, which === 'prior' ? 'prior-take' : 'take', params.sceneId);
+    const query = z.object({ take: z.enum(['current', 'prior']).optional(), download: z.string().optional() }).parse(req.query);
+    const file = await openLongVideoFile(ctxFor(deps, req), params.id, query.take === 'prior' ? 'prior-take' : 'take', params.sceneId);
+    if (query.download === '1') {
+      for (const [key, value] of Object.entries(attachmentHeaders(file.name))) reply.header(key, value);
+      return reply.send(createReadStream(file.abs));
+    }
     reply.header('content-type', 'video/mp4');
     reply.header('accept-ranges', 'bytes');
     return reply.send(createReadStream(file.abs));
@@ -143,7 +178,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   app.patch('/long-videos/:id/scenes/:sceneId', async (req) => {
     editor(req);
     const params = sceneParam.parse(req.params);
-    const body = z.object({ label: z.string().max(80).optional(), prompt: z.string().max(4000).optional(), mode: z.enum(['vocal', 'broll']).optional(), continuity: z.enum(['shot', 'context']).optional(), durationSec: z.number().min(1).max(120).optional() }).parse(req.body);
+    const body = z.object({ label: z.string().max(80).optional(), prompt: z.string().max(4000).optional(), mode: z.enum(['vocal', 'broll']).optional(), continuity: z.enum(['shot', 'context']).optional(), durationSec: z.number().min(1).max(120).optional(), workerId: z.string().uuid().nullable().optional() }).parse(req.body);
     return { data: await updateLongVideoScene(ctxFor(deps, req), params.id, params.sceneId, body), meta: { requestId: req.correlationId }, error: null };
   });
 

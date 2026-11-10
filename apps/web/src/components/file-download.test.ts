@@ -6,7 +6,8 @@ describe('downloadAnchor', () => {
     expect(downloadAnchor(false, 'clip.mp4')).toEqual({ download: 'clip.mp4' });
   });
 
-  it('opens the installed app download in the browser, not as a popup', () => {
-    expect(downloadAnchor(true, 'clip.mp4')).toEqual({ target: '_blank', rel: 'noopener noreferrer' });
+  it('keeps an installed app on this page instead of opening a blank window', () => {
+    expect(downloadAnchor(true, 'clip.mp4')).toEqual({ download: 'clip.mp4' });
+    expect(downloadAnchor(true, 'clip.mp4')).not.toHaveProperty('target');
   });
 });

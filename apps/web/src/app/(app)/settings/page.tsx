@@ -31,9 +31,11 @@ import { del, patch, post, put, refresh, useApi } from '@/lib/api';
 import { useWorkspace, WorkspaceMark } from '@/lib/workspace';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
 import { defaultDelivery, NOTIFICATION_CATALOG, NOTIFICATION_CATEGORIES } from '@creatoros/domain';
+import { AiProviders } from './ai-providers';
 
-type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system';
+type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system' | 'ai';
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'ai', label: 'AI' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'team', label: 'Team' },
   { id: 'reminders', label: 'Notifications' },
@@ -73,6 +75,7 @@ function Settings() {
       {tab === 'backups' && <Backups />}
       {tab === 'demo' && <Demo />}
       {tab === 'system' && <System />}
+      {tab === 'ai' && <AiProviders />}
     </>
   );
 }

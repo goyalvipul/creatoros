@@ -13,6 +13,7 @@ import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
 import { LongVideos } from './long-videos';
+import { AiPromptTools, AiSwitch } from '@/components/ai-tools';
 
 type Issue = { field: string; message: string };
 type Worker = {
@@ -481,13 +482,17 @@ export default function ComfyPage() {
                 </button>
               ))}
             </div>
+            <AiSwitch />
           </div>
           <div className={tab === 'history' || tab === 'settings' ? 'p-5' : undefined}>
             <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />
           </div>
         </div>
       ) : (
-        <Tabs tabs={studioTabs} value={tab} onChange={setTab} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Tabs tabs={studioTabs} value={tab} onChange={setTab} />
+          <AiSwitch />
+        </div>
       )}
       {!v5 && <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />}
     </div>
@@ -3707,6 +3712,14 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
                   rows={10}
                   value={clip.prompt}
                   onChange={(e) => updateClip(index, { prompt: e.target.value })}
+                />
+                <AiPromptTools
+                  targetType="h3"
+                  targetId={clip.key || `h3-${index}`}
+                  mode="vocal"
+                  currentPrompt={clip.prompt}
+                  context={{ idea: clip.prompt, currentPrompt: clip.prompt }}
+                  onApply={(text) => updateClip(index, { prompt: text })}
                 />
                 <div className="mt-2 flex flex-wrap gap-1">
                   {clip.images.map((_, n) => (

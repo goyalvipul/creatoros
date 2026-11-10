@@ -54,7 +54,7 @@ export default function NotificationsPage() {
     <>
       <PageHeader
         title="Notifications"
-        subtitle="Alerts Kemokem raised from your own tasks, posts, and connections. Opening one follows its link."
+        subtitle="The number on the iPhone icon is how many unread alerts still need a look. Lock-screen banners are separate, and each one stays in the Kemokem group."
         actions={
           <ActionButton
             onAction={async () => {

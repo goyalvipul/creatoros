@@ -258,10 +258,18 @@ export async function updateLongVideoScene(
   ctx: Ctx,
   projectId: string,
   sceneId: string,
-  patch: { label?: string; prompt?: string; mode?: string; durationSec?: number; continuity?: string },
+  patch: { label?: string; prompt?: string; mode?: string; durationSec?: number; continuity?: string; workerId?: string | null },
 ) {
   await owned(ctx, projectId);
   if (patch.durationSec != null) await resizeLongVideoScene(ctx, projectId, sceneId, patch.durationSec);
+  if (patch.workerId) {
+    const [worker] = await ctx.db
+      .select({ id: gpuWorkers.id })
+      .from(gpuWorkers)
+      .where(and(eq(gpuWorkers.id, patch.workerId), eq(gpuWorkers.orgId, ctx.orgId)))
+      .limit(1);
+    if (!worker) throw badRequest('That PC is no longer in Settings.');
+  }
   const [row] = await ctx.db
     .update(longVideoScenes)
     .set({
@@ -269,6 +277,7 @@ export async function updateLongVideoScene(
       ...(patch.prompt != null ? { prompt: patch.prompt.slice(0, 4000) } : {}),
       ...(patch.mode === 'vocal' || patch.mode === 'broll' ? { mode: patch.mode } : {}),
       ...(patch.continuity === 'shot' || patch.continuity === 'context' ? { continuity: patch.continuity } : {}),
+      ...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
       updatedAt: new Date(),
     })
     .where(and(eq(longVideoScenes.id, sceneId), eq(longVideoScenes.projectId, projectId)))
@@ -440,6 +449,28 @@ export async function openLongVideoFile(ctx: Ctx, projectId: string, kind: 'audi
   return { abs: safeFile(ctx.env.attachmentsDir, rel), name: kind === 'audio' ? project.audioName || 'song' : `${project.title}.mp4` };
 }
 
+export function sectionClipName(position: number, label: string) {
+  const clean = (label.trim() || `scene-${String(position).padStart(2, '0')}`).replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  return `${String(position).padStart(2, '0')}-${clean || 'scene'}.mp4`;
+}
+
+/** One file per section that already has a video. A local take is preferred. Otherwise the file is still on the PC that rendered it. */
+export async function longVideoClipParts(ctx: Ctx, projectId: string) {
+  const data = await getLongVideo(ctx, projectId);
+  const parts: { name: string; abs?: string; jobId?: string }[] = [];
+  for (const scene of data.scenes) {
+    const name = sectionClipName(scene.position, scene.label);
+    if (scene.takePath?.startsWith('long-videos/')) {
+      parts.push({ name, abs: safeFile(ctx.env.attachmentsDir, scene.takePath) });
+      continue;
+    }
+    const jobId = scene.shownJobId ?? (scene.status === 'READY' ? scene.jobId : null);
+    if (jobId) parts.push({ name, jobId });
+  }
+  if (!parts.length) throw badRequest('No section has a video yet.');
+  return { title: data.project.title, parts };
+}
+
 async function uploadToWorker(origin: string, file: { bytes: Buffer; name: string; mime: string }) {
   const form = new FormData();
   form.append('image', new Blob([Uint8Array.from(file.bytes)], { type: file.mime }), file.name);
@@ -461,7 +492,7 @@ export async function queueLongVideoScene(ctx: Ctx, projectId: string, sceneId: 
   );
   const group = groups[0];
   if (!group?.length) throw badRequest('That scene, or the one before it, is already generating.');
-  return queueLongVideoGroup(ctx, projectId, group);
+  return queueLongVideoGroup(ctx, projectId, group, sceneId);
 }
 
 export async function queueNextLongVideoGroup(ctx: Ctx, projectId: string) {
@@ -476,28 +507,31 @@ export async function queueNextLongVideoGroup(ctx: Ctx, projectId: string) {
   return group;
 }
 
-async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string[]) {
+async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string[], preferredSceneId?: string) {
   const project = await owned(ctx, projectId);
-  if (!project.workerId || !project.audioPath || !project.durationMs) throw badRequest('Choose the PC and upload the song first.');
+  if (!project.audioPath || !project.durationMs) throw badRequest('Upload the song first.');
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   const chosen = sceneIds.map((id) => scenes.find((scene) => scene.id === id)).filter((scene) => !!scene);
   if (chosen.length !== sceneIds.length) throw notFound('Scene');
   if (chosen.some((scene) => scene.status === 'QUEUED' || scene.status === 'RUNNING')) throw badRequest('One of these scenes is already generating.');
+  const lead = chosen.find((scene) => scene.id === preferredSceneId) ?? chosen[0]!;
+  const workerId = lead.workerId ?? project.workerId;
+  if (!workerId) throw badRequest('Choose the PC for this section, or the PC at the top of the project.');
   const [worker] = await ctx.db
     .select()
     .from(gpuWorkers)
-    .where(and(eq(gpuWorkers.id, project.workerId), eq(gpuWorkers.orgId, ctx.orgId)))
+    .where(and(eq(gpuWorkers.id, workerId), eq(gpuWorkers.orgId, ctx.orgId)))
     .limit(1);
   if (!worker) throw badRequest('That PC is no longer in Settings.');
   const refs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId));
   let audioName = project.comfyAudioName;
-  if (!audioName) {
+  if (!audioName || project.comfyAudioWorkerId !== worker.id) {
     audioName = await uploadToWorker(worker.baseUrl, {
       bytes: await readFile(safeFile(ctx.env.attachmentsDir, project.audioPath)),
       name: `lv_${project.id.slice(0, 8)}.${extOf(project.audioName || 'song.mp3')}`,
       mime: project.audioMime || 'audio/mpeg',
     });
-    await ctx.db.update(longVideoProjects).set({ comfyAudioName: audioName }).where(eq(longVideoProjects.id, project.id));
+    await ctx.db.update(longVideoProjects).set({ comfyAudioName: audioName, comfyAudioWorkerId: worker.id }).where(eq(longVideoProjects.id, project.id));
   }
   const taskMode = project.taskMode === 'i2v' || project.taskMode === 'v2v' || project.taskMode === 'l2v' ? project.taskMode : 'ref';
   const segmentSeconds: number[] = [];

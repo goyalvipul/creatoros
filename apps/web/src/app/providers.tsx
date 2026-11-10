@@ -9,10 +9,10 @@ import { flushOutbox, onOutboxSynced } from '@/lib/outbox';
 export function Providers({ children }: { children: ReactNode }) {
   useEffect(() => {
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      // v=8 replaces the worker that could not badge or open a closed Home Screen app.
+      // v=9 shows each push as its own banner. The older worker set the icon number and iPhone dropped the banner.
       // The worker still does not answer page requests.
       navigator.serviceWorker
-        .register('/sw.js?v=8', { scope: '/', updateViaCache: 'none' })
+        .register('/sw.js?v=9', { scope: '/', updateViaCache: 'none' })
         .catch(() => {
           /* the installed app is a bonus, never a requirement */
         });

@@ -12,6 +12,7 @@ import { workRoutes } from './routes/work';
 import { socialsRoutes } from './routes/socials';
 import { comfyRoutes } from './routes/comfy';
 import { longVideoRoutes } from './routes/long-videos';
+import { aiRoutes } from './routes/ai';
 import { logSerializers } from './log-redact';
 
 export type { AppDeps } from './http';
@@ -78,6 +79,7 @@ export async function buildApp(
       socialsRoutes(v1, deps);
       await comfyRoutes(v1, deps);
       longVideoRoutes(v1, deps);
+      aiRoutes(v1, deps);
     },
     { prefix: '/api/v1' },
   );

@@ -6,7 +6,8 @@
  * Do not add a fetch listener or write into the cache.
  * Push and notificationclick only display a message and open an app path.
  * The same handlers must stay in infra/docker/Caddyfile, because production
- * serves /sw.js from Caddy rather than this file. */
+ * serves /sw.js from Caddy rather than this file.
+ * A push only shows a banner. The open app sets the home-screen number. */
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
 });
@@ -31,27 +32,18 @@ self.addEventListener('push', (event) => {
   } catch {
     data = {};
   }
-  const title = typeof data.title === 'string' ? data.title.slice(0, 120) : 'Kemokem';
-  const body = typeof data.body === 'string' ? data.body.slice(0, 180) : '';
+  const title = typeof data.title === 'string' && data.title.trim() ? data.title.slice(0, 120) : 'Kemokem';
+  const body = typeof data.body === 'string' && data.body.trim() ? data.body.slice(0, 180) : 'Open Kemokem to see this.';
   const url = safePath(data.url);
-  const tag = typeof data.tag === 'string' ? data.tag.slice(0, 80) : 'kemokem';
-  const badge = typeof data.badge === 'number' && data.badge >= 0 ? Math.min(99, Math.floor(data.badge)) : null;
+  const id = typeof data.id === 'string' && data.id ? data.id.slice(0, 80) : String(Date.now());
+  const icon = new URL('/brand/kemokem-pwa-192.png', self.location.origin).href;
   event.waitUntil(
-    Promise.all([
-      self.registration.showNotification(title, {
-        body,
-        tag,
-        data: { url },
-        icon: '/brand/kemokem-pwa-192.png',
-      }),
-      badge === null
-        ? Promise.resolve()
-        : badge > 0 && navigator.setAppBadge
-          ? navigator.setAppBadge(badge).catch(() => {})
-          : navigator.clearAppBadge
-            ? navigator.clearAppBadge().catch(() => {})
-            : Promise.resolve(),
-    ]),
+    self.registration.showNotification(title, {
+      body,
+      tag: 'kemokem-' + id,
+      data: { url },
+      icon,
+    }),
   );
 });
 

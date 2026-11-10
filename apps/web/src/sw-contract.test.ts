@@ -15,8 +15,10 @@ describe('service worker stays out of page loads', () => {
       expect(source).not.toContain('cache.put');
     }
     expect(caddy.match(/addEventListener\('push'/g)?.length).toBe(2);
-    expect(providers).toContain("/sw.js?v=8");
-    expect(sw).toContain('setAppBadge');
+    expect(providers).toContain("/sw.js?v=9");
+    expect(sw).toContain("tag: 'kemokem-' + id");
+    expect(sw).not.toContain('setAppBadge');
+    expect(caddy).not.toContain('setAppBadge');
     expect(sw).not.toContain('caches.open');
   });
 });

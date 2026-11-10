@@ -26,6 +26,7 @@ import {
 } from '@/components/ui';
 import { post, refresh, useApi } from '@/lib/api';
 import { bytes, title as titleCase, when } from '@/lib/format';
+import { AiPublishAssistant } from '@/components/ai-tools';
 import { PlatformLogo, platformLabel } from '@/components/platform-logo';
 import { threadsTextUnits, tiktokPrivacy } from '@creatoros/domain';
 
@@ -535,6 +536,16 @@ function PublishPanel({
         {draft ? <Badge tone={draft.uploadState === 'FAILED' ? 'bad' : 'neutral'}>{label(draft.uploadState)}</Badge> : <Badge>Draft</Badge>}
       </div>
       <p className="text-xs text-muted">Account-specific post details. A scheduled video is sent at the time you set. Nothing is sent until you confirm.</p>
+      <AiPublishAssistant
+        fileId={item.fileInstanceId}
+        platform={account.platform}
+        title={title}
+        caption={caption}
+        tags={tags}
+        onApplyTitle={setTitle}
+        onApplyCaption={setCaption}
+        onApplyTags={setTags}
+      />
       <div className="flex gap-1 overflow-x-auto">
         {platforms.map((platform) => {
           const first = accounts.find((a) => a.platform === platform);

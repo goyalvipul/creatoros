@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { Button, Card, CardTitle, EmptyState, Field, Input, Notice, Select } from '@/components/ui';
+import { AiImageTools, AiPromptTools } from '@/components/ai-tools';
+import { FileDownload } from '@/components/file-download';
 
 type Project = {
   id: string;
@@ -32,6 +34,7 @@ type Scene = {
   label: string;
   mode: string;
   continuity: string;
+  workerId: string | null;
   prompt: string;
   status: string;
   jobId: string | null;
@@ -130,6 +133,9 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
   const project = detail.data?.project;
   const scenes = detail.data?.scenes ?? [];
   const refs = detail.data?.refs ?? [];
+  const workers = (detail.data?.workers ?? []).filter((worker) => worker.enabled);
+  const ai = useApi<{ settings?: { enabled?: boolean } }>('/ai/status');
+  const aiOn = !!ai.data && ai.data.settings?.enabled !== false;
   useEffect(() => {
     const node = audio.current;
     if (!node) return;
@@ -165,16 +171,18 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
         <div className="ml-auto flex flex-wrap gap-2">
           <Button variant="ghost" onClick={() => act(post(`/long-videos/${id}/batch`, { state: 'pause' }))}>Pause</Button>
           <Button onClick={() => act(post(`/long-videos/${id}/batch`, { state: 'run' }))}>Generate all</Button>
-          <Button variant="ghost" onClick={() => act(post(`/long-videos/${id}/export`))}>Export MP4</Button>
+          {aiOn ? (
+            <Button variant="ghost" onClick={() => {
+              if (!window.confirm('Generate images only for scenes that have none? Up to 4, one at a time. Cost estimate unavailable — this may be billable. MiniMax will not start.')) return;
+              act(post(`/ai/images/missing`, { projectId: id, acceptBillable: true }));
+            }}>Generate missing images</Button>
+          ) : null}
+          {scenes.some((scene) => sceneDownload(id, scene)) ? (
+            <FileDownload href={`/api/v1/long-videos/${id}/scenes.zip`} name={`${project.title.replace(/[^\w.-]+/g, '-').slice(0, 60) || 'long-video'}.zip`} label="Download all scenes" />
+          ) : null}
         </div>
       </div>
       {error ? <Notice tone="bad">{error}</Notice> : null}
-      {project.exportError ? <Notice tone="bad">{project.exportError}</Notice> : null}
-      {project.exportStatus === 'READY' ? (
-        <a className="text-sm underline" href={`/api/v1/long-videos/${id}/export`}>Download the finished video</a>
-      ) : project.exportStatus === 'QUEUED' ? (
-        <p className="text-sm text-muted">The export is waiting for the worker.</p>
-      ) : null}
       <Notice>
         Vocal and B-roll are labels for you. Every scene sends its slice of the song with the MiniMax fields below, and the prompt is sent as you wrote it. Pause holds the next scene. A clip already running on the PC finishes.
       </Notice>
@@ -245,6 +253,9 @@ function Editor({ id, onBack }: { id: string; onBack: () => void }) {
             scene={scene}
             first={index === 0}
             last={index === scenes.length - 1}
+            projectTitle={project.title}
+            workers={workers}
+            projectWorkerId={project.workerId}
             portrait={shownAspect(project.aspect).startsWith('9:16')}
             canPlay={!!project.durationMs}
             own={refs.filter((r) => r.sceneId === scene.id)}
@@ -269,6 +280,18 @@ const H3_ASPECTS = [
   '4:3 (Standard)',
   '21:9 (Ultrawide)',
 ];
+
+function sectionFileName(scene: Scene) {
+  const clean = (scene.label.trim() || `scene-${String(scene.position).padStart(2, '0')}`).replace(/[^\w.-]+/g, '-').replace(/-+/g, '-').slice(0, 40);
+  return `${String(scene.position).padStart(2, '0')}-${clean || 'scene'}.mp4`;
+}
+
+function sceneDownload(projectId: string, scene: Scene) {
+  const name = sectionFileName(scene);
+  if (scene.takePath?.startsWith('long-videos/')) return { href: `/api/v1/long-videos/${projectId}/scenes/${scene.id}/video?download=1`, name };
+  const jobId = scene.shownJobId ?? (scene.status === 'READY' ? scene.jobId : null);
+  return jobId ? { href: `/api/v1/comfy/jobs/${jobId}/video?download=1`, name } : null;
+}
 
 function scenePreview(projectId: string, scene: Scene, prior: boolean) {
   if (prior) {
@@ -340,6 +363,9 @@ function shownAspect(value: string) {
 function SceneCard({
   projectId,
   scene,
+  projectTitle,
+  workers,
+  projectWorkerId,
   first,
   last,
   portrait,
@@ -352,6 +378,9 @@ function SceneCard({
 }: {
   projectId: string;
   scene: Scene;
+  projectTitle: string;
+  workers: Worker[];
+  projectWorkerId: string | null;
   first: boolean;
   last: boolean;
   portrait: boolean;
@@ -454,6 +483,20 @@ function SceneCard({
       </div>
       <div className="mt-1 text-sm text-muted">{clock(scene.startMs)}–{clock(scene.endMs)} · {((scene.endMs - scene.startMs) / 1000).toFixed(1)}s</div>
       <Input className="mt-2" placeholder="Section, such as Chorus 1" value={label} onChange={(e) => setLabel(e.target.value)} />
+      <Field label="PC">
+        <Select
+          value={scene.workerId ?? projectWorkerId ?? ''}
+          onChange={(e) => {
+            const value = e.target.value;
+            run(patch(`/long-videos/${projectId}/scenes/${scene.id}`, { workerId: value && value !== (projectWorkerId ?? '') ? value : null }));
+          }}
+        >
+          {projectWorkerId ? null : <option value="">Choose a PC</option>}
+          {workers.map((worker) => (
+            <option key={worker.id} value={worker.id}>{worker.label}</option>
+          ))}
+        </Select>
+      </Field>
       {scenePreview(projectId, scene, showPrior) ? (
         <video key={scenePreview(projectId, scene, showPrior)} className={`mt-2 w-full rounded-lg bg-black ${portrait ? 'mx-auto aspect-[9/16] max-h-72' : 'aspect-video'}`} src={scenePreview(projectId, scene, showPrior) ?? undefined} controls playsInline />
       ) : (
@@ -472,6 +515,15 @@ function SceneCard({
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
       />
+      <AiPromptTools
+        targetType="long_scene"
+        targetId={scene.id}
+        mode={mode === 'broll' ? 'broll' : 'vocal'}
+        currentPrompt={prompt}
+        context={{ projectTitle, sceneNumber: scene.position, timeRange: `${clock(scene.startMs)}–${clock(scene.endMs)}`, idea: prompt, currentPrompt: prompt }}
+        onApply={(text) => setPrompt(text)}
+      />
+      <AiImageTools projectId={projectId} sceneId={scene.id} prompt={prompt} />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button
           size="sm"
@@ -517,6 +569,7 @@ function SceneCard({
             }}
           />
         </label>
+        {sceneDownload(projectId, scene) ? <FileDownload href={sceneDownload(projectId, scene)!.href} name={sceneDownload(projectId, scene)!.name} label="Download" /> : null}
         <Button variant="ghost" onClick={() => run(post(`/long-videos/${projectId}/scenes/${scene.id}/split`))}>Split</Button>
         <Button variant="ghost" onClick={() => run(del(`/long-videos/${projectId}/scenes/${scene.id}`))}>Remove</Button>
       </div>

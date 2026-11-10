@@ -25,3 +25,4 @@ export * from './tiktok-post';
 export * from './notification-events';
 export * from './today';
 export * from './long-video';
+export * from './ai';

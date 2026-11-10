@@ -45,6 +45,7 @@ export * from './comfy';
 export * from './qwen';
 export * from './h3';
 export * from './long-videos';
+export * from './ai';
 export * from './windows-tasks';
 export * from './socials-ops';
 export * from './instagram-diagnostics';

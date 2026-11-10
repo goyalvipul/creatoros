@@ -84,8 +84,13 @@ export async function jobLtx(d: WorkerDeps) {
   const qwen = await pollRunningQwen(d.db, d.env);
   const h3Queued = await submitQueuedH3(d.db, d.env);
   const h3 = await pollRunningH3(d.db, d.env);
-  const { reconcileLongVideos } = await import('@creatoros/services');
+  const { reconcileLongVideos, runDueAiJobs } = await import('@creatoros/services');
   await reconcileLongVideos(d.db, d.env);
+  try {
+    await runDueAiJobs(d.db, d.env);
+  } catch (e) {
+    log(d, 'warn', 'ai job skipped', { err: String(e) });
+  }
   let trimsExpired = 0;
   let trims = 0;
   try {

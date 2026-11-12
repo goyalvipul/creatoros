@@ -14,6 +14,7 @@ import {
   invoiceBalance,
   isInsideRoot,
   planFileOperation,
+  planFolderDelete,
   planPublishUpload,
   isPublished,
   isValidTimeZone,
@@ -458,5 +459,13 @@ describe('file operations', () => {
     const planned = planFileOperation({ kind: 'DELETE', displayPath: from, os: 'windows', roots });
     expect(planned.fromPath).toBe(from);
     expect(planned.toPath).toBeNull();
+  });
+
+  it('deletes a folder inside an indexed root and refuses the root itself', () => {
+    const planned = planFolderDelete({ displayPath: 'D:/ComfyUI/output/Upscale/', os: 'windows', roots });
+    expect(planned.fromPath).toBe('D:\\ComfyUI\\output\\Upscale');
+    expect(planned.toPath).toBeNull();
+    expect(() => planFolderDelete({ displayPath: 'D:\\ComfyUI\\output', os: 'windows', roots })).toThrow(/inside it/);
+    expect(() => planFolderDelete({ displayPath: 'E:\\Other', os: 'windows', roots })).toThrow(/outside/);
   });
 });

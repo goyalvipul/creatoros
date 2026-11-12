@@ -76,7 +76,7 @@ export const FILE_AVAILABILITY = [
 export type FileAvailability = (typeof FILE_AVAILABILITY)[number];
 
 /** Owner-confirmed change to one original file. Indexing never uses these. */
-export const FILE_OPERATION_KIND = ['RENAME', 'MOVE', 'DELETE'] as const;
+export const FILE_OPERATION_KIND = ['RENAME', 'MOVE', 'DELETE', 'DELETE_FOLDER'] as const;
 export type FileOperationKind = (typeof FILE_OPERATION_KIND)[number];
 export const FILE_OPERATION_STATUS = ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'] as const;
 export type FileOperationStatus = (typeof FILE_OPERATION_STATUS)[number];

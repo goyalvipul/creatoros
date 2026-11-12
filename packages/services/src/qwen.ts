@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { generationJobs, generationOutputs, gpuWorkers, qwenDrafts, sql, type Db } from '@creatoros/db';
 import { openAgentFile } from './agent-file';
-import { attachJobToProject } from './comfy';
+import { attachJobToProject, fileForWorker } from './comfy';
 import { notifyGenerationReady } from './notifications';
 import { audit } from './audit';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
@@ -209,6 +210,7 @@ export async function generateQwen(ctx: Ctx, form: QwenForm) {
         workerLabel: worker.label,
         audioFileId: form.useBuiltin ? null : form.audioFileId,
         audioUploadName: form.useBuiltin ? null : form.audioUploadName,
+        audioUploadWorkerId: form.useBuiltin ? null : form.audioUploadWorkerId,
         useBuiltin: form.useBuiltin,
         builtinClip: isClip(form.builtinClip) ? form.builtinClip : BUILTIN,
         referenceText: form.referenceText,
@@ -270,12 +272,14 @@ interface QwenJob {
     workerId?: string;
     audioFileId?: string | null;
     audioUploadName?: string | null;
+    audioUploadWorkerId?: string | null;
     useBuiltin?: boolean;
     builtinClip?: string;
     referenceText?: string;
     targetText?: string;
     filenamePrefix?: string;
     progress?: { phase: string; detail: string };
+    localAudio?: string | null;
     outputs?: { node: string; filename: string; subfolder: string; type: string }[];
   };
   startedAt: Date | null;
@@ -320,6 +324,11 @@ export async function submitQwenJob(db: Db, env: ServiceEnv, jobId: string) {
     } else if (settings.audioFileId) {
       const opened = await openAgentFile(db, env, claimed.orgId, settings.audioFileId);
       audioName = await uploadBytes(worker.baseUrl, await readStream(opened.body, opened.name, opened.mime, claimed.id));
+    } else if (settings.audioUploadName) {
+      audioName = await fileForWorker(env.attachmentsDir, claimed.orgId, worker, {
+        name: settings.audioUploadName,
+        workerId: settings.audioUploadWorkerId,
+      });
     }
     if (!audioName) throw badRequest('The reference audio is no longer attached.');
     const prefix = `CreatorOS/qwen_${claimed.id.slice(0, 8)}`;
@@ -414,8 +423,30 @@ async function loadHistory(baseUrl: string, promptId: string) {
   }
 }
 
+async function keepVoiceCopy(dir: string, orgId: string, jobId: string, filename: string, bytes: Buffer) {
+  const ext = (filename.split('.').pop() || 'flac').toLowerCase().replace(/[^a-z0-9]/g, '') || 'flac';
+  const rel = `voices/${orgId}/${jobId}.${ext}`;
+  const root = resolve(dir);
+  const abs = resolve(root, rel);
+  if (!abs.startsWith(root)) throw badRequest('That voice path is not allowed.');
+  await mkdir(resolve(root, 'voices', orgId), { recursive: true });
+  await writeFile(abs, bytes);
+  return rel;
+}
+
+async function copyVoiceFromPc(baseUrl: string, dir: string, orgId: string, jobId: string, audio: { filename: string; subfolder: string; type: string }) {
+  const url = new URL('/view', baseUrl);
+  url.searchParams.set('filename', audio.filename);
+  url.searchParams.set('subfolder', audio.subfolder);
+  url.searchParams.set('type', audio.type || 'output');
+  const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) return null;
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (!bytes.length || bytes.length > 80 * 1024 * 1024) return null;
+  return keepVoiceCopy(dir, orgId, jobId, audio.filename, bytes);
+}
+
 export async function pollRunningQwen(db: Db, env: ServiceEnv) {
-  void env;
   const running = rowsOf<QwenJob>(
     await db.execute(sql`
       select id, org_id as "orgId", prompt_id as "promptId", settings, started_at as "startedAt"
@@ -464,11 +495,20 @@ export async function pollRunningQwen(db: Db, env: ServiceEnv) {
       continue;
     }
     if (!entry.completed || !entry.outputs.length) continue;
+    const audio = entry.outputs.find((item) => item.type !== 'temp') ?? entry.outputs[0];
+    let localAudio: string | null = null;
+    if (audio) {
+      try {
+        localAudio = await copyVoiceFromPc(worker.baseUrl, env.attachmentsDir, job.orgId, job.id, audio);
+      } catch {
+        localAudio = null;
+      }
+    }
     const saved = rowsOf<{ id: string }>(
       await db.execute(sql`
         update generation_jobs
         set status = 'SUCCEEDED', finished_at = now(), updated_at = now(), error = null,
-            settings = settings || ${JSON.stringify({ outputs: entry.outputs, progress: { phase: 'done', detail: 'Voice is ready.' } })}::jsonb
+            settings = settings || ${JSON.stringify({ outputs: entry.outputs, localAudio, progress: { phase: 'done', detail: 'Voice is ready.' } })}::jsonb
         where id = ${job.id} and status = 'RUNNING'
         returning id`),
     );
@@ -591,15 +631,23 @@ export function sliceAudioRange(body: Buffer, header: string | undefined): { sta
   return { status: 206, body: body.subarray(start, end + 1), contentRange: `bytes ${start}-${end}/${body.length}` };
 }
 
-export async function openQwenAudio(db: Db, orgId: string, jobId: string, range?: string) {
+export async function openQwenAudio(db: Db, attachmentsDir: string, orgId: string, jobId: string) {
   const [job] = rowsOf<{ settings: QwenJob['settings'] }>(
     await db.execute(sql`
       select settings from generation_jobs
       where id = ${jobId} and org_id = ${orgId} and provider = ${PROVIDER}`),
   );
   if (!job) throw notFound('Voice');
+  const kept = job.settings?.localAudio;
+  if (kept) {
+    const root = resolve(attachmentsDir);
+    const abs = resolve(root, kept);
+    if (abs.startsWith(root) && existsSync(abs)) {
+      return { bytes: readFileSync(abs), filename: kept.split('/').pop() || 'voice.flac' };
+    }
+  }
   const audio = (job.settings?.outputs ?? []).find((o) => /\.(wav|mp3|flac|ogg|m4a)$/i.test(o.filename));
-  if (!audio) throw notFound('Voice');
+  if (!audio || audio.type === 'temp') throw notFound('That voice was only a preview on the PC and is no longer there. Generate it again.');
   const [worker] = await db
     .select()
     .from(gpuWorkers)
@@ -612,9 +660,10 @@ export async function openQwenAudio(db: Db, orgId: string, jobId: string, range?
   url.searchParams.set('type', audio.type || 'output');
   let upstream: Response;
   try {
-    upstream = await fetch(url, { headers: range ? { range } : {}, signal: AbortSignal.timeout(60_000) });
+    upstream = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   } catch {
     throw badRequest('Creator OS could not reach the PC that has this voice.');
   }
-  return { upstream, filename: audio.filename };
+  if (!upstream.ok) throw notFound('That voice is no longer on the PC. Generate it again.');
+  return { bytes: Buffer.from(await upstream.arrayBuffer()), filename: audio.filename };
 }

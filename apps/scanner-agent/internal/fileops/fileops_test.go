@@ -89,3 +89,35 @@ func TestRefusesEscapeOverwriteAndSize(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteFolder(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "projects", "Price_Tag_longvideo")
+	writeFile(t, filepath.Join(folder, "clip.mp4"), "video")
+	writeFile(t, filepath.Join(folder, "nested", "extra.mp4"), "more")
+	keep := filepath.Join(dir, "projects", "keep.txt")
+	writeFile(t, keep, "stay")
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	writeFile(t, outside, "secret")
+	if err := os.Symlink(outside, filepath.Join(folder, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(roots(dir), "DELETE_FOLDER", folder, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(folder); !os.IsNotExist(err) {
+		t.Fatalf("folder still present: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(outside); err != nil || string(body) != "secret" {
+		t.Fatal("a link inside the folder must not delete the file it points at")
+	}
+	if err := Apply(roots(dir), "DELETE_FOLDER", folder, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(roots(dir), "DELETE_FOLDER", dir, "", 0); err == nil {
+		t.Fatal("the indexed root must stay")
+	}
+}

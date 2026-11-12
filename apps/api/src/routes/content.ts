@@ -29,6 +29,7 @@ import {
   changeStage,
   convertIdea,
   createAsset,
+  requestFolderDelete,
   createBrand,
   createChannel,
   createIdea,
@@ -764,6 +765,17 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
         .partial(),
     },
     ({ ctx, params, body }) => updateAsset(ctx, params.id, body as any),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/assets/:id/delete-folder',
+      tag: 'Library',
+      summary: 'Queue deletion of this scanned folder and every file inside it on that PC',
+      role: 'OWNER',
+      params: idParam,
+    },
+    ({ ctx, params }) => requestFolderDelete(ctx, params.id),
   );
   route(
     {

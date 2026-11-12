@@ -49,36 +49,48 @@ export function FileDownload({
   name,
   icon = false,
   label = 'Download',
+  busyLabel,
 }: {
   href: string;
   name: string;
   icon?: boolean;
   label?: string;
+  busyLabel?: string;
 }) {
   const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const anchor = downloadAnchor(false, name);
+  const wait = Boolean(busyLabel) || installedApp();
   return (
     <a
       href={href}
       {...anchor}
+      aria-disabled={busy || undefined}
       aria-label={icon ? 'Download original' : undefined}
       title={icon ? 'Download original' : note ?? undefined}
       className={
         icon
-          ? 'inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-panel hover:bg-panel2'
-          : 'inline-flex shrink-0 items-center self-center rounded border border-border px-2 py-1 text-xs hover:border-accent'
+          ? `inline-flex size-10 shrink-0 items-center justify-center rounded-lg border border-border bg-panel hover:bg-panel2${busy ? ' pointer-events-none opacity-60' : ''}`
+          : `inline-flex shrink-0 items-center self-center rounded border border-border px-2 py-1 text-xs hover:border-accent${busy ? ' pointer-events-none opacity-60' : ''}`
       }
       onClick={(event) => {
         event.stopPropagation();
-        if (!installedApp()) return;
+        if (busy) {
+          event.preventDefault();
+          return;
+        }
+        if (!wait) return;
         event.preventDefault();
         setNote(null);
-        void saveInstalledFile(href, name).catch((error: unknown) => {
-          setNote(error instanceof Error ? error.message : 'The file did not download.');
-        });
+        setBusy(true);
+        void saveInstalledFile(href, name)
+          .catch((error: unknown) => {
+            setNote(error instanceof Error ? error.message : 'The file did not download.');
+          })
+          .finally(() => setBusy(false));
       }}
     >
-      {icon ? <Download className="size-4" aria-hidden /> : note ?? label}
+      {icon ? <Download className="size-4" aria-hidden /> : busy ? busyLabel : note ?? label}
     </a>
   );
 }

@@ -4,15 +4,19 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   and,
+  assetVersions,
+  creativeProjects,
+  distributionVariants,
   eq,
   generationJobs,
   gpuWorkers,
+  logicalAssets,
   longVideoProjects,
   longVideoRefs,
   longVideoScenes,
   sql,
 } from '@creatoros/db';
-import { generationSeconds, planGenerationGroups, planScenes, type SceneSpan } from '@creatoros/domain';
+import { clipPlanCard, clipTitle, generationSeconds, h3AspectRatio, imageFileKey, isDefaultClipTitle, longVideoOutputFolder, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, spansFromClipSeconds, type SceneSpan } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { notify } from './notifications';
 import { badRequest, notFound, type Ctx, type ServiceEnv } from './types';
@@ -94,6 +98,11 @@ async function peaksFor(file: string) {
   return peaks;
 }
 
+function clipLabel(label: string, position: number) {
+  if (!label.trim() || isDefaultClipTitle(label)) return clipTitle(position);
+  return label;
+}
+
 async function replaceScenes(ctx: Ctx, projectId: string, spans: SceneSpan[]) {
   const existing = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   for (let i = 0; i < spans.length; i++) {
@@ -106,12 +115,13 @@ async function replaceScenes(ctx: Ctx, projectId: string, spans: SceneSpan[]) {
           position: i + 1,
           startMs: span.startMs,
           endMs: span.endMs,
+          label: clipLabel(row.label, i + 1),
           outdated: Boolean(row.takePath),
           updatedAt: new Date(),
         })
         .where(eq(longVideoScenes.id, row.id));
     } else {
-      await ctx.db.insert(longVideoScenes).values({ projectId, position: i + 1, startMs: span.startMs, endMs: span.endMs });
+      await ctx.db.insert(longVideoScenes).values({ projectId, position: i + 1, startMs: span.startMs, endMs: span.endMs, label: clipTitle(i + 1) });
     }
   }
   for (const extra of existing.slice(spans.length)) {
@@ -123,7 +133,7 @@ export async function listLongVideos(ctx: Ctx) {
   return ctx.db
     .select()
     .from(longVideoProjects)
-    .where(eq(longVideoProjects.orgId, ctx.orgId))
+    .where(and(eq(longVideoProjects.orgId, ctx.orgId), sql`${longVideoProjects.archivedAt} is null`))
     .orderBy(sql`${longVideoProjects.updatedAt} desc`);
 }
 
@@ -139,6 +149,7 @@ export async function createLongVideo(ctx: Ctx, input: { title: string; brandId?
       aspect: h3Aspect(input.aspect || '16:9'),
     })
     .returning();
+  await ensureStudioProject(ctx, row!);
   return row!;
 }
 
@@ -146,7 +157,7 @@ async function owned(ctx: Ctx, id: string) {
   const [row] = await ctx.db
     .select()
     .from(longVideoProjects)
-    .where(and(eq(longVideoProjects.id, id), eq(longVideoProjects.orgId, ctx.orgId)))
+    .where(and(eq(longVideoProjects.id, id), eq(longVideoProjects.orgId, ctx.orgId), sql`${longVideoProjects.archivedAt} is null`))
     .limit(1);
   if (!row) throw notFound('Long video');
   return row;
@@ -154,8 +165,12 @@ async function owned(ctx: Ctx, id: string) {
 
 export async function getLongVideo(ctx: Ctx, id: string) {
   const project = await owned(ctx, id);
+  if (!project.creativeProjectId) {
+    const linked = await ensureStudioProject(ctx, project);
+    project.creativeProjectId = linked.creativeProjectId;
+  }
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, id)).orderBy(longVideoScenes.position);
-  const refs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, id));
+  const refs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, id)).orderBy(longVideoRefs.createdAt, longVideoRefs.id);
   const workers = await ctx.db
     .select({ id: gpuWorkers.id, label: gpuWorkers.label, enabled: gpuWorkers.enabled })
     .from(gpuWorkers)
@@ -163,21 +178,8 @@ export async function getLongVideo(ctx: Ctx, id: string) {
   return { project, scenes, refs, workers };
 }
 
-const H3_ASPECTS = [
-  '9:16 (Portrait Widescreen)',
-  '16:9 (Widescreen)',
-  '1:1 (Square)',
-  '2:3 (Portrait Photo)',
-  '3:2 (Photo)',
-  '3:4 (Portrait Standard)',
-  '4:3 (Standard)',
-  '21:9 (Ultrawide)',
-] as const;
-
 function h3Aspect(stored: string) {
-  if (stored === '9:16' || stored.startsWith('9:16')) return '9:16 (Portrait Widescreen)';
-  if (stored === '16:9' || stored.includes('16:9')) return '16:9 (Widescreen)';
-  return H3_ASPECTS.includes(stored as (typeof H3_ASPECTS)[number]) ? stored : '16:9 (Widescreen)';
+  return h3AspectRatio(stored) ?? '16:9 (Widescreen)';
 }
 
 export async function updateLongVideo(
@@ -200,7 +202,7 @@ export async function updateLongVideo(
     .update(longVideoProjects)
     .set({
       ...(patch.title != null ? { title: patch.title.trim().slice(0, 160) } : {}),
-      ...(patch.aspect && H3_ASPECTS.includes(patch.aspect as (typeof H3_ASPECTS)[number]) ? { aspect: patch.aspect } : {}),
+      ...(patch.aspect && h3AspectRatio(patch.aspect) ? { aspect: h3AspectRatio(patch.aspect)! } : {}),
       ...(patch.megapixels === 0.5 || patch.megapixels === 1 || patch.megapixels === 1.5 ? { megapixels: patch.megapixels } : {}),
       ...(patch.taskMode === 'i2v' || patch.taskMode === 'ref' || patch.taskMode === 'v2v' || patch.taskMode === 'l2v' ? { taskMode: patch.taskMode } : {}),
       ...(patch.continuity === 'shot' || patch.continuity === 'context' || patch.continuity === 'context_swap' ? { continuity: patch.continuity } : {}),
@@ -212,7 +214,139 @@ export async function updateLongVideo(
     })
     .where(eq(longVideoProjects.id, id))
     .returning();
+  if (patch.title != null && row?.creativeProjectId) await syncStudioTitle(ctx, row.creativeProjectId, row.title);
   return row!;
+}
+
+/** One Production project and one Publishing row for this long video. Later renders join that same row. */
+async function ensureStudioProject(
+  ctx: Ctx,
+  project: { id: string; title: string; brandId: string | null; creativeProjectId: string | null },
+) {
+  const folder = longVideoOutputFolder(project.title);
+  const title = project.title.slice(0, 160);
+  if (project.creativeProjectId) {
+    const ids = await studioIds(ctx, project.creativeProjectId);
+    if (ids.variantId && ids.assetId) {
+      await attachExistingJobs(ctx, project.id, project.creativeProjectId, ids.variantId, ids.assetId, ids.assetVersionId, folder);
+      return { creativeProjectId: project.creativeProjectId, folder, ...ids };
+    }
+  }
+  const creativeProjectId = project.creativeProjectId ?? (await insertCreativeProject(ctx, project.brandId, title, folder));
+  const [asset] = await ctx.db
+    .insert(logicalAssets)
+    .values({
+      orgId: ctx.orgId,
+      title,
+      kind: 'VIDEO',
+      brandId: project.brandId,
+      projectId: creativeProjectId,
+      source: 'comfyui-h3',
+      creativeState: 'DRAFT',
+    })
+    .returning({ id: logicalAssets.id });
+  const [version] = await ctx.db
+    .insert(assetVersions)
+    .values({
+      orgId: ctx.orgId,
+      assetId: asset!.id,
+      label: 'MiniMax',
+      number: 1,
+      variantType: 'LYRIC_VIDEO',
+      isMaster: true,
+      approvalState: 'PENDING',
+    })
+    .returning({ id: assetVersions.id });
+  const [variant] = await ctx.db
+    .insert(distributionVariants)
+    .values({
+      orgId: ctx.orgId,
+      assetId: asset!.id,
+      assetVersionId: version!.id,
+      projectId: creativeProjectId,
+      brandId: project.brandId,
+      format: 'LYRIC_VIDEO',
+      titleMaster: title,
+      readiness: 'DRAFT',
+    })
+    .returning({ id: distributionVariants.id });
+  await ctx.db.update(logicalAssets).set({ selectedVersionId: version!.id }).where(eq(logicalAssets.id, asset!.id));
+  if (!project.creativeProjectId) {
+    await ctx.db.update(longVideoProjects).set({ creativeProjectId }).where(eq(longVideoProjects.id, project.id));
+  }
+  await attachExistingJobs(ctx, project.id, creativeProjectId, variant!.id, asset!.id, version!.id, folder);
+  return { creativeProjectId, folder, variantId: variant!.id, assetId: asset!.id, assetVersionId: version!.id };
+}
+
+async function attachExistingJobs(
+  ctx: Ctx,
+  longVideoId: string,
+  creativeProjectId: string,
+  variantId: string,
+  assetId: string,
+  assetVersionId: string | null,
+  folder: string,
+) {
+  const link = JSON.stringify({ variantId, assetId, assetVersionId });
+  await ctx.db.execute(sql`
+    update generation_jobs
+    set project_id = ${creativeProjectId}::uuid,
+        settings = settings || ${link}::jsonb,
+        updated_at = now()
+    where org_id = ${ctx.orgId}
+      and project_id is null
+      and settings->>'longVideoProjectId' = ${longVideoId}`);
+  await ctx.db.execute(sql`
+    update generation_jobs
+    set settings = jsonb_set(settings, '{projectName}', to_jsonb(${folder}::text), true),
+        updated_at = now()
+    where org_id = ${ctx.orgId}
+      and status = 'QUEUED'
+      and coalesce(settings->>'projectName', '') = ''
+      and settings->>'longVideoProjectId' = ${longVideoId}`);
+}
+
+async function insertCreativeProject(ctx: Ctx, brandId: string | null, title: string, folder: string) {
+  const [created] = await ctx.db
+    .insert(creativeProjects)
+    .values({
+      orgId: ctx.orgId,
+      brandId,
+      type: 'MUSIC_VIDEO',
+      contentFormat: 'LYRIC_VIDEO',
+      title,
+      stage: 'IN_PROGRESS',
+      ownerUserId: ctx.userId,
+      brief: `Long video. The PC that renders it saves the files in easy_media/projects/${folder}.`,
+    })
+    .returning({ id: creativeProjects.id });
+  return created!.id;
+}
+
+async function studioIds(ctx: Ctx, creativeProjectId: string) {
+  const [row] = await ctx.db
+    .select({
+      variantId: distributionVariants.id,
+      assetId: distributionVariants.assetId,
+      assetVersionId: distributionVariants.assetVersionId,
+    })
+    .from(distributionVariants)
+    .where(and(eq(distributionVariants.projectId, creativeProjectId), eq(distributionVariants.orgId, ctx.orgId)))
+    .limit(1);
+  return { variantId: row?.variantId ?? null, assetId: row?.assetId ?? null, assetVersionId: row?.assetVersionId ?? null };
+}
+
+async function syncStudioTitle(ctx: Ctx, creativeProjectId: string, title: string) {
+  const next = title.slice(0, 160);
+  await ctx.db.update(creativeProjects).set({ title: next, updatedAt: new Date() }).where(eq(creativeProjects.id, creativeProjectId));
+  await ctx.db
+    .update(logicalAssets)
+    .set({ title: next, updatedAt: new Date() })
+    .where(and(eq(logicalAssets.projectId, creativeProjectId), eq(logicalAssets.orgId, ctx.orgId)));
+  await ctx.db
+    .update(distributionVariants)
+    .set({ titleMaster: next, updatedAt: new Date() })
+    .where(and(eq(distributionVariants.projectId, creativeProjectId), eq(distributionVariants.orgId, ctx.orgId)));
 }
 
 export async function saveLongVideoAudio(ctx: Ctx, id: string, file: { bytes: Buffer; name: string }) {
@@ -245,12 +379,22 @@ export async function saveLongVideoAudio(ctx: Ctx, id: string, file: { bytes: Bu
   return getLongVideo(ctx, id);
 }
 
-export async function rebalanceLongVideo(ctx: Ctx, id: string) {
+export async function rebalanceLongVideo(ctx: Ctx, id: string, seconds?: number) {
   const project = await owned(ctx, id);
   if (!project.durationMs) {
     throw badRequest('This project has no song length yet. The upload did not finish, so choose the song again. Rebuild only splits a song that already has a length.');
   }
-  await replaceScenes(ctx, id, planScenes(project.durationMs, project.targetSceneMs));
+  const busy = await ctx.db
+    .select({ id: longVideoScenes.id })
+    .from(longVideoScenes)
+    .where(and(eq(longVideoScenes.projectId, id), sql`${longVideoScenes.status} in ('QUEUED', 'RUNNING')`))
+    .limit(1);
+  if (busy.length) throw badRequest('Stop the section that is still generating before rebuilding.');
+  const targetMs = seconds == null ? project.targetSceneMs : Math.min(15_000, Math.max(4_000, Math.round(seconds * 1000)));
+  if (targetMs !== project.targetSceneMs) {
+    await ctx.db.update(longVideoProjects).set({ targetSceneMs: targetMs, updatedAt: new Date() }).where(eq(longVideoProjects.id, id));
+  }
+  await replaceScenes(ctx, id, planScenes(project.durationMs, targetMs));
   return getLongVideo(ctx, id);
 }
 
@@ -274,7 +418,7 @@ export async function updateLongVideoScene(
     .update(longVideoScenes)
     .set({
       ...(patch.label != null ? { label: patch.label.slice(0, 80) } : {}),
-      ...(patch.prompt != null ? { prompt: patch.prompt.slice(0, 4000) } : {}),
+      ...(patch.prompt != null ? { prompt: patch.prompt } : {}),
       ...(patch.mode === 'vocal' || patch.mode === 'broll' ? { mode: patch.mode } : {}),
       ...(patch.continuity === 'shot' || patch.continuity === 'context' ? { continuity: patch.continuity } : {}),
       ...(patch.workerId !== undefined ? { workerId: patch.workerId } : {}),
@@ -283,45 +427,79 @@ export async function updateLongVideoScene(
     .where(and(eq(longVideoScenes.id, sceneId), eq(longVideoScenes.projectId, projectId)))
     .returning();
   if (!row) throw notFound('Scene');
+  if (patch.prompt != null && row.jobId && row.status === 'QUEUED') await rewriteQueuedPrompt(ctx, row.jobId, sceneId, row.prompt);
   return row;
 }
 
-/** A shorter scene gives the spare time to the next one. A longer scene takes that time from the next one. The last scene trades with the one before it. */
+async function rewriteQueuedPrompt(ctx: Ctx, jobId: string, sceneId: string, prompt: string) {
+  const [job] = await ctx.db
+    .select()
+    .from(generationJobs)
+    .where(and(eq(generationJobs.id, jobId), eq(generationJobs.orgId, ctx.orgId), eq(generationJobs.status, 'QUEUED')))
+    .limit(1);
+  if (!job) return;
+  const settings = job.settings as { longVideoSceneIds?: string[]; segments?: { prompt?: string }[]; prompt?: string };
+  const index = settings.longVideoSceneIds?.indexOf(sceneId) ?? -1;
+  const segment = index >= 0 ? settings.segments?.[index] : undefined;
+  if (!segment) return;
+  segment.prompt = prompt;
+  settings.prompt = (settings.segments ?? []).map((item) => item.prompt?.trim() ?? '').filter(Boolean).join('\n');
+  await ctx.db
+    .update(generationJobs)
+    .set({ settings, updatedAt: new Date() })
+    .where(and(eq(generationJobs.id, jobId), eq(generationJobs.status, 'QUEUED')));
+}
+
+/** A shorter scene gives the spare song to the next one. A longer scene takes that song from the next one. The last scene trades with the one before it. */
 async function resizeLongVideoScene(ctx: Ctx, projectId: string, sceneId: string, durationSec: number) {
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   const index = scenes.findIndex((s) => s.id === sceneId);
   if (index < 0) throw notFound('Scene');
   const scene = scenes[index]!;
   if (scene.status === 'QUEUED' || scene.status === 'RUNNING') throw badRequest('Wait until this scene finishes before changing its length.');
-  const want = Math.round(durationSec * 1000);
-  if (want < 1000) throw badRequest('A scene needs at least 1 second.');
-  const next = scenes[index + 1];
-  const prev = scenes[index - 1];
-  const partner = next ?? prev;
-  if (!partner) throw badRequest('This is the only scene, so its length stays the length of the song.');
-  const current = scene.endMs - scene.startMs;
-  const delta = want - current;
-  if (delta === 0) return;
-  const partnerLen = partner.endMs - partner.startMs;
-  if (partnerLen - delta < 1000) throw badRequest('That would leave the neighbouring scene under 1 second.');
-  if (next) {
+  const moved = resizeSceneSpan(
+    scenes.map((item) => ({ startMs: item.startMs, endMs: item.endMs })),
+    index,
+    durationSec * 1000,
+  );
+  if ('error' in moved) throw badRequest(moved.error);
+  for (const [sceneIndex, span] of moved.spans.entries()) {
+    const row = scenes[sceneIndex]!;
+    if (row.startMs === span.startMs && row.endMs === span.endMs) continue;
     await ctx.db
       .update(longVideoScenes)
-      .set({ endMs: scene.endMs + delta, outdated: Boolean(scene.takePath), updatedAt: new Date() })
-      .where(eq(longVideoScenes.id, scene.id));
-    await ctx.db
-      .update(longVideoScenes)
-      .set({ startMs: next.startMs + delta, outdated: Boolean(next.takePath), updatedAt: new Date() })
-      .where(eq(longVideoScenes.id, next.id));
-  } else if (prev) {
-    await ctx.db
-      .update(longVideoScenes)
-      .set({ startMs: scene.startMs - delta, outdated: Boolean(scene.takePath), updatedAt: new Date() })
-      .where(eq(longVideoScenes.id, scene.id));
-    await ctx.db
-      .update(longVideoScenes)
-      .set({ endMs: prev.endMs - delta, outdated: Boolean(prev.takePath), updatedAt: new Date() })
-      .where(eq(longVideoScenes.id, prev.id));
+      .set({ startMs: span.startMs, endMs: span.endMs, outdated: Boolean(row.takePath), updatedAt: new Date() })
+      .where(eq(longVideoScenes.id, row.id));
+  }
+  await syncQueuedSong(ctx, projectId);
+}
+
+async function syncQueuedSong(ctx: Ctx, projectId: string) {
+  const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId));
+  const jobIds = [...new Set(scenes.map((scene) => scene.jobId).filter((id): id is string => !!id))];
+  for (const jobId of jobIds) {
+    const [job] = await ctx.db
+      .select()
+      .from(generationJobs)
+      .where(and(eq(generationJobs.id, jobId), eq(generationJobs.orgId, ctx.orgId), eq(generationJobs.status, 'QUEUED')))
+      .limit(1);
+    if (!job) continue;
+    const settings = job.settings as {
+      longVideoSceneIds?: string[];
+      segments?: { audioStartSec?: number; audioUseSec?: number; durationSec?: number }[];
+    };
+    let changed = false;
+    for (const [segmentIndex, sceneId] of (settings.longVideoSceneIds ?? []).entries()) {
+      const scene = scenes.find((item) => item.id === sceneId);
+      const segment = settings.segments?.[segmentIndex];
+      if (!scene || !segment) continue;
+      segment.audioStartSec = scene.startMs / 1000;
+      segment.audioUseSec = (scene.endMs - scene.startMs) / 1000;
+      segment.durationSec = generationSeconds(scene.endMs - scene.startMs).requestSec;
+      changed = true;
+    }
+    if (!changed) continue;
+    await ctx.db.update(generationJobs).set({ settings, updatedAt: new Date() }).where(and(eq(generationJobs.id, jobId), eq(generationJobs.status, 'QUEUED')));
   }
 }
 
@@ -338,12 +516,13 @@ export async function splitLongVideoScene(ctx: Ctx, projectId: string, sceneId: 
     position: scene.position + 1,
     startMs: mid,
     endMs: scene.endMs,
-    label: scene.label,
+    label: clipTitle(scene.position + 1),
     mode: scene.mode,
     prompt: scene.prompt,
   });
   for (const later of scenes.filter((s) => s.position > scene.position)) {
-    await ctx.db.update(longVideoScenes).set({ position: later.position + 1 }).where(eq(longVideoScenes.id, later.id));
+    const position = later.position + 1;
+    await ctx.db.update(longVideoScenes).set({ position, label: clipLabel(later.label, position) }).where(eq(longVideoScenes.id, later.id));
   }
   return getLongVideo(ctx, projectId);
 }
@@ -368,7 +547,8 @@ export async function deleteLongVideoScene(ctx: Ctx, projectId: string, sceneId:
   await ctx.db.delete(longVideoScenes).where(eq(longVideoScenes.id, scene.id));
   const left = scenes.filter((s) => s.id !== scene.id);
   for (let i = 0; i < left.length; i++) {
-    await ctx.db.update(longVideoScenes).set({ position: i + 1 }).where(eq(longVideoScenes.id, left[i]!.id));
+    const position = i + 1;
+    await ctx.db.update(longVideoScenes).set({ position, label: clipLabel(left[i]!.label, position) }).where(eq(longVideoScenes.id, left[i]!.id));
   }
   return getLongVideo(ctx, projectId);
 }
@@ -418,9 +598,202 @@ export async function addLongVideoRef(ctx: Ctx, projectId: string, sceneId: stri
   return { ...ref!, path: rel };
 }
 
+export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText: string, files: { name: string; bytes: Buffer }[]) {
+  const project = await owned(ctx, projectId);
+  if (!project.durationMs) throw badRequest('Upload the song before applying a clip plan.');
+  let value: unknown;
+  try {
+    value = JSON.parse(jsonText.replace(/^\uFEFF/, ''));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'invalid JSON';
+    throw badRequest(`That file is not valid JSON. ${message}`);
+  }
+  const parsed = parseClipPlan(value);
+  if ('error' in parsed) throw badRequest(parsed.error);
+  const laid = spansFromClipSeconds(project.durationMs, parsed.plan.clips.map((clip) => clip.durationSec));
+  if ('error' in laid) throw badRequest(laid.error);
+  const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
+  if (scenes.some((scene) => scene.status === 'QUEUED' || scene.status === 'RUNNING')) throw badRequest('Wait until the current render finishes before applying a clip plan.');
+
+  if (files.length > 40) throw badRequest('Upload at most 40 pictures with a clip plan.');
+  const byKey = new Map<string, { name: string; bytes: Buffer }>();
+  for (const file of files) {
+    const key = imageFileKey(file.name || '');
+    if (!key) throw badRequest('One of the pictures has no file name.');
+    if (byKey.has(key)) throw badRequest(`Two pictures are named ${file.name}. Keep one.`);
+    const ext = extOf(file.name);
+    if (!IMAGE.has(ext)) throw badRequest(`${file.name} needs to be a jpg, png, or webp.`);
+    if (file.bytes.length > 20 * 1024 * 1024) throw badRequest(`${file.name} is over 20 MB.`);
+    byKey.set(key, file);
+  }
+  const neededNames: string[] = [];
+  const needed = new Set<string>();
+  for (const clip of parsed.plan.clips) {
+    for (const name of clip.images) {
+      const key = imageFileKey(name);
+      if (needed.has(key)) continue;
+      needed.add(key);
+      neededNames.push(name);
+    }
+  }
+  const missing = neededNames.filter((name) => !byKey.has(imageFileKey(name)));
+  if (missing.length) throw badRequest(`These pictures are named in the plan and were not uploaded: ${missing.join(', ')}`);
+  const unusedImages = [...byKey.entries()].filter(([key]) => !needed.has(key)).map(([, file]) => file.name);
+  const workers = await ctx.db
+    .select({ id: gpuWorkers.id, label: gpuWorkers.label, enabled: gpuWorkers.enabled })
+    .from(gpuWorkers)
+    .where(eq(gpuWorkers.orgId, ctx.orgId));
+  const cardId = (card: '3060' | '3090') => {
+    const hits = workers.filter((worker) => new RegExp(`\\b${card}\\b`).test(worker.label));
+    const chosen = hits.find((worker) => worker.enabled) ?? hits[0];
+    if (!chosen) throw badRequest(`Add the ${card} before applying a clip plan.`);
+    return chosen.id;
+  };
+  const gpu3090 = cardId('3090');
+  const needs3060 = laid.spans.some((span) => clipPlanCard(span.endMs - span.startMs) === '3060');
+  const gpu3060 = needs3060 ? cardId('3060') : null;
+  await ctx.db.update(longVideoProjects).set({ workerId: gpu3090, updatedAt: new Date() }).where(eq(longVideoProjects.id, projectId));
+  let shortSceneCount = 0;
+  const globalKeys = new Set(parsed.plan.globalImages.map((name) => imageFileKey(name)));
+  const oldRefs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId));
+  for (const ref of oldRefs) await removeLongVideoRef(ctx, projectId, ref.id);
+
+  for (let i = 0; i < parsed.plan.clips.length; i++) {
+    const clip = parsed.plan.clips[i]!;
+    const span = laid.spans[i]!;
+    const row = scenes[i];
+    const short = clipPlanCard(span.endMs - span.startMs) === '3060';
+    if (short) shortSceneCount += 1;
+    const values = {
+      position: i + 1,
+      startMs: span.startMs,
+      endMs: span.endMs,
+      label: clip.name,
+      mode: clip.vocal ? 'vocal' : 'broll',
+      prompt: clip.prompt,
+      songNotes: clip.songDetails,
+      imageNotes: clip.imageDetails,
+      imageOrder: clip.images,
+      workerId: short ? gpu3060 : null,
+      outdated: Boolean(row?.takePath),
+      error: null as string | null,
+      updatedAt: new Date(),
+    };
+    if (row) await ctx.db.update(longVideoScenes).set(values).where(eq(longVideoScenes.id, row.id));
+    else await ctx.db.insert(longVideoScenes).values({ projectId, ...values });
+  }
+  for (const extra of scenes.slice(parsed.plan.clips.length)) {
+    await ctx.db.delete(longVideoScenes).where(eq(longVideoScenes.id, extra.id));
+  }
+  const written = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
+  for (const name of parsed.plan.globalImages) {
+    const file = byKey.get(imageFileKey(name));
+    if (file) await addLongVideoRef(ctx, projectId, null, file);
+  }
+  for (let i = 0; i < parsed.plan.clips.length; i++) {
+    const scene = written[i];
+    if (!scene) continue;
+    for (const name of parsed.plan.clips[i]!.images) {
+      if (globalKeys.has(imageFileKey(name))) continue;
+      const file = byKey.get(imageFileKey(name));
+      if (file) await addLongVideoRef(ctx, projectId, scene.id, file);
+    }
+  }
+  return {
+    sceneCount: parsed.plan.clips.length,
+    globalImages: parsed.plan.globalImages,
+    songDifferenceMs: laid.songDifferenceMs,
+    shortSceneCount,
+    unusedImages,
+  };
+}
+
 export async function removeLongVideoRef(ctx: Ctx, projectId: string, refId: string) {
   await owned(ctx, projectId);
-  await ctx.db.delete(longVideoRefs).where(and(eq(longVideoRefs.id, refId), eq(longVideoRefs.projectId, projectId)));
+  const [ref] = await ctx.db
+    .select()
+    .from(longVideoRefs)
+    .where(and(eq(longVideoRefs.id, refId), eq(longVideoRefs.projectId, projectId)))
+    .limit(1);
+  if (!ref) return;
+  await ctx.db.delete(longVideoRefs).where(eq(longVideoRefs.id, ref.id));
+  if (ref.path.startsWith('long-videos/')) await rm(safeFile(ctx.env.attachmentsDir, ref.path), { force: true });
+}
+
+async function stopComfyPrompt(baseUrl: string, promptId: string) {
+  await fetch(new URL('/queue', baseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ delete: [promptId] }),
+    signal: AbortSignal.timeout(8_000),
+  }).catch(() => undefined);
+  try {
+    const res = await fetch(new URL('/queue', baseUrl), { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return;
+    const body = (await res.json()) as { queue_running?: unknown };
+    if (!JSON.stringify(body.queue_running ?? []).includes(promptId)) return;
+    await fetch(new URL('/interrupt', baseUrl), { method: 'POST', signal: AbortSignal.timeout(8_000) });
+  } catch {
+    /* The record is cancelled even when that PC cannot be reached. */
+  }
+}
+
+async function cancelGeneration(ctx: Ctx, jobId: string) {
+  const [job] = await ctx.db
+    .select()
+    .from(generationJobs)
+    .where(and(eq(generationJobs.id, jobId), eq(generationJobs.orgId, ctx.orgId)))
+    .limit(1);
+  if (!job || (job.status !== 'QUEUED' && job.status !== 'RUNNING')) return;
+  const workerId = (job.settings as { workerId?: string }).workerId;
+  if (job.promptId && workerId) {
+    const [worker] = await ctx.db
+      .select({ baseUrl: gpuWorkers.baseUrl })
+      .from(gpuWorkers)
+      .where(and(eq(gpuWorkers.id, workerId), eq(gpuWorkers.orgId, ctx.orgId)))
+      .limit(1);
+    if (worker) await stopComfyPrompt(worker.baseUrl, job.promptId);
+  }
+  await ctx.db
+    .update(generationJobs)
+    .set({ status: 'CANCELLED', error: 'Stopped from Long Videos.', finishedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(generationJobs.id, jobId), sql`${generationJobs.status} in ('QUEUED', 'RUNNING')`));
+  await ctx.db.execute(sql`
+    update long_video_scenes
+    set status = case when take_path is not null then 'READY' else 'DRAFT' end,
+        job_id = null, error = null, updated_at = now()
+    where job_id = ${jobId}::uuid and status in ('QUEUED', 'RUNNING')`);
+}
+
+export async function cancelLongVideoScene(ctx: Ctx, projectId: string, sceneId: string) {
+  await owned(ctx, projectId);
+  const [scene] = await ctx.db
+    .select()
+    .from(longVideoScenes)
+    .where(and(eq(longVideoScenes.id, sceneId), eq(longVideoScenes.projectId, projectId)))
+    .limit(1);
+  if (!scene) throw notFound('Scene');
+  if (scene.status !== 'QUEUED' && scene.status !== 'RUNNING') throw badRequest('This section is not generating.');
+  if (scene.jobId) await cancelGeneration(ctx, scene.jobId);
+  else {
+    await ctx.db
+      .update(longVideoScenes)
+      .set({ status: scene.takePath ? 'READY' : 'DRAFT', error: null, updatedAt: new Date() })
+      .where(eq(longVideoScenes.id, scene.id));
+  }
+  await ctx.db.update(longVideoProjects).set({ batchState: 'pause', updatedAt: new Date() }).where(eq(longVideoProjects.id, projectId));
+  return getLongVideo(ctx, projectId);
+}
+
+export async function deleteLongVideo(ctx: Ctx, projectId: string) {
+  const data = await getLongVideo(ctx, projectId);
+  const jobIds = [...new Set(data.scenes.filter((scene) => scene.jobId && (scene.status === 'QUEUED' || scene.status === 'RUNNING')).map((scene) => scene.jobId!))];
+  for (const jobId of jobIds) await cancelGeneration(ctx, jobId);
+  await ctx.db
+    .update(longVideoProjects)
+    .set({ archivedAt: new Date(), batchState: 'off', updatedAt: new Date() })
+    .where(eq(longVideoProjects.id, projectId));
+  return { ok: true as const };
 }
 
 export async function openLongVideoFile(ctx: Ctx, projectId: string, kind: 'audio' | 'export' | 'ref' | 'take' | 'prior-take', refId?: string) {
@@ -460,11 +833,11 @@ export async function longVideoClipParts(ctx: Ctx, projectId: string) {
   const parts: { name: string; abs?: string; jobId?: string }[] = [];
   for (const scene of data.scenes) {
     const name = sectionClipName(scene.position, scene.label);
+    const jobId = scene.shownJobId ?? (scene.status === 'READY' ? scene.jobId : null);
     if (scene.takePath?.startsWith('long-videos/')) {
-      parts.push({ name, abs: safeFile(ctx.env.attachmentsDir, scene.takePath) });
+      parts.push({ name, abs: safeFile(ctx.env.attachmentsDir, scene.takePath), jobId: jobId ?? undefined });
       continue;
     }
-    const jobId = scene.shownJobId ?? (scene.status === 'READY' ? scene.jobId : null);
     if (jobId) parts.push({ name, jobId });
   }
   if (!parts.length) throw badRequest('No section has a video yet.');
@@ -523,7 +896,7 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
     .where(and(eq(gpuWorkers.id, workerId), eq(gpuWorkers.orgId, ctx.orgId)))
     .limit(1);
   if (!worker) throw badRequest('That PC is no longer in Settings.');
-  const refs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId));
+  const refs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId)).orderBy(longVideoRefs.createdAt, longVideoRefs.id);
   let audioName = project.comfyAudioName;
   if (!audioName || project.comfyAudioWorkerId !== worker.id) {
     audioName = await uploadToWorker(worker.baseUrl, {
@@ -540,33 +913,40 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
     const slice = scene.endMs - scene.startMs;
     const planned = generationSeconds(slice);
     if (slice > 15_000) throw badRequest(planned.note ?? `Scene ${scene.position} is over 15 seconds. Split it before generating.`);
-    const picture = refs.find((ref) => ref.sceneId === scene.id) ?? refs.find((ref) => ref.sceneId == null);
-    if (!picture) throw badRequest(`Add a reference picture to scene ${scene.position}, or one shared picture for the project.`);
-    const imageName = await uploadToWorker(worker.baseUrl, {
-      bytes: await readFile(safeFile(ctx.env.attachmentsDir, picture.path)),
-      name: `lv_${picture.id.slice(0, 8)}.png`,
-      mime: 'image/png',
-    });
+    const pool = refs.filter((ref) => ref.sceneId === scene.id || ref.sceneId == null);
+    const pictures = orderByPlanName(pool, scene.imageOrder ?? []).slice(0, 8);
+    if (!pictures.length) throw badRequest(`Add a reference picture to scene ${scene.position}, or one shared picture for the project.`);
+    const images = [];
+    for (const picture of pictures) {
+      const imageName = await uploadToWorker(worker.baseUrl, {
+        bytes: await readFile(safeFile(ctx.env.attachmentsDir, picture.path)),
+        name: `lv_${picture.id.slice(0, 8)}.png`,
+        mime: 'image/png',
+      });
+      images.push({ fileId: null, uploadName: imageName, uploadWorkerId: worker.id, shared: picture.sceneId == null });
+    }
     segmentSeconds.push(planned.requestSec);
     segments.push({
       continuity: index === 0 ? 'shot' : 'context',
       taskMode,
       refImageSize: project.refSize === 'match' ? 'match' : 'max',
-      prompt: scene.prompt.trim().slice(0, 4000),
+      prompt: scene.prompt.trim(),
       audioFileId: null,
       audioUploadName: audioName,
       audioUploadWorkerId: worker.id,
       audioTrim: true,
       audioStartSec: scene.startMs / 1000,
-      audioUseSec: planned.requestSec,
+      audioUseSec: (scene.endMs - scene.startMs) / 1000,
       durationSec: planned.requestSec,
-      images: [{ fileId: null, uploadName: imageName, uploadWorkerId: worker.id, shared: false }],
+      images,
     });
   }
+  const studio = await ensureStudioProject(ctx, project);
   const [job] = await ctx.db
     .insert(generationJobs)
     .values({
       orgId: ctx.orgId,
+      projectId: studio.creativeProjectId,
       provider: 'comfyui-h3',
       status: 'QUEUED',
       settings: {
@@ -575,6 +955,10 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
         longVideoSceneIds: chosen.map((scene) => scene.id),
         segmentSeconds,
         workerId: worker.id,
+        projectName: studio.folder,
+        variantId: studio.variantId,
+        assetId: studio.assetId,
+        assetVersionId: studio.assetVersionId,
         aspectRatio: h3Aspect(project.aspect),
         megapixels: project.megapixels === 0.5 || project.megapixels === 1.5 ? project.megapixels : 1,
         audioLocked: true,

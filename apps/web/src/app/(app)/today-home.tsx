@@ -413,7 +413,7 @@ export function TodayHome({ onPlan }: { onPlan: () => void }) {
         </div>
 
         <div className="space-y-4">
-          <Panel title="AI Co-Pilot" href="/comfy" link="Create Studio">
+          <Panel title="AI Co-Pilot" href="/comfy" link="Creative Studio">
             <p className="text-sm text-muted">No chat model is connected. These open the tools that already exist. Nothing here invents a reply.</p>
             <ul className="mt-3 space-y-2 text-sm font-semibold">
               <li><Link href="/content" className="hover:underline">Give me content ideas for next week</Link></li>
@@ -429,7 +429,7 @@ export function TodayHome({ onPlan }: { onPlan: () => void }) {
             >
               <input value={ask} onChange={(event) => setAsk(event.target.value)} placeholder="Ask anything…" className="min-h-11 w-full rounded-full border border-border bg-transparent px-4 text-sm" />
             </form>
-            {asked ? <p className="mt-2 text-xs text-muted">A chat model is not configured, so this was not sent. Use Create Studio or Content for the work itself.</p> : null}
+            {asked ? <p className="mt-2 text-xs text-muted">A chat model is not configured, so this was not sent. Use Creative Studio or Content for the work itself.</p> : null}
           </Panel>
           <Panel title="Growth at a glance" href="/analytics" link="Analytics">
             {(data?.metrics.length ?? 0) === 0 ? (

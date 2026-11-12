@@ -97,6 +97,19 @@ export function planFileOperation(input: {
   return { fromPath, toPath, rootId: dest.id, fileName: baseName(toPath), ext: extName(toPath) };
 }
 
+/** A confirmed folder delete. The folder has to sit inside an indexed root, and it cannot be that root. */
+export function planFolderDelete(input: { displayPath: string; os: PathOs; roots: FileOpRoot[] }): PlannedFileOp {
+  const fromPath = separators(input.displayPath.trim(), input.os).replace(/[\\/]+$/, '');
+  if (!fromPath) throw new FileOpError('This folder has no path.');
+  const key = canonicalPath(fromPath, input.os);
+  const source = longestRoot(input.roots, key, input.os);
+  if (!source) throw new FileOpError('This folder is outside the folders this machine is indexing.');
+  if (key === canonicalPath(source.displayPath, input.os) || key === source.canonicalPath)
+    throw new FileOpError('That is a whole folder this machine is indexing. Delete a folder inside it.');
+  const name = baseName(fromPath);
+  return { fromPath, toPath: null, rootId: source.id, fileName: name, ext: '' };
+}
+
 const PUBLISH_UPLOAD_EXT = new Set(['mp4', 'mov', 'mkv', 'webm', 'm4v']);
 
 /** Path for one new video the owner uploads into a folder this machine already indexes. */

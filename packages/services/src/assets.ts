@@ -238,9 +238,17 @@ export async function listAssets(
   }
   const rows = rowsOf<any>(
     await ctx.db.execute(sql`
-      select a.id, a.title, a.kind, a.creative_state as "creativeState", a.brand_id as "brandId", a.project_id as "projectId",
+      select a.id, a.title, a.kind, a.source, a.creative_state as "creativeState", a.brand_id as "brandId", a.project_id as "projectId",
              a.selected_version_id as "selectedVersionId", a.created_at as "createdAt",
              a.device_id as "deviceId", d.display_name as "deviceName",
+             case when a.source = 'folder' then (
+               select left(f.display_path, length(f.display_path) - length(f.file_name) - 1)
+               from asset_file_links l
+               join asset_versions v on v.id = l.asset_version_id
+               join file_instances f on f.id = l.file_instance_id
+               where v.asset_id = a.id and f.archived_at is null
+               limit 1
+             ) end as "folderPath",
              (select max(f.mtime) from asset_file_links l join asset_versions v on v.id = l.asset_version_id join file_instances f on f.id = l.file_instance_id where v.asset_id = a.id) as "lastModified",
              (select count(*)::int from asset_versions v where v.asset_id = a.id) as "versionCount",
              (select count(*)::int from asset_versions v join asset_file_links l on l.asset_version_id = v.id where v.asset_id = a.id) as "fileCount"

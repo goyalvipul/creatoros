@@ -22,7 +22,7 @@ export const NAV = [
   { href: '/today', label: 'Inbox & Today', v5: 'Inbox & Tasks', group: 'work', icon: Inbox },
   { href: '/content', label: 'Content', v5: 'Content', group: 'work', icon: Lightbulb },
   { href: '/production', label: 'Production', v5: 'Production', group: 'work', icon: Clapperboard },
-  { href: '/comfy', label: 'ComfyUI', v5: 'Create Studio', group: 'work', icon: Cpu },
+  { href: '/comfy', label: 'ComfyUI', v5: 'Creative Studio', group: 'work', icon: Cpu },
   { href: '/library', label: 'Library', v5: 'Library', group: 'work', icon: FolderKanban },
   { href: '/publishing', label: 'Publishing', v5: 'Publishing', group: 'work', icon: Share2 },
   { href: '/calendar', label: 'Calendar', v5: 'Calendar', group: 'work', icon: CalendarDays },

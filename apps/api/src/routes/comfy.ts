@@ -16,8 +16,8 @@ const form = z.object({
   audioFileId: uuid.nullable(),
   audioStartSec: z.number().min(0).max(3600),
   durationSec: z.number().positive().max(120),
-  prompt: z.string().max(20000),
-  negativePrompt: z.string().max(20000),
+  prompt: z.string(),
+  negativePrompt: z.string(),
   width: z.number().int().min(64).max(2048),
   height: z.number().int().min(64).max(2048),
   fps: z.number().int().min(1).max(60),
@@ -36,7 +36,7 @@ const form = z.object({
 });
 
 export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
-  await app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024, files: 1 } });
+  await app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024, files: 41 } });
   const route = makeRouter(app, deps);
   const idParam = z.object({ id: uuid });
 
@@ -52,8 +52,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     audioUploadWorkerId: uuid.nullable(),
     useBuiltin: z.boolean(),
     builtinClip: z.enum(['mehakdeepvoice.wav', 'MehakDeep.wav', 'MehakNormal.wav']).default('mehakdeepvoice.wav'),
-    referenceText: z.string().max(50000),
-    targetText: z.string().max(20000),
+    referenceText: z.string(),
+    targetText: z.string(),
   });
   route(
     { method: 'GET', url: '/comfy/audio', tag: 'ComfyUI', summary: 'Voice clone studio: machines, draft and recent jobs', role: 'OWNER' },
@@ -94,7 +94,7 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     continuity: z.enum(['shot', 'context', 'context_swap']),
     taskMode: z.enum(['i2v', 'ref', 'v2v', 'l2v']),
     refImageSize: z.enum(['max', 'match']).default('max'),
-    prompt: z.string().max(50000),
+    prompt: z.string(),
     audioFileId: uuid.nullable(),
     audioUploadName: z.string().max(300).nullable(),
     audioUploadWorkerId: uuid.nullable(),
@@ -110,16 +110,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     imageFileId: uuid.nullable(),
     imageUploadName: z.string().max(300).nullable(),
     imageUploadWorkerId: uuid.nullable(),
-    prompt: z.string().max(50000),
-    aspectRatio: z.enum([
-      '9:16 (Portrait Widescreen)',
-      '16:9 (Landscape Widescreen)',
-      '1:1 (Square)',
-      '3:4 (Portrait)',
-      '4:3 (Landscape)',
-      '2:3 (Portrait)',
-      '3:2 (Landscape)',
-    ]),
+    prompt: z.string(),
+    aspectRatio: z.string().min(1).max(80),
     megapixels: z.union([z.literal(0.5), z.literal(1), z.literal(1.5)]),
     audioLocked: z.boolean(),
     shareAudio: z.boolean(),
@@ -273,12 +265,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     if (!req.session) throw unauthorized();
     if (req.session.role !== 'OWNER') throw forbidden();
     const { id } = idParam.parse(req.params);
-    const { upstream, filename } = await openQwenAudio(deps.db, req.session.orgId, id);
-    if (upstream.status >= 400) {
-      throw new AppError(502, 'COMFY_AUDIO', 'The voice is not ready to play from that PC.');
-    }
-    const raw = Buffer.from(await upstream.arrayBuffer());
-    const playable = toPlayableAudio(filename, raw);
+    const { bytes, filename } = await openQwenAudio(deps.db, deps.config.env.attachmentsDir, req.session.orgId, id);
+    const playable = toPlayableAudio(filename, bytes);
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
     const sliced = sliceAudioRange(playable.body, range);
     reply.header('content-type', playable.type);

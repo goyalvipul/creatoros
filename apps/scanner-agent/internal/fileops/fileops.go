@@ -1,6 +1,8 @@
 // Package fileops is the only place the agent changes an original file.
-// It renames, moves, or deletes one regular file after the owner confirmed that exact path.
+// It renames, moves, or deletes one regular file, or deletes one folder and everything inside it,
+// after the owner confirmed that exact path.
 // The path has to stay inside a folder this agent is already allowed to index.
+// A folder delete cannot remove that whole indexed folder.
 // It does not run a shell, follow a link out of that folder, or replace a file that is already there.
 package fileops
 
@@ -26,8 +28,11 @@ func Apply(roots []protocol.RootConfig, kind, from, to string, size int64) error
 	if !filepath.IsAbs(from) || rootFor(roots, from) == nil {
 		return errors.New("that file is outside the folders this PC is indexing")
 	}
-	if kind != "DELETE" && kind != "RENAME" && kind != "MOVE" {
+	if kind != "DELETE" && kind != "DELETE_FOLDER" && kind != "RENAME" && kind != "MOVE" {
 		return errors.New("unknown file change")
+	}
+	if kind == "DELETE_FOLDER" {
+		return deleteFolder(roots, from)
 	}
 
 	info, err := os.Lstat(from)
@@ -84,6 +89,31 @@ func Apply(roots []protocol.RootConfig, kind, from, to string, size int64) error
 		if errors.Is(err, syscall.EXDEV) {
 			return errors.New("that folder is on a different drive. Move the file on the same drive")
 		}
+		return friendly(err)
+	}
+	return nil
+}
+
+func deleteFolder(roots []protocol.RootConfig, from string) error {
+	root := rootFor(roots, from)
+	if root == nil || samePath(from, root.DisplayPath) {
+		return errors.New("that is a whole folder this PC is indexing. Delete a folder inside it")
+	}
+	info, err := os.Lstat(from)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return friendly(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("Creator OS will not delete a shortcut or a file this way")
+	}
+	resolved, err := filepath.EvalSymlinks(from)
+	if err != nil || rootFor(roots, resolved) == nil || samePath(resolved, root.DisplayPath) {
+		return errors.New("that folder points outside an indexed folder")
+	}
+	if err := os.RemoveAll(resolved); err != nil {
 		return friendly(err)
 	}
 	return nil

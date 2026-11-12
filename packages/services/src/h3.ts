@@ -16,9 +16,10 @@ import {
   type H3SegmentDraft,
   type H3TaskMode,
 } from '@creatoros/db';
+import { h3AspectRatio } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
-import { linkRecentGeneratedOutputs, machineQueue } from './comfy';
+import { fileForWorker, linkRecentGeneratedOutputs, machineQueue, readComfyInputCopy } from './comfy';
 import { notifyGenerationReady } from './notifications';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
@@ -36,16 +37,6 @@ export function h3AudioFrames(segmentFrames: number, spanSec: number | null): nu
 }
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
-
-export const H3_ASPECTS = [
-  '9:16 (Portrait Widescreen)',
-  '16:9 (Landscape Widescreen)',
-  '1:1 (Square)',
-  '3:4 (Portrait)',
-  '4:3 (Landscape)',
-  '2:3 (Portrait)',
-  '3:2 (Landscape)',
-] as const;
 
 export interface H3Form {
   projectId: string | null;
@@ -187,7 +178,7 @@ export function buildH3Prompt(
   });
   if (editor?.inputs) {
     editor.inputs.resolution = 'width x height (megapixels)';
-    editor.inputs['resolution.aspect_ratio'] = input.aspectRatio;
+    editor.inputs['resolution.aspect_ratio'] = h3AspectRatio(input.aspectRatio) ?? input.aspectRatio;
     editor.inputs['resolution.megapixels'] = input.megapixels;
     editor.inputs.format = 'MiniMax';
     editor.inputs.track_data = JSON.stringify({
@@ -278,11 +269,13 @@ async function listH3Jobs(db: Db, orgId: string) {
     error: string | null;
     createdAt: Date;
     projectId: string | null;
+    brandId: string | null;
     projectTitle: string | null;
     settings: Record<string, unknown>;
   }>(
     await db.execute(sql`
       select j.id, j.status, j.error, j.created_at as "createdAt", j.project_id as "projectId",
+             p.brand_id as "brandId",
              coalesce(p.title, j.settings->>'projectTitle') as "projectTitle", j.settings
       from generation_jobs j
       left join creative_projects p on p.id = j.project_id and p.org_id = j.org_id and p.deleted_at is null
@@ -303,6 +296,7 @@ async function listH3Jobs(db: Db, orgId: string) {
 }
 
 export async function saveH3Draft(ctx: Ctx, form: H3Form) {
+  applyAspect(form);
   const now = ctx.now();
   const values = {
     projectId: form.projectId,
@@ -357,9 +351,15 @@ function normalizeSegments(raw: unknown, fallbackPrompt: string, fallbackImage: 
   });
 }
 
+function applyAspect(form: H3Form) {
+  const aspect = h3AspectRatio(form.aspectRatio);
+  if (!aspect) throw badRequest('Choose a resolution from the list.');
+  form.aspectRatio = aspect;
+}
+
 function checkForm(form: H3Form) {
   if (!form.workerId) throw badRequest('Choose the PC first.');
-  if (!H3_ASPECTS.includes(form.aspectRatio as (typeof H3_ASPECTS)[number])) throw badRequest('Choose a resolution from the list.');
+  applyAspect(form);
   if (![0.5, 1, 1.5].includes(form.megapixels)) throw badRequest('Choose 0.5, 1, or 1.5 megapixels.');
   if (!form.segments.length) throw badRequest('Add a segment.');
   if (form.segments.length > MAX_SEGMENTS) throw badRequest(`The timeline can take at most ${MAX_SEGMENTS} segments.`);
@@ -463,6 +463,13 @@ async function loadAudioBytes(
   }
   const name = segment.audioUploadName;
   if (!name || name.includes('..') || name.includes('\\') || name.startsWith('/')) throw badRequest(`${label} is not on the PC.`);
+  if (segment.audioUploadWorkerId) {
+    const copy = await readComfyInputCopy(env.attachmentsDir, orgId, segment.audioUploadWorkerId, name);
+    if (copy) {
+      const slash = name.lastIndexOf('/');
+      return { bytes: copy, name: slash >= 0 ? name.slice(slash + 1) : name, mime: 'application/octet-stream' };
+    }
+  }
   const slash = name.lastIndexOf('/');
   const filename = slash >= 0 ? name.slice(slash + 1) : name;
   const subfolder = slash >= 0 ? name.slice(0, slash) : '';
@@ -536,6 +543,7 @@ interface H3Job {
     audioLocked?: boolean;
     segments?: H3SegmentDraft[];
     filenamePrefix?: string;
+    projectName?: string;
     progress?: { phase: string; detail: string };
     outputs?: { node: string; filename: string; subfolder: string; type: string }[];
   };
@@ -570,8 +578,13 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
     if (!worker?.enabled) throw badRequest('The PC for this job is no longer in the list.');
     const segments = settings.segments ?? [];
     const names = new Map<string, string>();
-    const place = async (fileId: string | null | undefined, uploadName: string | null | undefined, label: string) => {
-      const key = fileId ? `file:${fileId}` : uploadName ? `upload:${uploadName}` : '';
+    const place = async (
+      fileId: string | null | undefined,
+      uploadName: string | null | undefined,
+      uploadWorkerId: string | null | undefined,
+      label: string,
+    ) => {
+      const key = fileId ? `file:${fileId}` : uploadName ? `upload:${uploadWorkerId ?? ''}:${uploadName}` : '';
       if (!key) return null;
       const cached = names.get(key);
       if (cached) return cached;
@@ -579,6 +592,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       if (fileId) {
         const opened = await openAgentFile(db, env, claimed.orgId, fileId);
         stored = await uploadBytes(worker.baseUrl, await readStream(opened.body, opened.name, opened.mime, `${claimed.id}-${names.size}`, label));
+      } else if (uploadName) {
+        stored = await fileForWorker(env.attachmentsDir, claimed.orgId, worker, { name: uploadName, workerId: uploadWorkerId });
       }
       if (stored) names.set(key, stored);
       return stored;
@@ -588,7 +603,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       const segment = segments[i]!;
       const imageNames: { name: string; shared: boolean }[] = [];
       for (const image of segment.images ?? []) {
-        const name = await place(image.fileId, image.uploadName, `Segment ${i + 1} picture`);
+        const name = await place(image.fileId, image.uploadName, image.uploadWorkerId, `Segment ${i + 1} picture`);
         if (name) imageNames.push({ name, shared: image.shared === true });
       }
       if (!imageNames.length) throw badRequest(`Segment ${i + 1} has no picture.`);
@@ -602,7 +617,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         audioName = await uploadBytes(worker.baseUrl, cut);
         audioSpanSec = use;
       } else {
-        audioName = await place(segment.audioFileId, segment.audioUploadName, `Segment ${i + 1} audio`);
+        audioName = await place(segment.audioFileId, segment.audioUploadName, segment.audioUploadWorkerId, `Segment ${i + 1} audio`);
       }
       const durationSec = await durationOf(db, claimed.orgId, segment.audioFileId, segment.durationSec);
       if (durationSec == null) throw badRequest(`Enter how many seconds segment ${i + 1} is. Its length was not scanned.`);
@@ -618,7 +633,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         audioSpanSec,
       });
     }
-    const projectName = `cos${claimed.id.replace(/-/g, '').slice(0, 12)}`;
+    const named = typeof settings.projectName === 'string' ? settings.projectName.trim() : '';
+    const projectName = named || `cos${claimed.id.replace(/-/g, '').slice(0, 12)}`;
     const seed = Math.floor(Math.random() * 1_000_000_000_000_000);
     const prompt = buildH3Prompt(workflow.graph, {
       projectName,
@@ -628,6 +644,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       megapixels: settings.megapixels || 1,
       audioLocked: settings.audioLocked !== false,
     });
+    const live = rowsOf<{ status: string }>(await db.execute(sql`select status from generation_jobs where id = ${claimed.id}`))[0];
+    if (live?.status !== 'RUNNING') return { skipped: true };
     const res = await fetch(new URL('/prompt', worker.baseUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -644,12 +662,24 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       ? `ComfyUI rejected node ${nodeError[0]}. ${JSON.stringify(nodeError[1]).slice(0, 500)}`
       : body.error?.message;
     if (!res.ok || rejected || !body.prompt_id) throw badRequest(rejected || `ComfyUI did not start the video (${res.status}).`);
-    await db.execute(sql`
-      update generation_jobs
-      set prompt_id = ${body.prompt_id}, external_job_id = ${body.prompt_id},
-          settings = settings || ${JSON.stringify({ projectName, seed })}::jsonb,
-          updated_at = now()
-      where id = ${claimed.id}`);
+    const posted = rowsOf<{ id: string }>(
+      await db.execute(sql`
+        update generation_jobs
+        set prompt_id = ${body.prompt_id}, external_job_id = ${body.prompt_id},
+            settings = settings || ${JSON.stringify({ projectName, seed })}::jsonb,
+            updated_at = now()
+        where id = ${claimed.id} and status = 'RUNNING'
+        returning id`),
+    );
+    if (!posted.length) {
+      await fetch(new URL('/queue', worker.baseUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ delete: [body.prompt_id] }),
+        signal: AbortSignal.timeout(8_000),
+      }).catch(() => undefined);
+      return { skipped: true };
+    }
     return { promptId: body.prompt_id };
   } catch (e) {
     const message = e instanceof AppError ? e.message : e instanceof Error ? e.message : 'The video did not start.';

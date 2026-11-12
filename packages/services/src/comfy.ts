@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { resolve } from 'node:path';
 import {
   assetFileLinks,
@@ -363,11 +365,13 @@ export async function getLtxStudio(ctx: Ctx) {
     error: string | null;
     createdAt: Date;
     projectId: string | null;
+    brandId: string | null;
     projectTitle: string | null;
     settings: Record<string, unknown>;
   }>(
     await ctx.db.execute(sql`
       select j.id, j.status, j.error, j.created_at as "createdAt", j.project_id as "projectId",
+             p.brand_id as "brandId",
              coalesce(p.title, j.settings->>'projectTitle') as "projectTitle", j.settings
       from generation_jobs j
       left join creative_projects p on p.id = j.project_id and p.org_id = j.org_id and p.deleted_at is null
@@ -508,7 +512,9 @@ export async function generateLtx(ctx: Ctx, form: LtxForm) {
         upscaleScale: form.upscaleScale ?? 2,
         wantUpscale: form.wantUpscale,
         imageUploadName: form.imageFileId ? null : form.imageUploadName,
+        imageUploadWorkerId: form.imageFileId ? null : form.imageUploadWorkerId,
         audioUploadName: form.audioFileId ? null : form.audioUploadName,
+        audioUploadWorkerId: form.audioFileId ? null : form.audioUploadWorkerId,
         prompt: form.prompt,
         negativePrompt: form.negativePrompt,
       },
@@ -553,7 +559,9 @@ interface LtxSettings {
   upscaleScale?: number;
   wantUpscale?: boolean;
   imageUploadName?: string | null;
+  imageUploadWorkerId?: string | null;
   audioUploadName?: string | null;
+  audioUploadWorkerId?: string | null;
   filenamePrefix?: string;
   projectTitle?: string | null;
   progress?: { phase: string; value: number | null; max: number | null; detail: string };
@@ -627,7 +635,61 @@ const UPLOAD_EXT = {
   audio: /\.(mp3|wav|flac|m4a|aac|ogg)$/i,
 } as const;
 
-/** Puts one image or audio file into that PC’s ComfyUI input folder. The original on any other machine is not touched. */
+/** Relative path of the copy kept here, so Generate can send it to a different PC. */
+export function comfyInputCopyRel(orgId: string, workerId: string, comfyName: string): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(orgId) || !/^[0-9a-f-]{36}$/i.test(workerId)) return null;
+  const file = (comfyName.split(/[/\\]/).pop() ?? '').replace(/[^A-Za-z0-9._-]+/g, '');
+  if (!file || file.length > 180) return null;
+  return `comfy-inputs/${orgId}/${workerId}/${file}`;
+}
+
+function copyAbs(dir: string, rel: string) {
+  const root = path.resolve(dir);
+  const abs = path.resolve(root, rel);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  return abs;
+}
+
+export async function keepComfyInputCopy(dir: string, orgId: string, workerId: string, comfyName: string, bytes: Buffer) {
+  const rel = comfyInputCopyRel(orgId, workerId, comfyName);
+  const abs = rel ? copyAbs(dir, rel) : null;
+  if (!abs) return;
+  await mkdir(path.dirname(abs), { recursive: true });
+  await writeFile(abs, bytes);
+}
+
+export async function readComfyInputCopy(dir: string, orgId: string, workerId: string, comfyName: string) {
+  const rel = comfyInputCopyRel(orgId, workerId, comfyName);
+  const abs = rel ? copyAbs(dir, rel) : null;
+  if (!abs || !existsSync(abs)) return null;
+  return readFile(abs);
+}
+
+/** The file name on the PC that will render. A kept copy is sent when this PC is not the one that first received the upload. */
+export async function fileForWorker(
+  dir: string,
+  orgId: string,
+  target: { id: string; baseUrl: string },
+  upload: { name: string | null | undefined; workerId: string | null | undefined },
+) {
+  const name = upload.name?.trim();
+  if (!name) return null;
+  const from = upload.workerId ?? null;
+  if (from) {
+    const bytes = await readComfyInputCopy(dir, orgId, from, name);
+    if (bytes) {
+      return uploadToComfy(target.baseUrl, {
+        bytes,
+        name: name.split(/[/\\]/).pop() || 'file',
+        mime: 'application/octet-stream',
+      });
+    }
+  }
+  if (!from || from === target.id) return name;
+  throw badRequest('That file was uploaded to the other PC before a copy was kept. Upload it once more, then generate on the PC you picked.');
+}
+
+/** Puts one image or audio file into that PC’s ComfyUI input folder and keeps a copy here. The original on any other machine is not touched. */
 export async function uploadLtxInput(
   ctx: Ctx,
   workerId: string,
@@ -642,6 +704,7 @@ export async function uploadLtxInput(
     throw badRequest(kind === 'image' ? 'Upload a png, jpg, or webp image.' : 'Upload an mp3, wav, flac, m4a, aac, or ogg file.');
   }
   const name = await uploadToComfy(worker.baseUrl, { bytes: file.bytes, name: `cos_up_${base}`, mime: file.mime || 'application/octet-stream' });
+  await keepComfyInputCopy(ctx.env.attachmentsDir, ctx.orgId, worker.id, name, file.bytes);
   return { name, workerId: worker.id, label: worker.label };
 }
 
@@ -700,10 +763,10 @@ export async function submitLtxJob(db: Db, env: ServiceEnv, jobId: string) {
     if (!worker?.enabled) throw badRequest('The PC for this job is no longer in the list.');
     const imageName = settings.imageFileId
       ? await uploadToComfy(worker.baseUrl, await readUpload(await openAgentFile(db, env, claimed.orgId, String(settings.imageFileId)), claimed.id))
-      : settings.imageUploadName;
+      : await fileForWorker(env.attachmentsDir, claimed.orgId, worker, { name: settings.imageUploadName, workerId: settings.imageUploadWorkerId });
     const audioName = settings.audioFileId
       ? await uploadToComfy(worker.baseUrl, await readUpload(await openAgentFile(db, env, claimed.orgId, String(settings.audioFileId)), claimed.id))
-      : settings.audioUploadName;
+      : await fileForWorker(env.attachmentsDir, claimed.orgId, worker, { name: settings.audioUploadName, workerId: settings.audioUploadWorkerId });
     if (!imageName || !audioName) throw badRequest('The image or the song is no longer attached to this clip.');
     const prefix = `CreatorOS/ltx_${claimed.id.slice(0, 8)}`;
     const seed = Math.floor(Math.random() * 1_000_000_000_000_000);

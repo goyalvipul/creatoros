@@ -53,6 +53,23 @@ describe('MiniMax H3 graph', () => {
     expect(task.segments[1]?.content.continuity_mode).toBe('context');
     expect(task.segments[0]?.content.user_prompt).toBe('Look at <Picture 1>.');
     expect(prompt['29']?.inputs?.['resolution.aspect_ratio']).toBe('9:16 (Portrait Widescreen)');
+    const wide = buildH3Prompt(graph, {
+      projectName: 'coswide',
+      seed: 1,
+      segments: [
+        {
+          continuity: 'shot',
+          taskMode: 'ref',
+          prompt: 'Wide.',
+          images: [{ name: 'mehak.png', shared: false }],
+          durationSec: 8,
+        },
+      ],
+      aspectRatio: '16:9 (Landscape Widescreen)',
+      megapixels: 1,
+      audioLocked: false,
+    });
+    expect(wide['29']?.inputs?.['resolution.aspect_ratio']).toBe('16:9 (Widescreen)');
     expect(prompt['29']?.inputs?.['resolution.megapixels']).toBe(1);
     expect(task.segments[1]?.content.user_prompt).toBe('Keep talking.');
     expect(task.segments[0]?.content.ref_image_size).toBe('max');

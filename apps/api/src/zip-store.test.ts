@@ -12,6 +12,9 @@ describe('zipStored', () => {
     for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     const body = Buffer.concat(chunks);
     expect(body.readUInt32LE(0)).toBe(0x04034b50);
+    expect(body.readUInt16LE(6)).toBe(0);
+    expect(body.readUInt16LE(10)).not.toBe(0);
+    expect(body.readUInt32LE(18)).toBe(3);
     expect(body.includes(Buffer.from('01-verse.mp4'))).toBe(true);
     expect(body.includes(Buffer.from('02-chorus.mp4'))).toBe(true);
     expect(body.includes(Buffer.from('one'))).toBe(true);

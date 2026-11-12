@@ -1246,11 +1246,14 @@ function AssetFiles({
   onOpen,
   onVersions,
 }: {
-  asset: { id: string; title: string; kind?: string; deviceName?: string; fileCount?: number };
+  asset: { id: string; title: string; kind?: string; deviceName?: string; fileCount?: number; source?: string; folderPath?: string | null };
   onBack: () => void;
   onOpen: (id: string) => void;
   onVersions: () => void;
 }) {
+  const me = useMe();
+  const toast = useToast();
+  const [confirmFolder, setConfirmFolder] = useState(false);
   const [q, setQ] = useState('');
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const [attach, setAttach] = useState<any | null>(null);
@@ -1271,6 +1274,9 @@ function AssetFiles({
           </p>
         </div>
         <Button onClick={onVersions}>Versions</Button>
+        {me.data?.user?.role === 'OWNER' && asset.source === 'folder' && asset.folderPath ? (
+          <Button onClick={() => setConfirmFolder(true)}>Delete folder</Button>
+        ) : null}
       </div>
       <div className="relative mb-4 max-w-md">
         <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted" />
@@ -1285,6 +1291,24 @@ function AssetFiles({
           }}
         />
       </div>
+      <FormDialog
+        open={confirmFolder}
+        onClose={() => setConfirmFolder(false)}
+        title="Delete this folder from the PC?"
+        submitLabel="Delete folder"
+        danger
+        onSubmit={async () => {
+          await post(`/assets/${asset.id}/delete-folder`);
+          toast.ok('Folder delete queued on this PC');
+          setConfirmFolder(false);
+        }}
+      >
+        <Notice tone="warn" title="This deletes the folder and every file inside it">
+          Nothing goes to the Recycle Bin. Subfolders go too. Posts that already went out stay.
+          {asset.deviceName ? ` Runs on ${asset.deviceName} when that PC is on.` : ''}
+        </Notice>
+        <p className="break-all font-mono text-xs text-muted">{asset.folderPath}</p>
+      </FormDialog>
       {cursors.map((cursor, i) => (
         <FilePage
           key={`${i}-${asset.id}-${q}`}

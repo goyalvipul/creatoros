@@ -1,0 +1,1 @@
+ALTER TYPE "file_operation_kind" ADD VALUE IF NOT EXISTS 'DELETE_FOLDER';

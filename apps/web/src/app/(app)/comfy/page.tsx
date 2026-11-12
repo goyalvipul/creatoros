@@ -7,7 +7,7 @@ import { FileDownload } from '@/components/file-download';
 import { VideoTrim } from '@/components/video-trim';
 import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
-import { LTX_UPSCALE_QUALITIES, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
+import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
 import { clipBounds, clipPlayback } from '@/lib/audio-clip';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
@@ -317,6 +317,7 @@ type Studio = {
   jobs: {
     id: string;
     projectId?: string | null;
+    brandId?: string | null;
     projectTitle?: string | null;
     status: string;
     outcome: string;
@@ -462,7 +463,7 @@ export default function ComfyPage() {
   return (
     <div>
       <PageHeader
-        title={v5 ? 'Create Studio' : 'ComfyUI'}
+        title={v5 ? 'Creative Studio' : 'ComfyUI'}
         subtitle={v5 ? undefined : 'Fill the clip and generate only when you press the button. PCs are added under Settings.'}
       />
       {v5 ? (
@@ -522,7 +523,7 @@ function StudioBody({
         <H3Tab onHistory={onHistory} />
       </div>
       <div hidden={tab !== 'long'}>
-        <LongVideos />
+        <LongVideos active={tab === 'long'} />
       </div>
       <div hidden={tab !== 'history'}>
         <HistoryTab onUse={onUse} />
@@ -537,6 +538,14 @@ function StudioBody({
       </div>
     </>
   );
+}
+
+function voiceSrc(job: { id: string; status: string; settings?: { localAudio?: string | null; outputs?: { type?: string; filename?: string }[] } } | null) {
+  if (!job || job.status !== 'SUCCEEDED') return null;
+  if (typeof job.settings?.localAudio === 'string' && job.settings.localAudio) return `/api/v1/comfy/jobs/${job.id}/audio`;
+  const outputs = (job.settings?.outputs ?? []).filter((item) => !item.filename || /\.(wav|mp3|flac|ogg|m4a)$/i.test(item.filename));
+  if (outputs.length > 0 && outputs.every((item) => item.type === 'temp')) return null;
+  return `/api/v1/comfy/jobs/${job.id}/audio`;
 }
 
 function jobLabel(status: string, progress?: { phase?: string } | null) {
@@ -554,8 +563,9 @@ function useWorkspaceProjectIds() {
   return { ready: Boolean(id && projects.data), ids, workspaceId: id };
 }
 
-function inWorkspace(job: { projectId?: string | null }, scope: { ready: boolean; ids: Set<string> }) {
+function inWorkspace(job: { projectId?: string | null; brandId?: string | null }, scope: { ready: boolean; ids: Set<string> }) {
   if (!scope.ready || !job.projectId) return true;
+  if ('brandId' in job && job.brandId == null) return true;
   return scope.ids.has(job.projectId);
 }
 
@@ -2125,8 +2135,10 @@ function StudioResult({
     <>
       {ready && kind === 'video' ? (
         <video className="studio-picture" controls playsInline preload="metadata" src={`/api/v1/comfy/jobs/${job.id}/video`} />
+      ) : ready && kind === 'audio' && voiceSrc(job) ? (
+        <audio className="w-full" controls preload="none" src={voiceSrc(job) ?? undefined} />
       ) : ready && kind === 'audio' ? (
-        <audio className="w-full" controls src={`/api/v1/comfy/jobs/${job.id}/audio`} />
+        <p className="grid min-h-24 place-items-center text-center text-xs text-muted">This voice was only a preview on the PC and is no longer there. Generate it again.</p>
       ) : fallback || job?.settings.imageFileId ? (
         <Still fileId={job?.settings.imageFileId ?? null} src={fallback} className="studio-picture" />
       ) : (
@@ -2491,6 +2503,11 @@ function ProjectPick({
   const [error, setError] = useState('');
   const listed = Array.isArray(projects.data) ? projects.data : [];
   const rows = [...made.filter((item) => !listed.some((p) => p.id === item.id)), ...listed];
+  const known = !value || rows.some((project) => project.id === value);
+  useEffect(() => {
+    if (!value || !projects.data || known) return;
+    onChange(null);
+  }, [value, projects.data, known, onChange]);
   const control = (
     <>
       <Select
@@ -2599,8 +2616,10 @@ function LastOnMachine({
           {job.status === 'SUCCEEDED' ? (
             kind === 'video' ? (
               <VideoThumb src={`/api/v1/comfy/jobs/${job.id}/video`} className="w-full max-w-sm" />
+            ) : voiceSrc(job) ? (
+              <audio className="w-full" controls preload="none" src={voiceSrc(job) ?? undefined} />
             ) : (
-              <audio className="w-full" controls src={`/api/v1/comfy/jobs/${job.id}/audio`} />
+              <p className="text-xs text-muted">This voice was only a preview on the PC and is no longer there. Generate it again.</p>
             )
           ) : null}
           {file?.fileId ? (
@@ -3061,16 +3080,6 @@ const H3_JOINS: { id: H3Join; label: string }[] = [
   { id: 'context_swap', label: 'Swap Context' },
 ];
 
-const H3_ASPECTS = [
-  '9:16 (Portrait Widescreen)',
-  '16:9 (Landscape Widescreen)',
-  '1:1 (Square)',
-  '3:4 (Portrait)',
-  '4:3 (Landscape)',
-  '2:3 (Portrait)',
-  '3:2 (Landscape)',
-];
-
 function h3ModeLabel(mode: H3Mode) {
   return H3_MODES.find((item) => item.id === mode)?.label ?? mode;
 }
@@ -3376,7 +3385,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
         workers.find((w) => w.role === 'primary')?.id ??
         null,
       view: 'individual',
-      aspectRatio: data.draft?.aspectRatio || '9:16 (Portrait Widescreen)',
+      aspectRatio: h3AspectRatio(data.draft?.aspectRatio || '') ?? '9:16 (Portrait Widescreen)',
       megapixels: data.draft?.megapixels || 1,
       audioLocked: data.draft?.audioLocked !== false,
       shareAudio: data.draft?.shareAudio === true,

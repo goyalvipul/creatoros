@@ -1,5 +1,5 @@
 import { sql, type Db } from '@creatoros/db';
-import { planFileOperation, canonicalPath, isInsideRoot, type PathOs, FileOpError } from '@creatoros/domain';
+import { planFileOperation, planFolderDelete, canonicalPath, dirName, isInsideRoot, pathSeparator, type PathOs, FileOpError } from '@creatoros/domain';
 import { syncFolderAssets } from './assets';
 import { audit } from './audit';
 import type { AuthedAgent } from './devices';
@@ -123,6 +123,72 @@ export async function requestFileOperation(
   }
 }
 
+export async function requestFolderDelete(ctx: Ctx, assetId: string) {
+  const asset = rowsOf<{ deviceId: string | null; folderKey: string | null; source: string; title: string }>(
+    await ctx.db.execute(sql`
+      select device_id as "deviceId", folder_key as "folderKey", source, title
+      from logical_assets
+      where id = ${assetId} and org_id = ${ctx.orgId}`),
+  )[0];
+  if (!asset) throw notFound('Asset');
+  if (asset.source !== 'folder' || !asset.deviceId || !asset.folderKey)
+    throw badRequest('Only a scanned folder can be deleted this way.');
+  const sample = rowsOf<{ id: string; displayPath: string; pathOs: string; deviceName: string }>(
+    await ctx.db.execute(sql`
+      select f.id, f.display_path as "displayPath", r.path_os as "pathOs", d.display_name as "deviceName"
+      from file_instances f
+      join storage_roots r on r.id = f.root_id
+      join devices d on d.id = f.device_id
+      where f.org_id = ${ctx.orgId} and f.device_id = ${asset.deviceId} and f.archived_at is null
+        and lower(regexp_replace(replace(f.display_path, chr(92), '/'), '/[^/]+$', '')) = ${asset.folderKey}
+      limit 1`),
+  )[0];
+  if (!sample) throw badRequest('That folder has no files left to delete.');
+  const os: PathOs = sample.pathOs === 'windows' ? 'windows' : 'posix';
+  const roots = await activeRoots(ctx, asset.deviceId);
+  let planned;
+  try {
+    planned = planFolderDelete({ displayPath: dirName(sample.displayPath), os, roots });
+  } catch (e) {
+    if (e instanceof FileOpError) throw badRequest(e.message);
+    throw e;
+  }
+  const folderKey = canonicalPath(planned.fromPath, os);
+  const slash = planned.fromPath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const waiting = rowsOf<{ id: string }>(
+    await ctx.db.execute(sql`
+      select id from file_operations
+      where org_id = ${ctx.orgId} and device_id = ${asset.deviceId} and status in ('PENDING', 'RUNNING')
+        and (
+          lower(replace(from_path, chr(92), '/')) = ${slash}
+          or lower(replace(from_path, chr(92), '/')) like ${slash + '/%'}
+        )
+      limit 1`),
+  )[0];
+  if (waiting) throw conflict('A change is already waiting for this folder on that PC.');
+  try {
+    const created = rowsOf<{ id: string; status: string; kind: string; fromPath: string }>(
+      await ctx.db.execute(sql`
+        insert into file_operations (org_id, device_id, file_instance_id, kind, from_path, to_path, size_bytes, requested_by)
+        values (
+          ${ctx.orgId}, ${asset.deviceId}, ${sample.id}, 'DELETE_FOLDER'::file_operation_kind,
+          ${planned.fromPath}, null, 0, ${ctx.userId}
+        )
+        returning id, status, kind, from_path as "fromPath"`),
+    )[0];
+    if (!created) throw badRequest('The folder delete could not be queued.');
+    await audit(ctx, 'file.operation.request', { type: 'logical_asset', id: assetId }, undefined, {
+      kind: 'DELETE_FOLDER',
+      fromPath: planned.fromPath,
+      operationId: created.id,
+    });
+    return { ...created, deviceName: sample.deviceName, folderKey };
+  } catch (e) {
+    if (duplicate(e)) throw conflict('A change is already waiting for a file in this folder.');
+    throw e;
+  }
+}
+
 export async function cancelFileOperation(ctx: Ctx, fileId: string) {
   const updated = rowsOf<{ id: string }>(
     await ctx.db.execute(sql`
@@ -190,7 +256,7 @@ export async function finishFileOperation(
 ) {
   const op = rowsOf<{
     id: string;
-    kind: 'RENAME' | 'MOVE' | 'DELETE';
+    kind: 'RENAME' | 'MOVE' | 'DELETE' | 'DELETE_FOLDER';
     status: string;
     fromPath: string;
     toPath: string | null;
@@ -233,6 +299,22 @@ export async function finishFileOperation(
         update file_instances
         set archived_at = now(), availability = 'CONFIRMED_MISSING', updated_at = now()
         where id = ${op.fileInstanceId} and org_id = ${op.orgId} and device_id = ${op.deviceId} and archived_at is null`);
+    } else if (op.kind === 'DELETE_FOLDER') {
+      const file = rowsOf<{ pathOs: string }>(
+        await tx.execute(sql`
+          select r.path_os as "pathOs"
+          from file_instances f join storage_roots r on r.id = f.root_id
+          where f.id = ${op.fileInstanceId}`),
+      )[0];
+      const os: PathOs = file?.pathOs === 'windows' ? 'windows' : 'posix';
+      const key = canonicalPath(op.fromPath, os);
+      const sep = pathSeparator(os);
+      const like = (key.endsWith(sep) ? key : key + sep).replace(/[!%_]/g, (c) => `!${c}`) + '%';
+      await tx.execute(sql`
+        update file_instances
+        set archived_at = now(), availability = 'CONFIRMED_MISSING', updated_at = now()
+        where org_id = ${op.orgId} and device_id = ${op.deviceId} and archived_at is null
+          and (canonical_path = ${key} or canonical_path like ${like} escape '!')`);
     } else {
       const file = rowsOf<{ pathOs: string }>(
         await tx.execute(sql`

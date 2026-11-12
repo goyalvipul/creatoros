@@ -31,7 +31,7 @@ There is no Continue with ChatGPT button, because that flow is not authorized fo
 
 ### Scene prompts (designed, not callable)
 
-Where: Create Studio → MiniMax H3, on each clip. Create Studio → Long Videos, on each scene.
+Where: Creative Studio → MiniMax H3, on each clip. Creative Studio → Long Videos, on each scene.
 
 Buttons:
 

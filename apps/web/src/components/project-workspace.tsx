@@ -71,7 +71,7 @@ function sourceOf(project: any, idea: any) {
   const origin = String(idea?.origin ?? '').toLowerCase();
   if (origin.includes('gmail') || origin.includes('mail') || origin.includes('email')) return 'Email';
   if (origin.includes('notif')) return 'Notification';
-  if (origin.includes('comfy') || origin.includes('studio') || origin.includes('ltx')) return 'Create Studio';
+  if (origin.includes('comfy') || origin.includes('studio') || origin.includes('ltx')) return 'Creative Studio';
   if (project.sourceIdeaId) return 'Content idea';
   return 'Manual entry';
 }

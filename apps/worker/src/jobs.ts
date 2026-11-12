@@ -29,6 +29,7 @@ import {
   syncSocialAccount,
   systemCtx,
   verifyBackup,
+  advanceLiveSessions,
   type ConnectorOverrides,
   type Runner,
   type ServiceEnv,
@@ -310,10 +311,15 @@ export async function jobPublish(d: WorkerDeps, draftId: string) {
   });
 }
 
+export async function jobLive(d: WorkerDeps) {
+  return advanceLiveSessions(d.db, d.env, nowOf(d), (d.overrides?.fetch as typeof fetch | undefined) ?? fetch);
+}
+
 export const JOB_TABLE = {
   heartbeat: jobHeartbeat,
   'publish-due': jobDuePublishes,
   ltx: jobLtx,
+  live: jobLive,
   events: jobEvents,
   actions: jobActions,
   'social-sync': jobSocialSync,

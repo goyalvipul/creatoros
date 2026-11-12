@@ -12,6 +12,18 @@ export const LTX_UPSCALE_QUALITIES = ['LOW', 'MEDIUM', 'HIGH', 'ULTRA'] as const
 export type LtxResizeType = (typeof LTX_RESIZE_TYPES)[number];
 export type LtxUpscaleQuality = (typeof LTX_UPSCALE_QUALITIES)[number];
 
+/** Upscale must face the same way as the frame. A 16:9 frame with Upscale On was still finished at 1152×2048. */
+export function ltxUpscaleSize(width: number, height: number, upscaleWidth?: number, upscaleHeight?: number) {
+  const preset = width > height ? { upscaleWidth: 1920, upscaleHeight: 1080 } : height > width ? { upscaleWidth: 1152, upscaleHeight: 2048 } : { upscaleWidth: 1152, upscaleHeight: 1152 };
+  if (!upscaleWidth || !upscaleHeight) return preset;
+  const wide = width > height;
+  const tall = height > width;
+  const upWide = upscaleWidth > upscaleHeight;
+  const upTall = upscaleHeight > upscaleWidth;
+  if ((wide && !upWide) || (tall && !upTall) || (!wide && !tall && upscaleWidth !== upscaleHeight)) return preset;
+  return { upscaleWidth, upscaleHeight };
+}
+
 export const LTX_REQUIRED_MODELS = [
   'ltx-2.3-22b-distilled-1.1-Q5_K_M.gguf',
   'mehaklora-ltx.safetensors',

@@ -7,12 +7,13 @@ import { FileDownload } from '@/components/file-download';
 import { VideoTrim } from '@/components/video-trim';
 import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
-import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
+import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, ltxUpscaleSize, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
 import { clipBounds, clipPlayback } from '@/lib/audio-clip';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
 import { LongVideos } from './long-videos';
+import { LiveStudio } from './live-studio';
 import { AiPromptTools, AiSwitch } from '@/components/ai-tools';
 
 type Issue = { field: string; message: string };
@@ -423,12 +424,17 @@ const FRAME_SIZES: [string, number, number][] = [
   ['YouTube Shorts', 576, 1024],
   ['Instagram Reels / TikTok', 576, 1024],
   ['Facebook Reels', 576, 1024],
-  ['YouTube Standard (16:9)', 960, 540],
+  ['YouTube Standard (16:9)', 960, 544],
   ['Instagram Square (1:1)', 576, 576],
 ];
+function youtubeFrame(width: number, height: number) {
+  return width === 960 && height === 540 ? { width: 960, height: 544 } : { width, height };
+}
+
 const UPSCALE_SIZES: [string, number, number][] = [
   ['Shorts', 1152, 2048],
   ['Normal videos', 1920, 1080],
+  ['Square', 1152, 1152],
 ];
 
 const PRESET_FALLBACK = {
@@ -445,17 +451,19 @@ const PRESET_FALLBACK = {
 };
 
 export default function ComfyPage() {
-  const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'long' | 'history' | 'settings'>('ltx');
+  const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'long' | 'live' | 'history' | 'settings'>('ltx');
   const [recall, setRecall] = useState<SavedClip | null>(null);
   useEffect(() => {
     if (window.location.hash === '#history') setTab('history');
     if (window.location.hash.startsWith('#long')) setTab('long');
+    if (window.location.hash === '#live') setTab('live');
   }, []);
   const v5 = uxV5();
   const studioTabs = [
     { id: 'ltx' as const, label: v5 ? 'LTX Video' : 'LTX' },
     { id: 'h3' as const, label: 'MiniMax H3' },
     { id: 'long' as const, label: 'Long Videos' },
+    { id: 'live' as const, label: 'Live Studio' },
     { id: 'audio' as const, label: 'Audio' },
     { id: 'history' as const, label: 'History' },
     { id: 'settings' as const, label: 'Settings' },
@@ -506,7 +514,7 @@ function StudioBody({
   onUse,
   onHistory,
 }: {
-  tab: 'ltx' | 'audio' | 'h3' | 'long' | 'history' | 'settings';
+  tab: 'ltx' | 'audio' | 'h3' | 'long' | 'live' | 'history' | 'settings';
   recall: SavedClip | null;
   onUse: (clip: SavedClip) => void;
   onHistory: () => void;
@@ -525,6 +533,7 @@ function StudioBody({
       <div hidden={tab !== 'long'}>
         <LongVideos active={tab === 'long'} />
       </div>
+      {tab === 'live' ? <LiveStudio /> : null}
       <div hidden={tab !== 'history'}>
         <HistoryTab onUse={onUse} />
       </div>
@@ -1020,8 +1029,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
       durationSec: d?.durationSec ?? p.durationSec,
       prompt: d?.prompt ?? p.prompt,
       negativePrompt: d?.negativePrompt ?? p.negativePrompt,
-      width: d?.width ?? p.width,
-      height: d?.height ?? p.height,
+      ...youtubeFrame(d?.width ?? p.width, d?.height ?? p.height),
       fps: d?.fps ?? p.fps,
       loraName: d?.loraName || p.loraName,
       loraStrength: d?.loraStrength ?? p.loraStrength,
@@ -1036,7 +1044,8 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
       audioUploadName: d?.audioUploadName ?? null,
       audioUploadWorkerId: d?.audioUploadWorkerId ?? null,
     };
-    setForm(saved?.form ? { ...base, ...saved.form } : base);
+    const next = saved?.form ? { ...base, ...saved.form } : base;
+    setForm({ ...next, ...youtubeFrame(next.width, next.height) });
     setImageName(saved?.imageName ?? d?.imageName ?? null);
     setAudioName(saved?.audioName ?? d?.audioName ?? null);
     setAudioSeconds(saved?.audioSeconds ?? (d?.audioDurationMs != null ? d.audioDurationMs / 1000 : null));
@@ -1088,8 +1097,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
         durationSec: num(s.durationSec, base.durationSec),
         prompt: s.prompt ?? '',
         negativePrompt: s.negativePrompt ?? '',
-        width: num(s.width, base.width),
-        height: num(s.height, base.height),
+        ...youtubeFrame(num(s.width, base.width), num(s.height, base.height)),
         fps: num(s.fps, base.fps),
         loraName: s.loraName || base.loraName,
         loraStrength: num(s.loraStrength, base.loraStrength),
@@ -1315,13 +1323,17 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
     setBusy(kind);
     setResult(null);
     try {
+      const frame = youtubeFrame(form.width, form.height);
+      const upscale = ltxUpscaleSize(frame.width, frame.height, form.upscaleWidth, form.upscaleHeight);
+      const body = { ...form, ...frame, ...upscale };
+      if (body.width !== form.width || body.height !== form.height || body.upscaleWidth !== form.upscaleWidth || body.upscaleHeight !== form.upscaleHeight) set(body);
       if (kind === 'draft') {
-        await put('/comfy/ltx/draft', form);
+        await put('/comfy/ltx/draft', body);
         setResult({ ok: true, warnings: [], errors: [] });
       } else {
         const data = await api<CheckResult>(`/comfy/ltx/${kind}`, {
           method: 'POST',
-          body: form,
+          body,
           idempotencyKey: kind === 'generate' ? crypto.randomUUID() : undefined,
         });
         setResult(data);
@@ -1366,8 +1378,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
               durationSec: num(s.durationSec, form.durationSec),
               prompt: s.prompt ?? '',
               negativePrompt: s.negativePrompt ?? '',
-              width: num(s.width, form.width),
-              height: num(s.height, form.height),
+              ...youtubeFrame(num(s.width, form.width), num(s.height, form.height)),
               fps: num(s.fps, form.fps),
               loraName: s.loraName || form.loraName,
               loraStrength: num(s.loraStrength, form.loraStrength),
@@ -1508,6 +1519,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                     <div className="flex flex-wrap gap-2">
                       <button type="button" className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold" onClick={() => setAdvanced(true)}>
                         {frameLabel(form.width, form.height)}
+                        {form.wantUpscale ? ` · ${form.upscaleWidth}×${form.upscaleHeight}` : ''}
                       </button>
                       <button type="button" className="rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold" onClick={() => setAdvanced(true)}>
                         {form.durationSec} sec
@@ -1569,7 +1581,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                           rows={FRAME_SIZES}
                           width={form.width}
                           height={form.height}
-                          onPick={(width, height) => set({ width, height })}
+                          onPick={(width, height) => set({ width, height, ...ltxUpscaleSize(width, height) })}
                         />
                         {form.wantUpscale ? <UpscaleChoices form={form} set={set} /> : null}
                         {form.wantUpscale && form.upscaleResizeType === 'target dimensions' ? (
@@ -1760,7 +1772,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
                     title="Resolution chart"
                     note="Both values must divide by 32."
                     rows={FRAME_SIZES}
-                    onPick={(width, height) => set({ width, height })}
+                    onPick={(width, height) => set({ width, height, ...ltxUpscaleSize(width, height) })}
                   />
                 </div>
                 <Field label="Width">

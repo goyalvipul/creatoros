@@ -8,5 +8,6 @@ export * from './publishing';
 export * from './crm';
 export * from './system';
 export * from './long-video';
+export * from './live';
 export * from './ai';
 export * from './social';

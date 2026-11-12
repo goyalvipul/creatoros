@@ -21,6 +21,7 @@ import {
   buildLtxApiPrompt,
   fitRtxUpscaleInputs,
   ltxPresetFromApi,
+  ltxUpscaleSize,
   validateLtxDraft,
   type LtxPreset,
 } from '@creatoros/domain';
@@ -770,20 +771,23 @@ export async function submitLtxJob(db: Db, env: ServiceEnv, jobId: string) {
     if (!imageName || !audioName) throw badRequest('The image or the song is no longer attached to this clip.');
     const prefix = `CreatorOS/ltx_${claimed.id.slice(0, 8)}`;
     const seed = Math.floor(Math.random() * 1_000_000_000_000_000);
+    const frameWidth = Number(settings.width);
+    const frameHeight = Number(settings.height);
+    const upscale = ltxUpscaleSize(frameWidth, frameHeight, Number(settings.upscaleWidth), Number(settings.upscaleHeight));
     const prompt = buildLtxApiPrompt(workflow.graph, {
       imageName,
       audioName,
       prompt: settings.prompt ?? '',
       negativePrompt: settings.negativePrompt ?? '',
-      width: Number(settings.width),
-      height: Number(settings.height),
+      width: frameWidth,
+      height: frameHeight,
       fps: Number(settings.fps),
       durationSec: Number(settings.durationSec),
       audioStartSec: Number(settings.audioStartSec),
       loraName: settings.loraName || 'mehaklora-ltx.safetensors',
       loraStrength: Number(settings.loraStrength),
-      upscaleWidth: Number(settings.upscaleWidth ?? 1152),
-      upscaleHeight: Number(settings.upscaleHeight ?? 2048),
+      upscaleWidth: upscale.upscaleWidth,
+      upscaleHeight: upscale.upscaleHeight,
       upscaleResizeType: settings.upscaleResizeType === 'scale by multiplier' ? 'scale by multiplier' : 'target dimensions',
       upscaleQuality: settings.upscaleQuality ?? 'ULTRA',
       upscaleScale: Number(settings.upscaleScale ?? 2),

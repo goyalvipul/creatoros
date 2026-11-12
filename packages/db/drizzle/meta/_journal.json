@@ -330,6 +330,13 @@
       "when": 1796400000000,
       "tag": "0046_clip_plan",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1796500000000,
+      "tag": "0047_live_studio",
+      "breakpoints": true
     }
   ]
 }

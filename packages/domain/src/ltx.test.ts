@@ -10,6 +10,7 @@ import {
   isApiPrompt,
   isComfyUiGraph,
   ltxPresetFromApi,
+  ltxUpscaleSize,
   ltxPresetFromUi,
   validateLtxDraft,
 } from './ltx';
@@ -27,6 +28,14 @@ const graph = JSON.parse(
     'utf8',
   ),
 );
+
+describe('LTX upscale size', () => {
+  it('keeps a 16:9 frame from being finished at the portrait upscale size', () => {
+    expect(ltxUpscaleSize(960, 544, 1152, 2048)).toEqual({ upscaleWidth: 1920, upscaleHeight: 1080 });
+    expect(ltxUpscaleSize(576, 1024, 1920, 1080)).toEqual({ upscaleWidth: 1152, upscaleHeight: 2048 });
+    expect(ltxUpscaleSize(960, 544, 1920, 1080)).toEqual({ upscaleWidth: 1920, upscaleHeight: 1080 });
+  });
+});
 
 describe('LTX UI graph', () => {
   it('reads the live values and refuses to treat the editor file as a prompt', () => {

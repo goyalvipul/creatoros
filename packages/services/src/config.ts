@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { z } from 'zod';
+import { liveDurations } from '@creatoros/domain';
 import { deriveKey } from './crypto';
 import type { ServiceEnv } from './types';
 
@@ -22,6 +23,9 @@ const schema = z.object({
   AGENT_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(90),
   PAIRING_CODE_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   AGENT_OFFLINE_AFTER_SECONDS: z.coerce.number().int().positive().default(180),
+  /** Minutes after YouTube reports the broadcast is live. The stop cannot pass 11 hours. */
+  LIVE_NOTIFY_AFTER_MINUTES: z.coerce.number().default(600),
+  LIVE_AUTO_STOP_MINUTES: z.coerce.number().default(655),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   LOGIN_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
   GLOBAL_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(900),
@@ -51,6 +55,12 @@ export function loadConfig(raw: Record<string, string | undefined> = process.env
     );
   }
   const e = parsed.data;
+  let live: { notifyAfterMs: number; autoStopMs: number };
+  try {
+    live = liveDurations(e.LIVE_NOTIFY_AFTER_MINUTES, e.LIVE_AUTO_STOP_MINUTES);
+  } catch (err) {
+    throw new Error(`Invalid configuration:\n  - ${err instanceof Error ? err.message : String(err)}`);
+  }
   const dataDir = path.resolve(e.DATA_DIR);
   const origins = [e.APP_BASE_URL, ...e.ALLOWED_ORIGINS.split(',')]
     .map((s) => s.trim().replace(/\/$/, ''))
@@ -78,6 +88,9 @@ export function loadConfig(raw: Record<string, string | undefined> = process.env
       agentTokenTtlDays: e.AGENT_TOKEN_TTL_DAYS,
       pairingCodeTtlMinutes: e.PAIRING_CODE_TTL_MINUTES,
       agentOfflineAfterSeconds: e.AGENT_OFFLINE_AFTER_SECONDS,
+      liveNotifyAfterMs: live.notifyAfterMs,
+      liveAutoStopMs: live.autoStopMs,
+      liveUploadDir: path.join(dataDir, 'live-uploads'),
       processEnv: raw,
     },
   };

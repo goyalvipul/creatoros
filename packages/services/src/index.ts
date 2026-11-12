@@ -57,3 +57,4 @@ export * from './mail';
 export * from './gmail-extras';
 export * from './invoice-suggestions';
 export * from './fx-live';
+export * from './live-studio';

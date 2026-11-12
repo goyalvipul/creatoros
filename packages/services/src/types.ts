@@ -14,6 +14,10 @@ export interface ServiceEnv {
   agentTokenTtlDays: number;
   pairingCodeTtlMinutes: number;
   agentOfflineAfterSeconds: number;
+  /** Live Studio notice and stop, copied onto a session when it is launched. */
+  liveNotifyAfterMs: number;
+  liveAutoStopMs: number;
+  liveUploadDir: string;
   /** Raw process env passthrough for connector configuration (GOOGLE_*, TODO_*, POSTIZ_*). */
   processEnv: Record<string, string | undefined>;
 }

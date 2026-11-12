@@ -28,6 +28,9 @@ export function testEnv(over: Partial<ServiceEnv> = {}): ServiceEnv {
     agentTokenTtlDays: 90,
     pairingCodeTtlMinutes: 15,
     agentOfflineAfterSeconds: 180,
+    liveNotifyAfterMs: 10 * 60 * 60 * 1000,
+    liveAutoStopMs: 10 * 60 * 60 * 1000 + 55 * 60 * 1000,
+    liveUploadDir: path.join(os.tmpdir(), 'creatoros-test-live'),
     processEnv: {},
     ...over,
   };

@@ -92,7 +92,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
         'In Google Cloud Console enable "YouTube Data API v3" for the same project as the Gmail client.',
         'Press Connect in Integrations. The consent screen includes watch time (yt-analytics.readonly). Check that box. Comments and uploads stay as they already are.',
         'Link the connected channel to the matching social account in Channels.',
-        'For Socials comments: press Enable comments and approve youtube.force-ssl (read and reply to comments).',
+        'For Socials comments and for Live Studio: press Enable comments and approve youtube.force-ssl. Livestreams use that permission. youtube.upload alone cannot create a broadcast.',
         'To publish a video from Publishing: press Enable uploads and approve youtube.upload. Nothing is uploaded until you press Publish on that file.',
       ],
     };
@@ -107,7 +107,7 @@ export class YouTubeConnector implements Connector<NormalizedPost, YtVideo> {
       ...GOOGLE_SCOPES.identity,
       ...GOOGLE_SCOPES.youtubeRead,
       ...GOOGLE_SCOPES.youtubeAnalytics,
-      ...(input.comments ? GOOGLE_SCOPES.youtubeComments : []),
+      ...(input.comments || input.live ? GOOGLE_SCOPES.youtubeComments : []),
       ...(input.upload ? GOOGLE_SCOPES.youtubeUpload : []),
     ];
     return {

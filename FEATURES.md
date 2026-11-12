@@ -78,6 +78,15 @@ Automatic sync, once that account is connected: Gmail every 5 minutes; Instagram
 | Threads, TikTok            | Unavailable until a developer app is approved       | Connect panels exist. Direct posting and private inboxes stay off until the app is approved. Manual publishing and pasted links work today. |
 | Snapchat                   | Unavailable                                         | No suitable public API; manual records only.                                                                                                                                                                                   |
 
+## Live Studio
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Creative Studio → Live Studio: playlist, streaming computer, YouTube details, Prepare & Go Live | Limited | The encoder runs on a computer you pair (`apps/stream-agent`). Docker does not encode the livestream. A live YouTube broadcast was not run from the build machine. |
+| 10-hour notice and stop at 10 hours 55 minutes | Limited | `LIVE_NOTIFY_AFTER_MINUTES` and `LIVE_AUTO_STOP_MINUTES` in `.env`. The stop cannot pass 11 hours. The form can choose a shorter test. |
+| YouTube title, privacy, DVR, replay, and AI disclosure | Limited | Needs the channel reconnected with `youtube.force-ssl` (the comments permission). Monetization, paid promotion, age restriction beyond Made for Kids, live chat, and captions stay in YouTube Studio and are labeled that way. |
+| Manual RTMPS | Limited | The key is encrypted and hidden. Kemokem does not claim it set the title or completed the broadcast. |
+
 ## Platform and operations
 
 | Feature                                                                                                    | Status  | Notes                                                                                                                                      |

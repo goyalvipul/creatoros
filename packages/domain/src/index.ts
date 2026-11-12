@@ -25,5 +25,6 @@ export * from './tiktok-post';
 export * from './notification-events';
 export * from './today';
 export * from './long-video';
+export * from './live-studio';
 export * from './h3';
 export * from './ai';

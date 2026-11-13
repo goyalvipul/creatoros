@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { YOUTUBE_LIVE_UNSUPPORTED, playlistPosition, verifiedSendingMs, wallClockMs } from '@creatoros/domain';
-import { ApiError, patch, post, useApi } from '@/lib/api';
+import { ApiError, del, patch, post, useApi } from '@/lib/api';
 import { Button, Field, Input, Notice, Select, Textarea } from '@/components/ui';
 
 type Section = 'create' | 'active' | 'history' | 'machines';
@@ -34,7 +34,7 @@ type Session = {
   replayStatus: string | null;
   replayDetail: string | null;
   items: Item[];
-  progress: { fps?: number; bitrate?: string; speed?: string; outTimeMs?: number };
+  progress: { fps?: number; bitrate?: string; speed?: string; outTimeMs?: number; savedPath?: string | null; masterReady?: boolean };
   logExcerpt: string | null;
   policyNotifyMs: number | null;
   policyStopMs: number;
@@ -88,20 +88,23 @@ export function LiveStudio() {
   const [privacy, setPrivacy] = useState<'public' | 'unlisted' | 'private'>('public');
   const [kids, setKids] = useState(false);
   const [synthetic, setSynthetic] = useState<'unset' | 'yes' | 'no'>('unset');
+  const [ageRestricted, setAgeRestricted] = useState(false);
+  const [paidPromotion, setPaidPromotion] = useState<'unset' | 'yes' | 'no'>('unset');
+  const [ads, setAds] = useState<'unset' | 'on' | 'off'>('unset');
+  const [captions, setCaptions] = useState<'off' | 'embedded'>('off');
   const [resolution, setResolution] = useState<'1080p' | '720p'>('1080p');
   const [loop, setLoop] = useState(true);
   const [mode, setMode] = useState<'youtube' | 'manual'>('youtube');
   const [accountId, setAccountId] = useState('');
-  const [machineId, setMachineId] = useState('');
   const [stopMinutes, setStopMinutes] = useState('');
   const [rtmpUrl, setRtmpUrl] = useState('');
   const [streamKey, setStreamKey] = useState('');
   const [playlistName, setPlaylistName] = useState('');
-  const [libraryQ, setLibraryQ] = useState('');
   const [busy, setBusy] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
   const state = useApi<{ active: Session | null; notifyMinutes: number; stopMinutes: number }>('/live/state', {
-    refreshInterval: 15_000,
+    refreshInterval: 0,
+    revalidateOnFocus: false,
   });
   const accounts = useApi<{ id: string; handle: string; livePermission: boolean; connectionState: string }[]>(
     section === 'create' ? '/live/accounts' : null,
@@ -116,27 +119,40 @@ export function LiveStudio() {
       ffmpeg: string | null;
       encoders: string[];
       freeBytes: number | null;
+      totalBytes?: number | null;
       lastSeenAt: string | null;
       roots: string[];
       browsePath: string | null;
-      browseListing: { name: string; relative: string; kind: 'dir' | 'video'; size: number }[];
       currentSessionId: string | null;
       revokedAt: string | null;
+      browseListing?: { name: string; relative: string; kind: 'dir' | 'video'; size: number }[];
     }[]
-  >(section === 'create' || section === 'machines' ? '/live/machines' : null, { refreshInterval: 15_000 });
+  >(section === 'create' || section === 'machines' ? '/live/machines' : null, {
+    refreshInterval: section === 'create' || section === 'machines' ? 10_000 : 0,
+    revalidateOnFocus: false,
+  });
   const history = useApi<Session[]>(section === 'history' ? '/live/sessions?history=1' : null);
   const playlists = useApi<{ id: string; name: string; items: Item[] }[]>(section === 'create' ? '/live/playlists' : null);
-  const library = useApi<{ items: { id: string; fileName: string; size: number }[] }>(
-    section === 'create' ? '/library' : null,
-    { query: { kind: 'VIDEO', q: libraryQ, limit: 20 } },
-  );
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
+  const pc = useMemo(() => {
+    const rows = (machines.data ?? []).filter((row) => !row.revokedAt && row.os === 'windows');
+    const named = rows.filter((row) => /3060|12gb|12 gb/i.test(row.displayName));
+    const pool = named.length ? named : rows;
+    const withFiles = pool.filter((row) => (row.browseListing ?? []).some((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4'));
+    return withFiles[0] ?? pool[0] ?? null;
+  }, [machines.data]);
   const active = state.data?.active ?? null;
+  const watching = !!active && ['PREPARING', 'CREATING', 'CONNECTING', 'LIVE', 'INTERRUPTED', 'STOPPING'].includes(active.status);
+  useEffect(() => {
+    if (!watching) return;
+    const timer = setInterval(() => void state.mutate(), 5000);
+    return () => clearInterval(timer);
+  }, [watching]);
   const maxStop = state.data?.stopMinutes ?? 655;
   const place = useMemo(() => {
     if (!active?.progress?.outTimeMs) return null;
@@ -145,10 +161,6 @@ export function LiveStudio() {
       active.progress.outTimeMs,
     );
   }, [active]);
-
-  function add(item: Item) {
-    setItems((prev) => [...prev, item]);
-  }
 
   function move(from: number, to: number) {
     setItems((prev) => {
@@ -160,73 +172,94 @@ export function LiveStudio() {
     });
   }
 
-  async function upload(list: FileList | null) {
-    if (!list?.length) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const body = new FormData();
-      for (const file of Array.from(list)) body.append('file', file, file.name);
-      const res = await fetch('/api/v1/live/uploads', {
-        method: 'POST',
-        body,
-        credentials: 'same-origin',
-        headers: { 'x-requested-with': 'creatoros' },
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message || 'Those videos were not saved.');
-      for (const file of json.data as { id: string; name: string; size: number }[]) {
-        add({ key: file.id, source: 'upload', uploadId: file.id, name: file.name, size: file.size });
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Those videos were not saved.');
-    } finally {
-      setBusy(false);
-    }
+  function videosOnPc() {
+    return (pc?.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
   }
 
-  async function launch() {
+  function loadFolder() {
+    const videos = videosOnPc();
+    if (!videos.length) {
+      setError('The RTX 3060 has not reported any videos in C:\\MehakLive. Leave the streaming agent running on that PC, then press Refresh folder.');
+      return;
+    }
+    setItems(videos.map((file) => ({ key: file.name, source: 'agent' as const, name: file.name, agentRelative: file.name, size: file.size })));
+    setError(null);
+  }
+
+  useEffect(() => {
+    if (items.length) return;
+    const videos = (pc?.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
+    if (!videos.length) return;
+    setItems(videos.map((file) => ({ key: file.name, source: 'agent' as const, name: file.name, agentRelative: file.name, size: file.size })));
+  }, [pc, items.length]);
+
+  function streamSettings() {
+    return {
+      description,
+      tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      privacy,
+      madeForKids: kids,
+      synthetic: synthetic === 'unset' ? null : synthetic === 'yes',
+      ageRestricted,
+      paidPromotion: paidPromotion === 'unset' ? null : paidPromotion === 'yes',
+      ads,
+      captions,
+      resolution,
+      loop,
+      mode,
+      categoryId: '10',
+      language: 'en',
+      enableDvr: true,
+      recordFromStart: true,
+      enableAutoStart: true,
+      enableAutoStop: true,
+      enableEmbed: true,
+      latency: 'normal' as const,
+    };
+  }
+
+  async function prepare() {
     setBusy(true);
     setError(null);
     try {
       await post(
         '/live/sessions',
         {
-          machineId,
-          socialAccountId: mode === 'youtube' ? accountId : null,
+          machineId: pc?.id,
           playlistName: playlistName || null,
-          title,
+          title: title || 'Livestream',
           items: items.map(({ key: _key, ...item }) => item),
-          stopMinutes: stopMinutes ? Number(stopMinutes) : undefined,
-          rtmpUrl: mode === 'manual' ? rtmpUrl : null,
-          streamKey: mode === 'manual' ? streamKey : null,
-          settings: {
-            description,
-            tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
-            privacy,
-            madeForKids: kids,
-            synthetic: synthetic === 'unset' ? null : synthetic === 'yes',
-            resolution,
-            loop,
-            mode,
-            categoryId: '10',
-            language: 'en',
-            enableDvr: true,
-            recordFromStart: true,
-            enableAutoStart: true,
-            enableAutoStop: true,
-            enableEmbed: true,
-            latency: 'normal',
-          },
+          settings: { resolution, loop, mode: 'youtube' },
         },
         { idempotencyKey: crypto.randomUUID() },
       );
+      await state.mutate();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'The video was not started.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function goLive() {
+    if (!active || active.status !== 'READY') return;
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/live/sessions/${active.id}/start`, {
+        socialAccountId: mode === 'youtube' ? accountId : null,
+        title,
+        stopMinutes: stopMinutes ? Number(stopMinutes) : undefined,
+        rtmpUrl: mode === 'manual' ? rtmpUrl : null,
+        streamKey: mode === 'manual' ? streamKey : null,
+        settings: streamSettings(),
+      });
       setStreamKey('');
       setRtmpUrl('');
       setSection('active');
       await state.mutate();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'The livestream did not start.');
+      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'YouTube did not start.');
     } finally {
       setBusy(false);
     }
@@ -265,62 +298,19 @@ export function LiveStudio() {
       {section === 'create' ? (
         <div className="space-y-4">
           <Notice>
-            Closing this page does not stop a livestream. The streaming computer keeps going, and the timer is stored on the server.
-            The notice is {state.data?.notifyMinutes ?? 600} minutes and the automatic stop is {maxStop} minutes. Both come from the server environment, and the stop cannot pass 11 hours.
+            Live Studio always uses the RTX 3060. Put mp4 files in C:\MehakLive on that PC. Make one video reads them there, writes a matching file in C:\MehakLive\normalized, and saves C:\MehakLive\live.mp4. Nothing is copied over the network. Go live sends that one file. Closing this page does not stop a stream that has already started.
+            The notice is {state.data?.notifyMinutes ?? 600} minutes and the automatic stop is {maxStop} minutes. The stop cannot pass 11 hours.
           </Notice>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Videos">
-              <input className="block w-full text-sm" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.mkv,.webm" multiple onChange={(e) => void upload(e.target.files)} />
-            </Field>
-            <Field label="Folder" hint="If the browser cannot open a folder, use the video picker.">
-              <input className="block w-full text-sm" type="file" multiple {...{ webkitdirectory: '', directory: '' }} onChange={(e) => void upload(e.target.files)} />
-            </Field>
-          </div>
-          <Field label="Library">
-            <Input value={libraryQ} onChange={(e) => setLibraryQ(e.target.value)} placeholder="Search videos" />
-            <div className="mt-2 max-h-40 space-y-1 overflow-auto">
-              {(library.data?.items ?? []).map((file) => (
-                <button key={file.id} type="button" className="block w-full rounded px-2 py-1 text-left text-sm hover:bg-panel2" onClick={() => add({ key: file.id, source: 'library', fileInstanceId: file.id, name: file.fileName, size: file.size })}>
-                  {file.fileName} · {bytes(file.size)}
-                </button>
-              ))}
-            </div>
-          </Field>
-          <Field label="Folder on the streaming computer">
-            <div className="space-y-2 text-sm">
-              {(machines.data ?? []).filter((m) => !m.revokedAt).map((machine) => (
-                <div key={machine.id}>
-                  <div className="font-medium">{machine.displayName}</div>
-                  {(machine.roots ?? []).map((root) => (
-                    <button key={root} type="button" className="mr-2 underline" onClick={() => void post(`/live/machines/${machine.id}/browse`, { path: root }).then(() => machines.mutate())}>{root}</button>
-                  ))}
-                  {machine.browsePath ? (
-                    <div className="mt-1">
-                      {machine.browseListing.map((entry) => (
-                        <button
-                          key={entry.name}
-                          type="button"
-                          className="mr-2"
-                          onClick={() => {
-                            const browsePath = machine.browsePath ?? '';
-                            const root = (machine.roots ?? []).find((candidate) => browsePath.startsWith(candidate));
-                            if (!root || entry.kind !== 'video') {
-                              if (entry.kind === 'dir' && browsePath) void post(`/live/machines/${machine.id}/browse`, { path: `${browsePath.replace(/[/\\]+$/, '')}/${entry.name}` }).then(() => machines.mutate());
-                              return;
-                            }
-                            const relative = `${browsePath.slice(root.length).replace(/^[/\\]/, '')}/${entry.name}`.replace(/^\/+/, '');
-                            add({ key: `${machine.id}:${relative}`, source: 'agent', name: entry.name, size: entry.size, agentRelative: relative });
-                          }}
-                        >
-                          {entry.kind === 'dir' ? `${entry.name}/` : entry.name}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </Field>
+          <Notice>
+            Computer: {pc ? `${pc.displayName} · ${pc.ready ? 'Ready' : pc.reason} · last seen ${when(pc.lastSeenAt)}` : 'Pair the RTX 3060 under Streaming machines and include 3060 in the name.'} Folder: C:\MehakLive. {videosOnPc().length} video{videosOnPc().length === 1 ? '' : 's'} reported.
+          </Notice>
+          {!videosOnPc().length ? (
+            <Notice tone="warn">
+              The mp4 files on the 3060 are not in Kemokem until that PC's streaming agent sends the folder list. It does that about every 25 seconds. Make one video stays off until the names show up here.
+            </Notice>
+          ) : null}
+          {videosOnPc().length && !pc?.ready ? <Notice tone="warn">Make one video stays off because this computer is {pc?.reason}.</Notice> : null}
+          <Button type="button" onClick={() => { void machines.mutate(); loadFolder(); }}>Refresh folder</Button>
           <div className="space-y-2">
             <div className="text-sm">{items.length} video{items.length === 1 ? '' : 's'}</div>
             {items.map((item, index) => (
@@ -354,14 +344,6 @@ export function LiveStudio() {
               {(playlists.data ?? []).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
             </Select>
           </div>
-          <Field label="Streaming computer">
-            <Select value={machineId} onChange={(e) => setMachineId(e.target.value)}>
-              <option value="">Choose a ready computer</option>
-              {(machines.data ?? []).filter((m) => m.ready).map((m) => (
-                <option key={m.id} value={m.id}>{m.displayName} · {m.os} · {m.ffmpeg ? 'FFmpeg' : 'No FFmpeg'}</option>
-              ))}
-            </Select>
-          </Field>
           <Field label="YouTube">
             <Select value={mode} onChange={(e) => setMode(e.target.value as 'youtube' | 'manual')}>
               <option value="youtube">YouTube Live API</option>
@@ -416,6 +398,32 @@ export function LiveStudio() {
               <Input value={stopMinutes} inputMode="numeric" placeholder={String(maxStop)} onChange={(e) => setStopMinutes(e.target.value)} />
             </Field>
             <Field label="Loop"><Select value={loop ? 'yes' : 'no'} onChange={(e) => setLoop(e.target.value === 'yes')}><option value="yes">Loop</option><option value="no">Play once</option></Select></Field>
+            <Field label="Age restriction" hint="18+. Made for Kids above is separate. YouTube may refuse this on some channels; the stream still starts.">
+              <Select value={ageRestricted ? 'yes' : 'no'} onChange={(e) => setAgeRestricted(e.target.value === 'yes')}>
+                <option value="no">No</option>
+                <option value="yes">Yes, 18+</option>
+              </Select>
+            </Field>
+            <Field label="Paid promotion" hint="Shows YouTube's paid promotion label when you choose Yes.">
+              <Select value={paidPromotion} onChange={(e) => setPaidPromotion(e.target.value as typeof paidPromotion)}>
+                <option value="unset">Leave unset</option>
+                <option value="yes">Yes, disclose</option>
+                <option value="no">No</option>
+              </Select>
+            </Field>
+            <Field label="Mid-roll ads" hint="The channel has to be allowed to monetize. If YouTube refuses, the stream still starts.">
+              <Select value={ads} onChange={(e) => setAds(e.target.value as typeof ads)}>
+                <option value="unset">Leave unset</option>
+                <option value="on">Let YouTube insert mid-rolls</option>
+                <option value="off">Ads off</option>
+              </Select>
+            </Field>
+            <Field label="Closed captions" hint="Use Embedded only when the video file already contains captions. Automatic captions stay in YouTube Studio.">
+              <Select value={captions} onChange={(e) => setCaptions(e.target.value as typeof captions)}>
+                <option value="off">Off</option>
+                <option value="embedded">Embedded in the video</option>
+              </Select>
+            </Field>
           </div>
           {mode === 'manual' ? (
             <div className="grid gap-3 sm:grid-cols-2">
@@ -423,13 +431,31 @@ export function LiveStudio() {
               <Field label="Stream key"><Input value={streamKey} type="password" onChange={(e) => setStreamKey(e.target.value)} autoComplete="off" /></Field>
             </div>
           ) : null}
+          <Notice>
+            Make one video stays on the RTX 3060. Each clip is written to C:\MehakLive\normalized. The stream file is C:\MehakLive\live.mp4. YouTube stays closed until you press Go live.
+          </Notice>
+          {active?.status === 'PREPARING' ? <Notice>Reading C:\MehakLive on the RTX 3060. {active.logExcerpt || 'Waiting for that computer to start.'} This check runs every 5 seconds until the file is saved. YouTube is not open.</Notice> : null}
+          {active?.status === 'READY' ? (
+            <Notice>
+              Saved at {active.progress?.savedPath || 'C:\\MehakLive\\live.mp4'}. Press Go live when the title and channel are set.
+            </Notice>
+          ) : null}
           <div className="text-sm">
             <div className="font-medium">Requires YouTube Studio</div>
             {YOUTUBE_LIVE_UNSUPPORTED.map((field) => (
               <div key={field.field}><a href={field.href} target="_blank" rel="noreferrer">{field.field}</a></div>
             ))}
           </div>
-          <Button type="button" variant="primary" busy={busy} disabled={!title || !machineId || !items.length} onClick={() => void launch()}>Prepare & Go Live</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="primary" busy={busy} disabled={!pc?.ready || !items.length || (!!active && active.status !== 'ENDED' && active.status !== 'FAILED')} onClick={() => void prepare()}>Make one video</Button>
+            <Button type="button" variant="primary" busy={busy} disabled={active?.status !== 'READY' || !title || (mode === 'youtube' && !accountId)} onClick={() => void goLive()}>Go live</Button>
+            {active && (active.status === 'PREPARING' || active.status === 'READY') ? (
+              <Button type="button" variant="danger" onClick={async () => {
+                await post(`/live/sessions/${active.id}/stop`, { force: false });
+                await state.mutate();
+              }}>Discard</Button>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -441,6 +467,8 @@ export function LiveStudio() {
           await state.mutate();
         }} />
       ) : null}
+
+      {section === 'machines' ? <Machines rows={machines.data ?? []} onChange={() => machines.mutate()} /> : null}
 
       {section === 'history' ? (
         <div className="space-y-3">
@@ -465,7 +493,6 @@ export function LiveStudio() {
         </div>
       ) : null}
 
-      {section === 'machines' ? <Machines rows={machines.data ?? []} onChange={() => machines.mutate()} /> : null}
     </div>
   );
 }
@@ -518,6 +545,46 @@ function Active({
   );
 }
 
+function FolderPath({
+  row,
+  onChange,
+}: {
+  row: { id: string; roots: string[]; browsePath?: string | null; browseListing?: { name: string; kind: string }[] };
+  onChange: () => void;
+}) {
+  const [folder, setFolder] = useState(row.roots[0] || row.browsePath || 'C:\\MehakLive');
+  const [note, setNote] = useState<string | null>(null);
+  const videos = (row.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
+  return (
+    <div className="mt-3 space-y-2">
+      <Field label="Video folder" hint="The folder on this computer. The agent lists the mp4 files here. They are not copied.">
+        <div className="flex flex-wrap gap-2">
+          <Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="C:\MehakLive" />
+          <Button
+            type="button"
+            variant="primary"
+            disabled={!folder.trim()}
+            onClick={async () => {
+              setNote(null);
+              try {
+                await patch(`/live/machines/${row.id}`, { roots: [folder.trim()] });
+                setNote('Saved. The computer lists this folder on its next check-in, about every 25 seconds.');
+                onChange();
+              } catch (e) {
+                setNote(e instanceof ApiError ? e.message : 'That folder was not saved.');
+              }
+            }}
+          >
+            Save folder
+          </Button>
+        </div>
+      </Field>
+      {note ? <div>{note}</div> : null}
+      <div>{videos.length ? `${videos.length} videos: ${videos.map((file) => file.name).join(', ')}` : 'No videos reported from this folder yet.'}</div>
+    </div>
+  );
+}
+
 function Machines({
   rows,
   onChange,
@@ -531,25 +598,26 @@ function Machines({
     ffmpeg: string | null;
     encoders: string[];
     freeBytes: number | null;
-    totalBytes?: number | null;
     lastSeenAt: string | null;
     roots: string[];
+    browsePath?: string | null;
+    browseListing?: { name: string; kind: string }[];
     currentSessionId: string | null;
     revokedAt: string | null;
   }[];
   onChange: () => void;
 }) {
   const [name, setName] = useState('');
-  const [osName, setOs] = useState<'linux' | 'windows' | 'mac'>('linux');
+  const [osName, setOs] = useState<'linux' | 'windows' | 'mac'>('windows');
   const [token, setToken] = useState<string | null>(null);
-  const [roots, setRoots] = useState<Record<string, string>>({});
   return (
     <div className="space-y-4 text-sm">
+      <p>On the RTX 3060 card, type the folder that holds the mp4 files and press Save folder. The agent lists that folder on its next check-in. The names appear on this card. Nothing is copied.</p>
       <div className="flex flex-wrap gap-2">
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Computer name" />
         <Select value={osName} onChange={(e) => setOs(e.target.value as typeof osName)}>
-          <option value="linux">Ubuntu / Linux</option>
           <option value="windows">Windows</option>
+          <option value="linux">Ubuntu / Linux</option>
           <option value="mac">macOS</option>
         </Select>
         <Button type="button" variant="primary" disabled={!name} onClick={async () => {
@@ -564,21 +632,25 @@ function Machines({
         <div key={row.id} className="rounded border border-border p-3">
           <div className="font-medium">{row.displayName} · {row.os} · {row.ready ? 'Ready' : row.reason}</div>
           <div>Last seen {when(row.lastSeenAt)}</div>
-          <div>FFmpeg {row.ffmpeg || 'not reported'} · {row.encoders.join(', ') || 'No hardware encoder reported'}</div>
+          <div>FFmpeg {row.ffmpeg || 'not reported'} · {row.encoders.join(', ') || 'No encoder reported'}</div>
           <div>Free {bytes(row.freeBytes)} · Job {row.currentSessionId || 'none'}</div>
-          <div>Folders {(row.roots ?? []).join(', ') || 'none yet'}</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Input value={roots[row.id] ?? ''} onChange={(e) => setRoots((prev) => ({ ...prev, [row.id]: e.target.value }))} placeholder="D:\Media or /media/videos" />
-            <Button type="button" onClick={async () => {
-              const next = [...(row.roots ?? []), roots[row.id] ?? ''].map((item) => item.trim()).filter(Boolean);
-              await patch(`/live/machines/${row.id}`, { roots: next });
+          {row.revokedAt ? null : <FolderPath row={row} onChange={onChange} />}
+          {row.revokedAt ? null : (
+            <div className="mt-2">
+              <Button type="button" variant="danger" onClick={async () => { await post(`/live/machines/${row.id}/revoke`, {}); onChange(); }}>Revoke</Button>
+            </div>
+          )}
+          <div className="mt-2">
+            <Button type="button" variant="danger" onClick={async () => {
+              if (!window.confirm(`Delete ${row.displayName}? This removes it from Kemokem. Files on that computer stay. A livestream has to be stopped first.`)) return;
+              await del(`/live/machines/${row.id}`);
               onChange();
-            }}>Save folders</Button>
-            <Button type="button" variant="danger" onClick={async () => { await post(`/live/machines/${row.id}/revoke`, {}); onChange(); }}>Revoke</Button>
+            }}>Delete</Button>
           </div>
         </div>
       ))}
-      <p>Install the agent with the steps in apps/stream-agent/README.md. It starts with the operating system and keeps the original deadline after a reboot.</p>
+      <p>On that PC, install FFmpeg with NVIDIA support and Node.js 22 or 24. Run `node agent.mjs` from `apps/stream-agent` with `KEMOKEM_URL` and `KEMOKEM_TOKEN`. Log on as the user who can see the GPU. The steps are in `apps/stream-agent/README.md`.</p>
     </div>
   );
 }
+

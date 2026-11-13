@@ -1,38 +1,30 @@
 # Kemokem streaming agent
 
-This program runs on the computer that will encode the livestream. Kemokem in the browser does not have to stay open. The agent calls out over HTTPS. Nothing on this computer needs a public port.
+This program runs on the Windows PC that encodes the livestream. Kemokem does not encode it. The agent calls out over HTTPS. Nothing on that PC needs a public port.
 
-Install FFmpeg and Node.js 22 on that computer first. In Kemokem, open Creative Studio → Live Studio → Streaming machines, add the computer, and copy the token. The token is shown once.
+Install FFmpeg (with the NVIDIA encoder, `h264_nvenc`) and Node.js 22 on that PC first. In Kemokem, open Creative Studio → Live Studio → Streaming machines, add the computer, and copy the token. The token is shown once.
 
 ## Run
 
-```bash
-KEMOKEM_URL=https://os.goyalfamily.ca KEMOKEM_TOKEN='paste-token' node agent.mjs
+```powershell
+$env:KEMOKEM_URL = 'https://os.goyalfamily.ca'
+$env:KEMOKEM_TOKEN = 'paste-token'
+node C:\path\to\creatoros\apps\stream-agent\agent.mjs
 ```
 
 Optional:
 
 - `KEMOKEM_HEARTBEAT_SEC` defaults to 25.
-- `KEMOKEM_DATA` defaults to `~/.kemokem-stream`. Cached videos and the combined file stay there.
+- `KEMOKEM_DATA` defaults to `%USERPROFILE%\.kemokem-stream`.
+- `KEMOKEM_MEDIA` defaults to `C:\MehakLive`.
+
+Run this on the RTX 3060 only. Name that computer so the name includes 3060. Leave the window open as the Windows user who can see the GPU and `C:\MehakLive`.
+
+Put the mp4 files in `C:\MehakLive`. Make one video reads them there, writes `C:\MehakLive\normalized`, and saves `C:\MehakLive\live.mp4`. It does not download the videos. Go live sends `live.mp4`.
 
 ## Keep it running
 
-Linux, as your user (the user who can read the media folders):
-
-```ini
-# ~/.config/systemd/user/kemokem-stream.service
-[Service]
-Environment=KEMOKEM_URL=https://os.goyalfamily.ca
-Environment=KEMOKEM_TOKEN=paste-token
-ExecStart=/usr/bin/node /path/to/creatoros/apps/stream-agent/agent.mjs
-Restart=always
-```
-
-`systemctl --user enable --now kemokem-stream`
-
-Windows: Task Scheduler, trigger At log on, action `node.exe` with argument `C:\path\to\agent.mjs`, and the two environment variables. The account has to be able to read the approved folders.
-
-macOS: a LaunchAgent plist with the same environment variables and `RunAtLoad` true.
+Windows Task Scheduler, trigger At log on, action `node.exe`, argument the full path to `agent.mjs`, and the two environment variables. The account has to be able to read the videos and use the NVIDIA encoder.
 
 Approved folders are set in Live Studio. The agent will not list a folder Kemokem did not ask for, and it skips shortcuts. It does not delete or rename your original videos.
 

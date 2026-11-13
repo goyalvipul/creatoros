@@ -7,11 +7,8 @@ export const YOUTUBE_LIVE_SCOPE = 'https://www.googleapis.com/auth/youtube.force
 export const YOUTUBE_FULL_SCOPE = 'https://www.googleapis.com/auth/youtube';
 
 export const YOUTUBE_LIVE_UNSUPPORTED = [
-  { field: 'Age restriction beyond Made for Kids', href: 'https://studio.youtube.com/' },
-  { field: 'Paid promotion disclosure', href: 'https://studio.youtube.com/' },
-  { field: 'Monetization and ads', href: 'https://studio.youtube.com/' },
-  { field: 'Live chat moderation', href: 'https://studio.youtube.com/' },
-  { field: 'Closed captions for the live stream', href: 'https://studio.youtube.com/' },
+  { field: 'Live chat moderation (slow mode, held messages, who can chat)', href: 'https://studio.youtube.com/' },
+  { field: 'Automatic live captions', href: 'https://studio.youtube.com/' },
 ] as const;
 
 const ACTIVE = new Set([

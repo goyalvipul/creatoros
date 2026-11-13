@@ -312,7 +312,8 @@ export async function jobPublish(d: WorkerDeps, draftId: string) {
 }
 
 export async function jobLive(d: WorkerDeps) {
-  return advanceLiveSessions(d.db, d.env, nowOf(d), (d.overrides?.fetch as typeof fetch | undefined) ?? fetch);
+  const fetchImpl = (d.overrides?.fetch as typeof fetch | undefined) ?? fetch;
+  return advanceLiveSessions(d.db, d.env, nowOf(d), fetchImpl);
 }
 
 export const JOB_TABLE = {

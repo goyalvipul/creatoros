@@ -19,6 +19,7 @@ export interface LiveBroadcastDraft {
   enableAutoStop: boolean;
   latencyPreference: 'normal' | 'low' | 'ultraLow';
   resolution: '720p' | '1080p';
+  closedCaptionsType?: 'closedCaptionsDisabled' | 'closedCaptionsEmbedded';
 }
 
 export interface VideoEdits {
@@ -70,6 +71,7 @@ export async function createLiveBroadcast(fetchImpl: FetchFn, token: string, dra
       enableAutoStart: draft.enableAutoStart,
       enableAutoStop: draft.enableAutoStop,
       latencyPreference: draft.latencyPreference,
+      closedCaptionsType: draft.closedCaptionsType ?? 'closedCaptionsDisabled',
       enableContentEncryption: true,
       startWithSlate: false,
       monitorStream: { enableMonitorStream: false },
@@ -228,6 +230,34 @@ export async function setLiveThumbnail(fetchImpl: FetchFn, token: string, videoI
     const text = await res.text();
     throw new Error(redactStreamSecrets(`YouTube thumbnail ${res.status} ${text}`).slice(0, 300));
   }
+}
+
+/** 18+ rating. YouTube only documents `ytAgeRestricted`; leaving it off means no age restriction was sent. */
+export async function setLiveAgeRestriction(fetchImpl: FetchFn, token: string, videoId: string) {
+  await yt(fetchImpl, token, `${API}/videos?part=contentDetails`, {
+    method: 'PUT',
+    body: JSON.stringify({ id: videoId, contentDetails: { contentRating: { ytRating: 'ytAgeRestricted' } } }),
+  });
+}
+
+/** Paid promotion label. The owner chooses yes or no; an unset choice does not call this. */
+export async function setLivePaidPromotion(fetchImpl: FetchFn, token: string, videoId: string, hasPaidProductPlacement: boolean) {
+  await yt(fetchImpl, token, `${API}/videos?part=paidProductPlacementDetails`, {
+    method: 'PUT',
+    body: JSON.stringify({ id: videoId, paidProductPlacementDetails: { hasPaidProductPlacement } }),
+  });
+}
+
+/** Mid-roll ads. A channel that cannot monetize gets an error from YouTube; the caller keeps the broadcast. */
+export async function updateLiveMonetization(fetchImpl: FetchFn, token: string, broadcastId: string, ads: 'on' | 'off') {
+  const monetizationDetails =
+    ads === 'on'
+      ? { adsMonetizationStatus: 'on', cuepointSchedule: { enabled: true, ytOptimizedCuepointConfig: 'MEDIUM' } }
+      : { adsMonetizationStatus: 'off', cuepointSchedule: { enabled: false } };
+  await yt(fetchImpl, token, `${API}/liveBroadcasts?part=monetizationDetails`, {
+    method: 'PUT',
+    body: JSON.stringify({ id: broadcastId, monetizationDetails }),
+  });
 }
 
 function stripUndefined(value: Record<string, unknown>) {

@@ -1,6 +1,6 @@
 # Live Studio
 
-Creative Studio → Live Studio prepares a playlist and hands it to a streaming computer. The browser can close. The computer keeps encoding until you stop it, or until the saved deadline.
+Creative Studio → Live Studio takes videos from the library, or from an upload, and hands them to a streaming computer you pick. That computer prepares the file and sends the livestream. On the Windows NVIDIA PCs it uses the NVIDIA encoder. The Kemokem server does not encode. The browser can close. The selected computer keeps sending until you stop it, or until the saved deadline.
 
 ## Time limits
 
@@ -15,25 +15,23 @@ LIVE_AUTO_STOP_MINUTES=655
 
 The form can choose a shorter stop for a test. It cannot choose a later one. A short test does not send the 10-hour sentence.
 
-Those values are copied onto the livestream when you press Prepare & Go Live. Changing `.env` later does not extend a livestream that has already started.
+Those values are copied onto the livestream when you press Go live. Changing `.env` later does not extend a livestream that has already started.
 
 ## YouTube
 
 Livestreams use the official Live Streaming API. The channel needs `youtube.force-ssl`. In Integrations, **Enable comments** asks for that permission. `youtube.upload` alone cannot create a broadcast.
 
-Kemokem sets the title, description, tags, Music category, language, privacy, Made for Kids, AI disclosure when you choose Yes or No, DVR, recording, auto start, auto stop, embed, and latency. It reads the video before writing metadata so fields you did not change stay as YouTube has them.
+Kemokem sets the title, description, tags, Music category, language, privacy, Made for Kids, age restriction when you choose 18+, paid promotion when you choose Yes or No, mid-roll ads when you choose on or off, embedded captions when the file already contains them, AI disclosure when you choose Yes or No, DVR, recording, auto start, auto stop, embed, and latency. It reads the video before writing metadata so fields you did not change stay as YouTube has them. If YouTube refuses age restriction, paid promotion, or ads, the livestream still starts and the refusal is shown on the session.
 
-These stay in YouTube Studio, and the page says so: age restriction beyond Made for Kids, paid promotion, monetization, live chat moderation, and live captions.
+Live chat moderation and automatic captions stay in YouTube Studio. The page says so. The captions control only tells YouTube that captions are already inside the video file.
 
 Stopping does not delete the broadcast and does not change a public replay to private. The replay notice is sent after YouTube reports the video is processed and still has the visibility you chose.
 
 Manual RTMPS stores the address and key encrypted. It does not set the title or complete the broadcast. The key is not shown again and is not returned to the browser.
 
-## Streaming computer
+## Where it runs
 
-Add the computer in Live Studio → Streaming machines and copy the token once. On that computer, install FFmpeg and Node.js 22, then run the agent in `apps/stream-agent/README.md`. Add the media folders there. The agent only lists a folder Kemokem asked for, and it skips shortcuts.
-
-The agent calls Kemokem. It does not open a port. After a reboot it loads the original deadline and stops if that time has passed.
+Add the computer under Streaming machines and run `apps/stream-agent` on it. On Create stream, choose the videos and press Make one video. That PC normalizes them and saves one file. YouTube stays closed. Press Go live to open the broadcast and send that file. The page checks progress every 5 seconds only while the file is being made or the stream is on air. Active stream shows the on-air time. Stop stream ends it. A library video that is already on that same PC is read there. A video from another PC, or an upload, is copied onto the selected PC first.
 
 ## Rebuild
 
@@ -41,7 +39,7 @@ The agent calls Kemokem. It does not open a port. After a reboot it loads the or
 docker compose up -d --build --force-recreate migrate api worker web
 ```
 
-The streaming computer is not part of that command. Restart its agent only when `apps/stream-agent/agent.mjs` changes.
+Restart the streaming agent on the Windows PC when `apps/stream-agent/agent.mjs` changes. The Kemokem server is not the encoder.
 
 ## What was tested here
 

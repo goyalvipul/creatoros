@@ -100,8 +100,8 @@ function gpuTitle(w: Pick<Worker, 'label' | 'expectedVramGb'>) {
   return w.expectedVramGb != null ? `${w.expectedVramGb}GB (${short})` : short;
 }
 
-function usePcQueue(workerIds: string[]) {
-  const key = workerIds.slice().sort().join(',');
+function usePcQueue(workerIds: string[], enabled = true) {
+  const key = enabled ? workerIds.slice().sort().join(',') : '';
   const [queues, setQueues] = useState<Record<string, NonNullable<Worker['queue']>>>({});
   useEffect(() => {
     const ids = key ? key.split(',') : [];
@@ -450,13 +450,34 @@ const PRESET_FALLBACK = {
   upscale: { width: 1152, height: 2048, quality: 'ULTRA' },
 };
 
+const STUDIO_TABS = ['ltx', 'audio', 'h3', 'long', 'live', 'history', 'settings'] as const;
+type StudioTab = (typeof STUDIO_TABS)[number];
+
+function studioTabFromHash(hash: string): StudioTab | null {
+  const raw = hash.replace(/^#/, '').split(/[/?&]/)[0] ?? '';
+  if (raw.startsWith('long')) return 'long';
+  return (STUDIO_TABS as readonly string[]).includes(raw) ? (raw as StudioTab) : null;
+}
+
 export default function ComfyPage() {
-  const [tab, setTab] = useState<'ltx' | 'audio' | 'h3' | 'long' | 'live' | 'history' | 'settings'>('ltx');
+  const [tab, setTab] = useState<StudioTab>('ltx');
   const [recall, setRecall] = useState<SavedClip | null>(null);
-  useEffect(() => {
-    if (window.location.hash === '#history') setTab('history');
-    if (window.location.hash.startsWith('#long')) setTab('long');
-    if (window.location.hash === '#live') setTab('live');
+  function selectTab(next: StudioTab) {
+    setTab(next);
+    const hash = `#${next}`;
+    if (next === 'long' && window.location.hash.startsWith('#long')) return;
+    if (window.location.hash === hash) return;
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`);
+  }
+  useLayoutEffect(() => {
+    const next = studioTabFromHash(window.location.hash);
+    if (next) setTab(next);
+    const onHash = () => {
+      const value = studioTabFromHash(window.location.hash);
+      if (value) setTab(value);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const v5 = uxV5();
   const studioTabs = [
@@ -485,7 +506,7 @@ export default function ComfyPage() {
                   role="tab"
                   aria-selected={tab === item.id}
                   className={tab === item.id ? 'studio-tab active' : 'studio-tab'}
-                  onClick={() => setTab(item.id)}
+                  onClick={() => selectTab(item.id)}
                 >
                   {item.label}
                 </button>
@@ -494,16 +515,16 @@ export default function ComfyPage() {
             <AiSwitch />
           </div>
           <div className={tab === 'history' || tab === 'settings' ? 'p-5' : undefined}>
-            <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />
+            <StudioBody tab={tab} recall={recall} onHistory={() => selectTab('history')} onUse={(clip) => { setRecall(clip); selectTab('ltx'); }} />
           </div>
         </div>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Tabs tabs={studioTabs} value={tab} onChange={setTab} />
+          <Tabs tabs={studioTabs} value={tab} onChange={selectTab} />
           <AiSwitch />
         </div>
       )}
-      {!v5 && <StudioBody tab={tab} recall={recall} onHistory={() => setTab('history')} onUse={(clip) => { setRecall(clip); setTab('ltx'); }} />}
+      {!v5 && <StudioBody tab={tab} recall={recall} onHistory={() => selectTab('history')} onUse={(clip) => { setRecall(clip); selectTab('ltx'); }} />}
     </div>
   );
 }
@@ -522,13 +543,13 @@ function StudioBody({
   return (
     <>
       <div hidden={tab !== 'ltx'}>
-        <LtxStudio recall={recall} onHistory={onHistory} />
+        <LtxStudio recall={recall} onHistory={onHistory} active={tab === 'ltx'} />
       </div>
       <div hidden={tab !== 'audio'}>
-        <AudioTab onHistory={onHistory} />
+        <AudioTab onHistory={onHistory} active={tab === 'audio'} />
       </div>
       <div hidden={tab !== 'h3'}>
-        <H3Tab onHistory={onHistory} />
+        <H3Tab onHistory={onHistory} active={tab === 'h3'} />
       </div>
       <div hidden={tab !== 'long'}>
         <LongVideos active={tab === 'long'} />
@@ -984,7 +1005,7 @@ function MachineSetup() {
   );
 }
 
-function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory: () => void }) {
+function LtxStudio({ recall, onHistory, active = true }: { recall: SavedClip | null; onHistory: () => void; active?: boolean }) {
   const scope = useWorkspaceProjectIds();
   const studio = useApi<Studio>('/comfy/ltx');
   const [form, setForm] = useState<Form | null>(null);
@@ -994,7 +1015,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [loras, setLoras] = useState<string[]>([]);
-  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id), active);
   const [clipNote, setClipNote] = useState('');
   const [advanced, setAdvanced] = useState(false);
   const [picking, setPicking] = useState<'image' | 'audio' | null>(null);
@@ -1234,10 +1255,10 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
 
   const rendering = (studio.data?.jobs ?? []).some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
   useEffect(() => {
-    if (!rendering) return;
+    if (!active || !rendering) return;
     const timer = setInterval(() => void refresh('/comfy/ltx'), 4000);
     return () => clearInterval(timer);
-  }, [rendering]);
+  }, [active, rendering]);
 
   const set = (patch: Partial<Form>) => setForm((f) => (f ? { ...f, ...patch } : f));
   function setTrim(start: number, length: number) {
@@ -1949,7 +1970,7 @@ function LtxStudio({ recall, onHistory }: { recall: SavedClip | null; onHistory:
             </div>
           )}
           <div className={uxV5() ? 'studio-col' : undefined}>
-            <WorkerRail workers={workers} selectedId={form.workerId} queues={queues} />
+            {active ? <WorkerRail workers={workers} selectedId={form.workerId} queues={queues} /> : null}
           </div>
           </div>
         );
@@ -2647,7 +2668,7 @@ function LastOnMachine({
   );
 }
 
-function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
+function AudioTab({ onHistory = () => {}, active = true }: { onHistory?: () => void; active?: boolean }) {
   const scope = useWorkspaceProjectIds();
   const studio = useApi<{
     ready: boolean;
@@ -2680,7 +2701,7 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
     targetText: string;
     audioName: string | null;
   } | null>(null);
-  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id), active);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
 
@@ -2714,10 +2735,10 @@ function AudioTab({ onHistory = () => {} }: { onHistory?: () => void }) {
 
   const running = (studio.data?.jobs ?? []).some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
   useEffect(() => {
-    if (!running) return;
+    if (!active || !running) return;
     const timer = setInterval(() => void refresh('/comfy/audio'), 4000);
     return () => clearInterval(timer);
-  }, [running]);
+  }, [active, running]);
 
   const set = (patch: Partial<NonNullable<typeof form>>) => setForm((f) => (f ? { ...f, ...patch } : f));
   const audioStage = useRef<HTMLDivElement>(null);
@@ -3308,7 +3329,7 @@ function H3AudioTrim({
   );
 }
 
-function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
+function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void; active?: boolean }) {
   const scope = useWorkspaceProjectIds();
   const studio = useApi<{
     ready: boolean;
@@ -3347,7 +3368,7 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
   const [browser, setBrowser] = useState(false);
   const [photoQ, setPhotoQ] = useState('');
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id));
+  const [queues, setQueues] = usePcQueue((studio.data?.workers ?? []).map((worker) => worker.id), active);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
   const h3Stage = useRef<HTMLDivElement>(null);
@@ -3407,10 +3428,10 @@ function H3Tab({ onHistory = () => {} }: { onHistory?: () => void }) {
 
   const running = (studio.data?.jobs ?? []).some((j) => j.status === 'QUEUED' || j.status === 'RUNNING');
   useEffect(() => {
-    if (!running) return;
+    if (!active || !running) return;
     const timer = setInterval(() => void refresh('/comfy/h3'), 4000);
     return () => clearInterval(timer);
-  }, [running]);
+  }, [active, running]);
 
   function updateClip(index: number, patch: Partial<H3Clip>) {
     setForm((current) => {

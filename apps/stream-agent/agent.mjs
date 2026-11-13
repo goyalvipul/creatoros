@@ -11,7 +11,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { access, lstat, mkdir, readdir, readFile, stat, statfs, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, readdir, readFile, rename, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -21,6 +21,12 @@ const exec = promisify(execFile);
 const base = (process.env.KEMOKEM_URL || '').replace(/\/$/, '');
 const token = process.env.KEMOKEM_TOKEN || '';
 const home = process.env.KEMOKEM_DATA || path.join(os.homedir(), '.kemokem-stream');
+const mediaRoot = process.env.KEMOKEM_MEDIA || (process.platform === 'win32' ? 'C:\\MehakLive' : path.join(home, 'media'));
+const normDir = path.join(mediaRoot, 'normalized');
+const liveFile = path.join(mediaRoot, 'live.mp4');
+const liveTemp = path.join(mediaRoot, 'live.building.mp4');
+const livePlan = path.join(mediaRoot, 'live.plan.json');
+const NORM_PROFILE = 'h264-1920x1080-30-yuv420p-aac-192k-48000-2-g60';
 const savedJob = path.join(home, 'job.json');
 const every = Math.max(15, Number(process.env.KEMOKEM_HEARTBEAT_SEC || 25)) * 1000;
 
@@ -111,6 +117,7 @@ async function probe(file) {
     width: Number(video?.width || 0),
     height: Number(video?.height || 0),
     hasAudio: Boolean(audio),
+    pixFmt: video?.pix_fmt || '',
     videoCodec: video?.codec_name || '',
     audioCodec: audio?.codec_name || '',
     sampleRate: Number(audio?.sample_rate || 0),
@@ -123,18 +130,33 @@ function targetSize(resolution) {
   return resolution === '720p' ? [1280, 720] : [1920, 1080];
 }
 
-function compatible(info, resolution) {
+function matchesProfile(info, resolution) {
   const [w, h] = targetSize(resolution);
   return (
     info.videoCodec === 'h264' &&
+    info.pixFmt === 'yuv420p' &&
     info.hasAudio &&
     info.audioCodec === 'aac' &&
     info.sampleRate === 48000 &&
     info.channels === 2 &&
     info.width === w &&
     info.height === h &&
-    Math.abs(info.fps - 30) < 0.2
+    Math.abs((info.fps || 0) - 30) < 0.2 &&
+    info.durationMs > 0
   );
+}
+
+function sourceMark(fileStat, resolution) {
+  const [w, h] = targetSize(resolution);
+  return { size: fileStat.size, mtimeMs: Math.round(fileStat.mtimeMs), profile: `${NORM_PROFILE}-${w}x${h}` };
+}
+
+async function readJson(file) {
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 async function sha256(file) {
@@ -154,25 +176,41 @@ async function download(url, dest, expected) {
 }
 
 function quote(file) {
-  return `file '${file.replace(/'/g, `'\\''`)}'`;
+  return `file '${file.replace(/\\/g, '/').replace(/'/g, `'\\''`)}'`;
 }
 
-async function transcode(input, output, resolution, encoders, hasAudio) {
+async function transcode(input, output, resolution, hasAudio) {
   const [w, h] = targetSize(resolution);
-  const videoEncoder = encoders.includes('h264_nvenc') ? 'h264_nvenc' : 'libx264';
-  const args = ['-y', '-hide_banner', '-i', input];
-  if (!hasAudio) args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000', '-shortest');
+  const args = ['-y', '-hide_banner', '-fflags', '+genpts', '-i', input];
+  if (!hasAudio) args.push('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo');
+  args.push(
+    '-map',
+    '0:v:0',
+    '-map',
+    hasAudio ? '0:a:0' : '1:a:0',
+  );
+  if (!hasAudio) args.push('-shortest');
   args.push(
     '-vf',
-    `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,fps=30`,
+    `fps=30,scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,format=yuv420p`,
     '-c:v',
-    videoEncoder,
-    '-pix_fmt',
-    'yuv420p',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '20',
+    '-r',
+    '30',
     '-g',
     '60',
+    '-keyint_min',
+    '60',
+    '-sc_threshold',
+    '0',
     '-c:a',
     'aac',
+    '-b:a',
+    '192k',
     '-ar',
     '48000',
     '-ac',
@@ -196,21 +234,26 @@ function arm(stopAt) {
   }, Math.max(0, when - Date.now()));
 }
 
+function killEncoder(child) {
+  if (!child || child.exitCode != null) return;
+  if (process.platform === 'win32') child.kill();
+  else child.kill('SIGKILL');
+}
+
 function stopEncoder(reason) {
   const child = state.ffmpeg;
-  if (!child || child.killed) return;
+  if (!child || child.exitCode != null) return;
   if (reason === 'force') {
-    child.kill('SIGKILL');
+    killEncoder(child);
     return;
   }
   try {
     child.stdin?.write('q\n');
   } catch {
-    child.kill('SIGINT');
+    killEncoder(child);
+    return;
   }
-  setTimeout(() => {
-    if (state.ffmpeg && state.ffmpeg.exitCode == null) state.ffmpeg.kill('SIGKILL');
-  }, 20_000).unref();
+  setTimeout(() => killEncoder(state.ffmpeg), 20_000).unref();
 }
 
 async function materialize(file, dir, resolution, encoders) {
@@ -240,39 +283,102 @@ async function materialize(file, dir, resolution, encoders) {
 }
 
 async function prepare(job) {
-  const dir = path.join(home, 'jobs', job.sessionId);
-  await mkdir(dir, { recursive: true });
-  const space = await disk();
+  await mkdir(normDir, { recursive: true });
   const ready = [];
-  for (const file of job.files) {
-    const local = await materialize(file, dir, job.resolution, []);
-    const info = await probe(local);
-    if (info.durationMs <= 0 || !info.width) throw Object.assign(new Error(`${file.name} is not a readable video.`), { code: 'ENCODER' });
-    let used = local;
-    if (!compatible(info, job.resolution)) {
-      const infoNow = await ffmpegInfo();
-      used = path.join(dir, `norm-${file.id}.mp4`);
-      const fileStat = await statFile(local);
-      if (space.freeBytes != null && space.freeBytes < fileStat * 2)
-        throw Object.assign(new Error('Not enough free disk to prepare this video.'), { code: 'STORAGE' });
-      await transcode(local, used, job.resolution, infoNow.encoders, info.hasAudio);
+  const marks = [];
+  for (let index = 0; index < job.files.length; index += 1) {
+    const file = job.files[index];
+    const name = path.basename(file.path || file.name || '');
+    const local = path.resolve(file.path || '');
+    const root = path.resolve(mediaRoot);
+    const lower = name.toLowerCase();
+    if (
+      file.source !== 'agent' ||
+      !local.toLowerCase().startsWith(root.toLowerCase() + path.sep) ||
+      lower === 'live.mp4' ||
+      lower === 'live.building.mp4'
+    ) {
+      throw Object.assign(new Error(`${file.name || 'A video'} is not a source file inside ${mediaRoot}.`), { code: 'ENCODER' });
     }
-    const after = await probe(used);
-    ready.push({ id: file.id, durationMs: after.durationMs, width: after.width, height: after.height, hasAudio: after.hasAudio, validation: 'ok', file: used });
+    const srcStat = await stat(local);
+    const mark = sourceMark(srcStat, job.resolution);
+    const out = path.join(normDir, name);
+    const note = path.join(normDir, `${name}.norm.json`);
+    const saved = await readJson(note);
+    let info = null;
+    if (saved && saved.size === mark.size && saved.mtimeMs === mark.mtimeMs && saved.profile === mark.profile) {
+      try {
+        info = await probe(out);
+      } catch {
+        info = null;
+      }
+    }
+    if (!info || !matchesProfile(info, job.resolution)) {
+      const src = await probe(local);
+      if (src.durationMs <= 0 || !src.width) throw Object.assign(new Error(`${name} is not a readable video.`), { code: 'ENCODER' });
+      const partial = `${out}.part.mp4`;
+      await transcode(local, partial, job.resolution, src.hasAudio);
+      info = await probe(partial);
+      if (!matchesProfile(info, job.resolution)) throw Object.assign(new Error(`${name} did not normalize to the required format.`), { code: 'ENCODER' });
+      await rename(partial, out);
+      await writeFile(note, JSON.stringify(mark));
+    }
+    marks.push({ name, ...mark });
+    ready.push({ id: file.id, durationMs: info.durationMs, width: info.width, height: info.height, hasAudio: info.hasAudio, validation: 'ok', file: out });
+    await api('/live/agent/report', {
+      method: 'POST',
+      body: { sessionId: job.sessionId, event: 'progress', log: `Normalized ${index + 1} of ${job.files.length}: ${name}` },
+    }).catch(() => undefined);
   }
-  const list = path.join(dir, 'list.txt');
-  await writeFile(list, ready.map((item) => quote(item.file)).join('\n'));
-  const master = path.join(dir, 'master.mp4');
-  await run('ffmpeg', ['-y', '-hide_banner', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', master], {
-    timeout: 6 * 60 * 60 * 1000,
-  });
-  const masterInfo = await probe(master);
-  if (!masterInfo.durationMs || !masterInfo.hasAudio) throw new Error('The combined video has no picture or no audio.');
+  const same = JSON.stringify(marks);
+  const previous = await readJson(livePlan);
+  let masterInfo = null;
+  try {
+    masterInfo = await probe(liveFile);
+  } catch {
+    masterInfo = null;
+  }
+  if (!(previous && JSON.stringify(previous) === same && masterInfo && matchesProfile(masterInfo, job.resolution))) {
+    if (state.ffmpeg && state.ffmpeg.exitCode == null) {
+      throw Object.assign(new Error('A livestream is reading live.mp4. Stop it before replacing that file. The current master was left in place.'), { code: 'ENCODER' });
+    }
+    const list = path.join(normDir, 'list.txt');
+    await writeFile(list, `${ready.map((item) => quote(item.file)).join('\n')}\n`);
+    try {
+      await run('ffmpeg', ['-y', '-hide_banner', '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', liveTemp], {
+        timeout: 6 * 60 * 60 * 1000,
+      });
+      const built = await probe(liveTemp);
+      if (!built.durationMs || !built.hasAudio || !matchesProfile(built, job.resolution)) {
+        await unlink(liveTemp).catch(() => undefined);
+        throw new Error('The combined video has no matching picture or audio. The existing live.mp4 was left in place.');
+      }
+    } catch (e) {
+      await unlink(liveTemp).catch(() => undefined);
+      throw e;
+    }
+    const backup = `${liveFile}.bak`;
+    let had = true;
+    try {
+      await rename(liveFile, backup);
+    } catch {
+      had = false;
+    }
+    try {
+      await rename(liveTemp, liveFile);
+    } catch (e) {
+      if (had) await rename(backup, liveFile).catch(() => undefined);
+      throw e;
+    }
+    if (had) await unlink(backup).catch(() => undefined);
+    await writeFile(livePlan, same);
+  }
   await api('/live/agent/report', {
     method: 'POST',
     body: {
       sessionId: job.sessionId,
       event: 'master_ready',
+      savedPath: liveFile,
       items: ready.map(({ file: _file, ...item }) => item),
     },
   });
@@ -289,16 +395,19 @@ async function startEncoder(job) {
     void api('/live/agent/report', { method: 'POST', body: { sessionId: job.sessionId, event: 'encoder_stopped', error: 'The deadline had already passed.' } });
     return;
   }
-  const master = path.join(home, 'jobs', job.sessionId, 'master.mp4');
+  if (state.ffmpeg && state.ffmpeg.exitCode == null) return;
+  const master = job.masterPath || liveFile;
+  let checked = null;
   try {
-    await access(master);
+    checked = await probe(master);
   } catch {
     return;
   }
+  if (!checked.hasAudio || !checked.durationMs) return;
   const destination = `${job.ingest.address.replace(/\/$/, '')}/${job.ingest.name}`;
   const args = ['-hide_banner', '-loglevel', 'info', '-re'];
   if (job.loop !== false) args.push('-stream_loop', '-1');
-  args.push('-i', master, '-c', 'copy', '-f', 'flv', destination);
+  args.push('-i', master, '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-c:a', 'copy', '-f', 'flv', destination);
   const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
   state.ffmpeg = child;
   let log = '';
@@ -341,6 +450,18 @@ async function listing(browsePath) {
   }
   for (const entry of dirents) {
     if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue;
+    const lowerName = entry.name.toLowerCase();
+    if (
+      lowerName === 'normalised' ||
+      lowerName === 'normalized' ||
+      lowerName === 'live.mp4' ||
+      lowerName === 'live.building.mp4' ||
+      lowerName === 'live.mp4.bak' ||
+      lowerName === 'live.plan.json' ||
+      lowerName === 'list.txt' ||
+      lowerName.endsWith('.norm.json')
+    )
+      continue;
     const full = path.join(browsePath, entry.name);
     let info;
     try {
@@ -361,10 +482,10 @@ async function tick() {
   const info = await ffmpegInfo();
   const space = await disk();
   const job = await api('/live/agent/job');
-  const listed = job?.browsePath ? await listing(job.browsePath) : null;
+  const listed = await listing(job?.browsePath || mediaRoot);
   await api('/live/agent/heartbeat', {
     method: 'POST',
-    body: { os: osName(), ffmpeg: info.ffmpeg, encoders: info.encoders, ...space, listing: listed },
+    body: { os: osName(), hostname: os.hostname(), ffmpeg: info.ffmpeg, encoders: info.encoders, ...space, listing: listed },
   });
   if (!job || job.phase === 'idle') {
     if (state.ffmpeg) stopEncoder('stop');

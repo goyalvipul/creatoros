@@ -13,6 +13,7 @@ import {
   browseStreamMachine,
   createLiveSession,
   createStreamMachine,
+  startLiveSession,
   duplicateLiveSession,
   forbidden,
   getLiveSession,
@@ -25,6 +26,7 @@ import {
   openLiveUpload,
   recordLiveUpload,
   requireRole,
+  deleteStreamMachine,
   revokeStreamMachine,
   saveLivePlaylist,
   stopLiveSession,
@@ -51,6 +53,10 @@ const settings = z.object({
   privacy: z.enum(['public', 'unlisted', 'private']).optional(),
   madeForKids: z.boolean().optional(),
   synthetic: z.boolean().nullable().optional(),
+  ageRestricted: z.boolean().optional(),
+  paidPromotion: z.boolean().nullable().optional(),
+  ads: z.enum(['unset', 'on', 'off']).optional(),
+  captions: z.enum(['off', 'embedded']).optional(),
   license: z.enum(['youtube', 'creativeCommon']).optional(),
   enableDvr: z.boolean().optional(),
   enableEmbed: z.boolean().optional(),
@@ -130,6 +136,17 @@ export async function liveRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
     },
     ({ ctx, params }) => revokeStreamMachine(ctx, params.id),
   );
+  route(
+    {
+      method: 'DELETE',
+      url: '/live/machines/:id',
+      role: 'OWNER',
+      tag: 'Live',
+      summary: 'Remove a streaming computer. Past livestreams stay. Files on that computer stay.',
+      params: z.object({ id: uuid }),
+    },
+    ({ ctx, params }) => deleteStreamMachine(ctx, params.id),
+  );
   route({ method: 'GET', url: '/live/playlists', tag: 'Live', summary: 'Saved livestream playlists' }, ({ ctx }) =>
     listLivePlaylists(ctx),
   );
@@ -164,7 +181,7 @@ export async function liveRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         socialAccountId: uuid.nullable().optional(),
         playlistId: uuid.nullable().optional(),
         playlistName: z.string().max(120).nullable().optional(),
-        title: z.string().min(1).max(100),
+        title: z.string().max(100).optional(),
         items: z.array(item).min(1).max(200),
         settings,
         stopMinutes: z.number().int().min(1).max(660).optional(),
@@ -172,7 +189,25 @@ export async function liveRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         streamKey: z.string().max(200).nullable().optional(),
       }),
     },
-    ({ ctx, body }) => createLiveSession(ctx, body),
+    ({ ctx, body }) => createLiveSession(ctx, { ...body, title: body.title ?? '' }),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/live/sessions/:id/start',
+      tag: 'Live',
+      summary: 'Open the YouTube broadcast and send the saved video',
+      params: z.object({ id: uuid }),
+      body: z.object({
+        socialAccountId: uuid.nullable().optional(),
+        title: z.string().min(1).max(100),
+        settings,
+        stopMinutes: z.number().int().min(1).max(660).optional(),
+        rtmpUrl: z.string().max(300).nullable().optional(),
+        streamKey: z.string().max(200).nullable().optional(),
+      }),
+    },
+    ({ ctx, params, body }) => startLiveSession(ctx, params.id, body),
   );
   route(
     { method: 'GET', url: '/live/sessions/:id', tag: 'Live', summary: 'One livestream', params: z.object({ id: uuid }) },

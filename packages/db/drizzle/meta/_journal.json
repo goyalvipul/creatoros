@@ -337,6 +337,20 @@
       "when": 1796500000000,
       "tag": "0047_live_studio",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1796600000000,
+      "tag": "0048_delete_stream_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1796700000000,
+      "tag": "0049_stream_machine_hostname",
+      "breakpoints": true
     }
   ]
 }

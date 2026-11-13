@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   and,
   desc,
+  devices,
   eq,
   fileInstances,
   livePlaylists,
@@ -42,8 +43,11 @@ import {
   readLiveBroadcast,
   readLiveVideo,
   refreshGoogleToken,
+  setLiveAgeRestriction,
+  setLivePaidPromotion,
   setLiveThumbnail,
   transitionLiveBroadcast,
+  updateLiveMonetization,
   updateLiveVideo,
 } from '@creatoros/connectors';
 import { audit } from './audit';
@@ -53,7 +57,6 @@ import { notify } from './notifications';
 import { conflict, notFound, unprocessable, type Ctx, type ServiceEnv } from './types';
 
 const PREPARE_LIMIT_MS = 2 * 60 * 60 * 1000;
-const VIDEO_EXT = new Set(['mp4', 'mov', 'mkv', 'webm']);
 type FetchFn = typeof fetch;
 type Item = {
   id: string;
@@ -80,6 +83,10 @@ type Settings = {
   privacy?: 'public' | 'unlisted' | 'private';
   madeForKids?: boolean;
   synthetic?: boolean | null;
+  ageRestricted?: boolean;
+  paidPromotion?: boolean | null;
+  ads?: 'unset' | 'on' | 'off';
+  captions?: 'off' | 'embedded';
   license?: 'youtube' | 'creativeCommon';
   enableDvr?: boolean;
   enableEmbed?: boolean;
@@ -158,14 +165,16 @@ function publicSession(row: typeof liveSessions.$inferSelect, machineName: strin
 }
 
 async function names(db: Db, row: typeof liveSessions.$inferSelect) {
-  const [machine] = await db
-    .select({ displayName: streamMachines.displayName })
-    .from(streamMachines)
-    .where(eq(streamMachines.id, row.machineId));
+  const [machine] = row.machineId
+    ? await db
+        .select({ displayName: streamMachines.displayName })
+        .from(streamMachines)
+        .where(eq(streamMachines.id, row.machineId))
+    : [undefined];
   const [account] = row.socialAccountId
     ? await db.select({ handle: socialAccounts.handle }).from(socialAccounts).where(eq(socialAccounts.id, row.socialAccountId))
     : [undefined];
-  return publicSession(row, machine?.displayName ?? null, account?.handle ?? null);
+  return publicSession(row, machine?.displayName ?? (row.machineId ? 'Removed computer' : 'This Kemokem server'), account?.handle ?? null);
 }
 
 async function ownedSession(ctx: Ctx, id: string) {
@@ -192,7 +201,7 @@ export async function liveState(ctx: Ctx) {
     .where(
       and(
         eq(liveSessions.orgId, ctx.orgId),
-        sql`${liveSessions.status} in ('PREPARING','CREATING','CONNECTING','LIVE','INTERRUPTED','STOPPING')`,
+        sql`${liveSessions.status} in ('PREPARING','READY','CREATING','CONNECTING','LIVE','INTERRUPTED','STOPPING')`,
       ),
     )
     .orderBy(desc(liveSessions.jobCreatedAt))
@@ -273,7 +282,12 @@ export async function updateStreamRoots(ctx: Ctx, id: string, roots: string[]) {
   if (cleanRoots.some((r) => r.includes('..') || r.includes('\0'))) throw unprocessable('A media folder cannot contain ..');
   const [row] = await ctx.db
     .update(streamMachines)
-    .set({ roots: cleanRoots, updatedAt: new Date() })
+    .set({
+      roots: cleanRoots,
+      browsePath: cleanRoots[0] ?? null,
+      browseListing: [],
+      updatedAt: new Date(),
+    })
     .where(and(eq(streamMachines.id, id), eq(streamMachines.orgId, ctx.orgId), sql`${streamMachines.revokedAt} is null`))
     .returning();
   if (!row) throw notFound('Streaming computer');
@@ -291,6 +305,28 @@ export async function browseStreamMachine(ctx: Ctx, id: string, browsePath: stri
     throw unprocessable('That folder is outside the approved media folders.');
   await ctx.db.update(streamMachines).set({ browsePath, browseListing: [], updatedAt: new Date() }).where(eq(streamMachines.id, id));
   return { browsePath };
+}
+
+export async function deleteStreamMachine(ctx: Ctx, id: string) {
+  const [machine] = await ctx.db
+    .select({ id: streamMachines.id })
+    .from(streamMachines)
+    .where(and(eq(streamMachines.id, id), eq(streamMachines.orgId, ctx.orgId)));
+  if (!machine) throw notFound('Streaming computer');
+  const [active] = await ctx.db
+    .select({ id: liveSessions.id })
+    .from(liveSessions)
+    .where(
+      and(
+        eq(liveSessions.machineId, id),
+        sql`${liveSessions.status} in ('PREPARING','READY','CREATING','CONNECTING','LIVE','INTERRUPTED','STOPPING')`,
+      ),
+    )
+    .limit(1);
+  if (active) throw conflict('Stop the livestream on this computer before deleting it.');
+  await ctx.db.delete(streamMachines).where(and(eq(streamMachines.id, id), eq(streamMachines.orgId, ctx.orgId)));
+  await audit(ctx, 'live.machine.delete', { type: 'stream_machine', id });
+  return { id, deleted: true };
 }
 
 export async function revokeStreamMachine(ctx: Ctx, id: string) {
@@ -348,60 +384,29 @@ export async function recordLiveUpload(
 }
 
 async function snapshotItems(
-  ctx: Ctx,
   incoming: { source: Item['source']; name?: string; fileInstanceId?: string; uploadId?: string; agentRelative?: string }[],
-  roots: string[],
+  folder: string,
 ): Promise<Item[]> {
   if (!incoming.length) throw unprocessable('Add at least one video.');
   if (incoming.length > 200) throw unprocessable('A livestream playlist can hold 200 videos.');
   const items: Item[] = [];
   for (const raw of incoming) {
-    if (raw.source === 'library') {
-      if (!raw.fileInstanceId) throw unprocessable('A library video is missing its id.');
-      const [file] = await ctx.db
-        .select()
-        .from(fileInstances)
-        .where(and(eq(fileInstances.id, raw.fileInstanceId), eq(fileInstances.orgId, ctx.orgId)));
-      if (!file) throw unprocessable(`Library file was not found: ${raw.name || raw.fileInstanceId}`);
-      const ext = (file.ext || '').toLowerCase().replace(/^\./, '');
-      if (file.fileType !== 'VIDEO' && !VIDEO_EXT.has(ext)) throw unprocessable(`${file.fileName} is not a video.`);
-      items.push({
-        id: randomUUID(),
-        source: 'library',
-        name: file.fileName,
-        fileInstanceId: file.id,
-        size: file.size,
-        sha256: file.fullHash,
-        validation: 'pending',
-      });
-    } else if (raw.source === 'upload') {
-      if (!raw.uploadId) throw unprocessable('An uploaded video is missing its id.');
-      const [file] = await ctx.db
-        .select()
-        .from(liveUploads)
-        .where(and(eq(liveUploads.id, raw.uploadId), eq(liveUploads.orgId, ctx.orgId)));
-      if (!file) throw unprocessable(`Uploaded file was not found: ${raw.name || raw.uploadId}`);
-      items.push({
-        id: randomUUID(),
-        source: 'upload',
-        name: file.fileName,
-        uploadId: file.id,
-        size: file.byteSize,
-        sha256: file.sha256,
-        validation: 'pending',
-      });
+    if (raw.source === 'library' || raw.source === 'upload') {
+      throw unprocessable('Videos are read from C:\\MehakLive on the RTX 3060. They are not copied over the network.');
     } else if (raw.source === 'agent') {
-      const relative = raw.agentRelative || '';
-      const root = roots.find((candidate) => resolveUnderRoot(candidate, relative));
-      const resolved = root ? resolveUnderRoot(root, relative) : null;
-      if (!root || !resolved) throw unprocessable(`That video is outside the approved folders: ${raw.name || relative}`);
+      const name = (raw.agentRelative || raw.name || '').split(/[/\\]/).pop() || '';
+      if (!name || name.includes('..') || /[\\/:*?"<>|]/.test(name) || name.toLowerCase() === 'live.mp4' || name.toLowerCase() === 'normalised' || name.toLowerCase() === 'normalized')
+        throw unprocessable(`Choose a video file inside ${folder}. ${name || 'That name'} was rejected.`);
+      if (!/\.(mp4|mov|mkv|webm)$/i.test(name)) throw unprocessable(`${name} is not a video file.`);
+      const root = folder.replace(/[/\\]+$/, '');
+      const sep = root.includes('\\') ? '\\' : '/';
       items.push({
         id: randomUUID(),
         source: 'agent',
-        name: raw.name || relative.split(/[/\\]/).pop() || 'video',
+        name,
         agentRoot: root,
-        agentRelative: relative,
-        path: resolved,
+        agentRelative: name,
+        path: `${root}${sep}${name}`,
         validation: 'pending',
       });
     } else throw unprocessable('Unknown video source.');
@@ -427,7 +432,7 @@ async function youtubeToken(ctx: Ctx, accountId: string) {
 export async function createLiveSession(
   ctx: Ctx,
   input: {
-    machineId: string;
+    machineId?: string | null;
     socialAccountId?: string | null;
     playlistId?: string | null;
     playlistName?: string | null;
@@ -439,8 +444,8 @@ export async function createLiveSession(
     streamKey?: string | null;
   },
 ) {
-  const title = input.title.trim();
-  if (title.length < 1 || title.length > 100) throw unprocessable('The title has to be 1 to 100 characters.');
+  const title = input.title.trim() || 'Livestream';
+  if (title.length > 100) throw unprocessable('The title has to be 1 to 100 characters.');
   const policy = (() => {
     try {
       return sessionPolicy(ctx.env.liveNotifyAfterMs, ctx.env.liveAutoStopMs, input.stopMinutes);
@@ -448,19 +453,24 @@ export async function createLiveSession(
       throw unprocessable(clean(e));
     }
   })();
-  const [machine] = await ctx.db
-    .select()
-    .from(streamMachines)
-    .where(and(eq(streamMachines.id, input.machineId), eq(streamMachines.orgId, ctx.orgId)));
-  if (!machine) throw notFound('Streaming computer');
+  const machine = input.machineId
+    ? (
+        await ctx.db
+          .select()
+          .from(streamMachines)
+          .where(and(eq(streamMachines.id, input.machineId), eq(streamMachines.orgId, ctx.orgId)))
+      )[0]
+    : null;
+  if (!machine) throw unprocessable('Choose the computer that will run the livestream.');
   const ready = machineReady(machine, ctx.now(), ctx.env.agentOfflineAfterSeconds * 1000);
   if (!ready.ok) throw unprocessable(ready.reason);
   if (machine.currentSessionId) throw conflict('That computer is already running a livestream.');
-  const items = await snapshotItems(ctx, input.items, machine.roots ?? []);
+  const folder = machine.browsePath || machine.roots?.find(Boolean) || 'C:\\MehakLive';
+  const items = await snapshotItems(input.items, folder);
   const known = items.reduce((sum, item) => sum + (item.size ?? 0), 0);
   const need = items.some((item) => item.size == null) ? Math.max(known * 2, 5 * 1024 ** 3) : Math.max(known * 2, 1);
-  if ((machine.freeBytes ?? 0) < need)
-    throw unprocessable('That computer does not have enough free disk for a copy of these videos.');
+  if (machine.freeBytes != null && machine.freeBytes < need)
+    throw unprocessable('There is not enough free disk on that computer to prepare these videos.');
   const settings = asSettings(input.settings);
   settings.mode = settings.mode === 'manual' ? 'manual' : 'youtube';
   settings.privacy = settings.privacy ?? 'public';
@@ -468,15 +478,6 @@ export async function createLiveSession(
   settings.description = (settings.description ?? '').slice(0, 5000);
   settings.categoryId = settings.categoryId || '10';
   settings.language = settings.language || 'en';
-  let ingest: string | null = null;
-  if (settings.mode === 'manual') {
-    const url = (input.rtmpUrl ?? '').trim();
-    const key = (input.streamKey ?? '').trim();
-    if (!url.startsWith('rtmps://') || /\s/.test(url) || key.length < 4 || /\s/.test(key))
-      throw unprocessable('Manual mode needs an rtmps address and a stream key. The key is stored encrypted and is not shown again.');
-    ingest = encryptJson({ address: url.replace(/\/$/, ''), name: key }, ctx.env.encryptionKey);
-  } else if (!input.socialAccountId) throw unprocessable('Choose a YouTube channel.');
-  else await youtubeToken(ctx, input.socialAccountId);
   const now = ctx.now();
   try {
     const [row] = await ctx.db
@@ -486,13 +487,13 @@ export async function createLiveSession(
         userId: ctx.userId,
         playlistId: input.playlistId ?? null,
         machineId: machine.id,
-        socialAccountId: settings.mode === 'youtube' ? input.socialAccountId : null,
+        socialAccountId: null,
         title,
         playlistName: input.playlistName ?? null,
         status: 'PREPARING',
         settings,
         playlistSnapshot: items,
-        ingestSecret: ingest,
+        ingestSecret: null,
         policyNotifyMs: policy.notifyAfterMs,
         policyStopMs: policy.autoStopMs,
         jobCreatedAt: now,
@@ -537,6 +538,71 @@ export async function getLiveSession(ctx: Ctx, id: string) {
   return names(ctx.db, await ownedSession(ctx, id));
 }
 
+export async function startLiveSession(
+  ctx: Ctx,
+  id: string,
+  input: {
+    socialAccountId?: string | null;
+    title: string;
+    settings: Settings;
+    stopMinutes?: number | null;
+    rtmpUrl?: string | null;
+    streamKey?: string | null;
+  },
+) {
+  const row = await ownedSession(ctx, id);
+  if (row.status !== 'READY')
+    throw unprocessable('The video has to be saved on the computer before YouTube can start.');
+  const title = input.title.trim();
+  if (title.length < 1 || title.length > 100) throw unprocessable('The title has to be 1 to 100 characters.');
+  const policy = (() => {
+    try {
+      return sessionPolicy(ctx.env.liveNotifyAfterMs, ctx.env.liveAutoStopMs, input.stopMinutes);
+    } catch (e) {
+      throw unprocessable(clean(e));
+    }
+  })();
+  const settings = { ...asSettings(row.settings), ...asSettings(input.settings) };
+  settings.mode = settings.mode === 'manual' ? 'manual' : 'youtube';
+  settings.privacy = settings.privacy ?? 'public';
+  settings.resolution = settings.resolution === '720p' ? '720p' : '1080p';
+  settings.description = (settings.description ?? '').slice(0, 5000);
+  settings.categoryId = settings.categoryId || '10';
+  settings.language = settings.language || 'en';
+  let ingest: string | null = null;
+  let accountId: string | null = null;
+  if (settings.mode === 'manual') {
+    const url = (input.rtmpUrl ?? '').trim();
+    const key = (input.streamKey ?? '').trim();
+    if (!url.startsWith('rtmps://') || /\s/.test(url) || key.length < 4 || /\s/.test(key))
+      throw unprocessable('Manual mode needs an rtmps address and a stream key. The key is stored encrypted and is not shown again.');
+    ingest = encryptJson({ address: url.replace(/\/$/, ''), name: key }, ctx.env.encryptionKey);
+  } else {
+    if (!input.socialAccountId) throw unprocessable('Choose a YouTube channel.');
+    await youtubeToken(ctx, input.socialAccountId);
+    accountId = input.socialAccountId;
+  }
+  const now = ctx.now();
+  const [updated] = await ctx.db
+    .update(liveSessions)
+    .set({
+      title,
+      socialAccountId: accountId,
+      settings,
+      ingestSecret: ingest,
+      policyNotifyMs: policy.notifyAfterMs,
+      policyStopMs: policy.autoStopMs,
+      updatedAt: now,
+    })
+    .where(and(eq(liveSessions.id, row.id), eq(liveSessions.status, 'READY')))
+    .returning();
+  if (!updated) throw conflict('That video is no longer waiting to go live.');
+  await ensureBroadcast(ctx.db, ctx.env, updated, fetch);
+  const [fresh] = await ctx.db.select().from(liveSessions).where(eq(liveSessions.id, row.id));
+  await audit(ctx, 'live.session.broadcast', { type: 'live_session', id }, null, { title, mode: settings.mode });
+  return names(ctx.db, fresh!);
+}
+
 export async function duplicateLiveSession(ctx: Ctx, id: string) {
   const row = await ownedSession(ctx, id);
   if (liveSessionActive(row.status)) throw conflict('This livestream is still running. Duplicate it after it ends.');
@@ -544,7 +610,8 @@ export async function duplicateLiveSession(ctx: Ctx, id: string) {
   return { title: row.title, playlistName: row.playlistName, settings, items: asItems(row.playlistSnapshot) };
 }
 
-async function releaseMachine(db: Db, row: { id: string; machineId: string }, now: Date) {
+async function releaseMachine(db: Db, row: { id: string; machineId: string | null }, now: Date) {
+  if (!row.machineId) return;
   await db
     .update(streamMachines)
     .set({ currentSessionId: null, updatedAt: now })
@@ -553,6 +620,22 @@ async function releaseMachine(db: Db, row: { id: string; machineId: string }, no
 
 export async function stopLiveSession(ctx: Ctx, id: string, force: boolean) {
   const row = await ownedSession(ctx, id);
+  if (row.status === 'PREPARING' || row.status === 'READY') {
+    const now = ctx.now();
+    const [next] = await ctx.db
+      .update(liveSessions)
+      .set({
+        status: 'ENDED',
+        stopReason: force ? 'EMERGENCY' : 'MANUAL',
+        error: row.status === 'PREPARING' ? 'Stopped before the video was saved.' : null,
+        updatedAt: now,
+      })
+      .where(eq(liveSessions.id, row.id))
+      .returning();
+    await releaseMachine(ctx.db, row, now);
+    await audit(ctx, force ? 'live.session.force_stop' : 'live.session.stop', { type: 'live_session', id });
+    return names(ctx.db, next!);
+  }
   if (!liveSessionActive(row.status)) return names(ctx.db, row);
   const now = ctx.now();
   const [next] = await ctx.db
@@ -579,6 +662,7 @@ export async function streamHeartbeat(
   token: string,
   body: {
     os?: string;
+    hostname?: string | null;
     ffmpeg?: string | null;
     encoders?: string[];
     freeBytes?: number | null;
@@ -594,10 +678,12 @@ export async function streamHeartbeat(
     .update(streamMachines)
     .set({
       os: body.os === 'windows' || body.os === 'mac' || body.os === 'linux' ? body.os : machine.os,
+      hostname: body.hostname?.slice(0, 200) || machine.hostname,
       ffmpeg: body.ffmpeg?.slice(0, 80) ?? machine.ffmpeg,
       encoders: (body.encoders ?? machine.encoders).slice(0, 20),
       freeBytes: body.freeBytes ?? machine.freeBytes,
       totalBytes: body.totalBytes ?? machine.totalBytes,
+      browsePath: machine.browsePath || 'C:\\MehakLive',
       browseListing: listing ?? machine.browseListing,
       lastSeenAt: now,
       updatedAt: now,
@@ -614,49 +700,67 @@ export async function streamHeartbeat(
   return { ok: true, browsePath: machine.browsePath };
 }
 
-function jobFiles(env: ServiceEnv, orgId: string, items: Item[]) {
-  return items.map((item) => {
+async function jobFiles(db: Db, env: ServiceEnv, machineHost: string | null, items: Item[]) {
+  const host = machineHost?.trim().toLowerCase() ?? '';
+  const files = [];
+  for (const item of items) {
     if (item.source === 'upload' && item.uploadId) {
-      return { id: item.id, source: 'upload', name: item.name, sha256: item.sha256 ?? null, uploadId: item.uploadId };
+      files.push({ id: item.id, source: 'upload', name: item.name, sha256: item.sha256 ?? null, uploadId: item.uploadId });
+      continue;
     }
     if (item.source === 'library' && item.fileInstanceId) {
+      const [file] = await db
+        .select({ displayPath: fileInstances.displayPath, hostname: devices.hostname })
+        .from(fileInstances)
+        .innerJoin(devices, eq(devices.id, fileInstances.deviceId))
+        .where(eq(fileInstances.id, item.fileInstanceId));
+      if (host && file?.hostname && file.hostname.trim().toLowerCase() === host && file.displayPath) {
+        files.push({ id: item.id, source: 'agent', name: item.name, path: file.displayPath, sha256: item.sha256 ?? null });
+        continue;
+      }
       const exp = Date.now() + 30 * 60_000;
       const media = signMediaToken(env.agentPairingSecret, { instanceId: item.fileInstanceId, userId: 'live-agent', exp });
-      return {
+      files.push({
         id: item.id,
         source: 'library',
         name: item.name,
         sha256: item.sha256 ?? null,
         url: `${env.appBaseUrl}/api/v1/files/${item.fileInstanceId}/stream?token=${encodeURIComponent(media)}`,
-      };
+      });
+      continue;
     }
-    return { id: item.id, source: 'agent', name: item.name, path: item.path };
-  });
+    files.push({ id: item.id, source: 'agent', name: item.name, path: item.path });
+  }
+  return files;
 }
+
+const LIVE_FOLDER = 'C:\\MehakLive';
 
 export async function agentJob(db: Db, env: ServiceEnv, token: string) {
   const machine = await machineFromToken(db, token);
   if (!machine) return null;
-  if (!machine.currentSessionId) return { phase: 'idle' as const, browsePath: machine.browsePath };
+  const folder = machine.browsePath || machine.roots?.find(Boolean) || LIVE_FOLDER;
+  if (!machine.currentSessionId) return { phase: 'idle' as const, browsePath: folder };
   const [session] = await db.select().from(liveSessions).where(eq(liveSessions.id, machine.currentSessionId));
-  if (!session || !liveSessionActive(session.status)) return { phase: 'idle' as const, browsePath: machine.browsePath };
+  if (!session || !liveSessionActive(session.status)) return { phase: 'idle' as const, browsePath: folder };
   const settings = asSettings(session.settings);
   const base = {
     sessionId: session.id,
-    browsePath: machine.browsePath,
-    files: jobFiles(env, session.orgId, asItems(session.playlistSnapshot)),
+    browsePath: folder,
+    files: await jobFiles(db, env, machine.hostname, asItems(session.playlistSnapshot)),
     loop: settings.loop !== false,
     resolution: settings.resolution ?? '1080p',
     prepareDeadline: new Date(session.jobCreatedAt.getTime() + PREPARE_LIMIT_MS).toISOString(),
   };
   if (session.status === 'STOPPING')
     return { ...base, phase: 'stop' as const, force: session.stopReason === 'EMERGENCY' };
-  if (session.status === 'PREPARING' || session.status === 'CREATING') return { ...base, phase: 'prepare' as const };
+  if (session.status === 'PREPARING') return { ...base, phase: 'prepare' as const };
   const secret = session.ingestSecret ? decryptJson<{ address: string; name: string }>(session.ingestSecret, env.encryptionKey) : null;
   const deadlines = [session.autoStopAt, session.ingestSafetyAt].filter((d): d is Date => d != null);
   return {
     ...base,
     phase: 'stream' as const,
+    masterPath: typeof session.progress?.savedPath === 'string' ? session.progress.savedPath : 'C:\\MehakLive\\live.mp4',
     stopAt: deadlines.length ? new Date(Math.min(...deadlines.map((d) => d.getTime()))).toISOString() : null,
     ingest: secret ? { address: secret.address, name: secret.name } : null,
   };
@@ -671,6 +775,7 @@ export async function agentReport(
     event: 'progress' | 'master_ready' | 'encoder_started' | 'encoder_stopped' | 'failed';
     progress?: Record<string, unknown>;
     items?: Item[];
+    savedPath?: string;
     log?: string;
     error?: string;
     code?: string;
@@ -681,6 +786,24 @@ export async function agentReport(
   if (!machine || machine.currentSessionId !== body.sessionId) return null;
   const [row] = await db.select().from(liveSessions).where(and(eq(liveSessions.id, body.sessionId), eq(liveSessions.orgId, machine.orgId)));
   if (!row) return null;
+  return applyLiveEvent(db, env, row, body, fetchImpl);
+}
+
+export async function applyLiveEvent(
+  db: Db,
+  env: ServiceEnv,
+  row: typeof liveSessions.$inferSelect,
+  body: {
+    event: 'progress' | 'master_ready' | 'encoder_started' | 'encoder_stopped' | 'failed';
+    progress?: Record<string, unknown>;
+    items?: Item[];
+    savedPath?: string;
+    log?: string;
+    error?: string;
+    code?: string;
+  },
+  fetchImpl: FetchFn = fetch,
+) {
   const now = new Date();
   const log = body.log ? redactStreamSecrets(body.log).slice(-4000) : row.logExcerpt;
   if (body.event === 'failed') {
@@ -698,16 +821,25 @@ export async function agentReport(
     return { ok: true };
   }
   if (body.event === 'master_ready') {
+    if (row.status !== 'PREPARING' && row.status !== 'CREATING') return { ok: true };
     const items = asItems(row.playlistSnapshot).map((item) => {
       const next = (body.items ?? []).find((candidate) => candidate.id === item.id);
       return next ? { ...item, ...next, id: item.id, source: item.source, path: item.path } : item;
     });
     await db
       .update(liveSessions)
-      .set({ playlistSnapshot: items, progress: { ...(row.progress ?? {}), masterReady: true }, logExcerpt: log, updatedAt: now })
+      .set({
+        status: 'READY',
+        playlistSnapshot: items,
+        progress: {
+          ...(row.progress ?? {}),
+          masterReady: true,
+          savedPath: body.savedPath?.slice(0, 500) ?? null,
+        },
+        logExcerpt: log,
+        updatedAt: now,
+      })
       .where(eq(liveSessions.id, row.id));
-    const [fresh] = await db.select().from(liveSessions).where(eq(liveSessions.id, row.id));
-    await ensureBroadcast(db, env, fresh!, fetchImpl);
     return { ok: true };
   }
   if (body.event === 'encoder_started') {
@@ -768,7 +900,7 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
     .where(
       and(
         eq(liveSessions.id, row.id),
-        sql`(${liveSessions.status} = 'PREPARING' or (${liveSessions.status} = 'CREATING' and ${liveSessions.updatedAt} < ${new Date(now.getTime() - 2 * 60_000)}))`,
+        sql`(${liveSessions.status} = 'READY' or (${liveSessions.status} = 'CREATING' and ${liveSessions.updatedAt} < ${new Date(now.getTime() - 2 * 60_000)}))`,
         sql`${liveSessions.youtubeBroadcastId} is null`,
       ),
     )
@@ -798,6 +930,7 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
       enableAutoStop: settings.enableAutoStop !== false,
       latencyPreference: settings.latency ?? 'normal',
       resolution: settings.resolution === '720p' ? '720p' : '1080p',
+      closedCaptionsType: settings.captions === 'embedded' ? 'closedCaptionsEmbedded' : 'closedCaptionsDisabled',
     });
     broadcastId = created.broadcastId;
     const stream = await createIngestionStream(fetchImpl, token, row.title, settings.resolution === '720p' ? '720p' : '1080p');
@@ -814,6 +947,7 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
         updatedAt: new Date(),
       })
       .where(eq(liveSessions.id, row.id));
+    const notes: string[] = [];
     try {
       await updateLiveVideo(fetchImpl, token, created.broadcastId, {
         title: row.title,
@@ -826,10 +960,34 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
         containsSyntheticMedia: settings.synthetic === true || settings.synthetic === false ? settings.synthetic : undefined,
         license: settings.license,
       });
-      await db.update(liveSessions).set({ metadataApplied: true }).where(eq(liveSessions.id, row.id));
     } catch (e) {
-      await db.update(liveSessions).set({ error: clean(e) }).where(eq(liveSessions.id, row.id));
+      notes.push(clean(e));
     }
+    if (settings.ageRestricted) {
+      try {
+        await setLiveAgeRestriction(fetchImpl, token, created.broadcastId);
+      } catch (e) {
+        notes.push(clean(e));
+      }
+    }
+    if (settings.paidPromotion === true || settings.paidPromotion === false) {
+      try {
+        await setLivePaidPromotion(fetchImpl, token, created.broadcastId, settings.paidPromotion);
+      } catch (e) {
+        notes.push(clean(e));
+      }
+    }
+    if (settings.ads === 'on' || settings.ads === 'off') {
+      try {
+        await updateLiveMonetization(fetchImpl, token, created.broadcastId, settings.ads);
+      } catch (e) {
+        notes.push(clean(e));
+      }
+    }
+    await db
+      .update(liveSessions)
+      .set(notes.length ? { error: notes.join(' ') } : { metadataApplied: true })
+      .where(eq(liveSessions.id, row.id));
     if (settings.thumbnailFileId) {
       try {
         const exp = Date.now() + 5 * 60_000;
@@ -900,7 +1058,7 @@ async function advanceOne(db: Db, env: ServiceEnv, row: typeof liveSessions.$inf
     await releaseMachine(db, row, now);
     return true;
   }
-  if ((row.status === 'PREPARING' || row.status === 'CREATING') && row.progress?.masterReady === true) {
+  if (row.status === 'CREATING' && row.progress?.masterReady === true && !row.youtubeBroadcastId && !row.ingestSecret) {
     await ensureBroadcast(db, env, row, fetchImpl);
   }
   const [fresh] = await db.select().from(liveSessions).where(eq(liveSessions.id, row.id));

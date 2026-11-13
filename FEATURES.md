@@ -82,7 +82,7 @@ Automatic sync, once that account is connected: Gmail every 5 minutes; Instagram
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Creative Studio → Live Studio: playlist, streaming computer, YouTube details, Prepare & Go Live | Limited | The encoder runs on a computer you pair (`apps/stream-agent`). Docker does not encode the livestream. A live YouTube broadcast was not run from the build machine. |
+| Creative Studio → Live Studio: library videos or an upload, streaming computer, YouTube details, Prepare & Go Live | Limited | The selected computer encodes and sends the livestream (`apps/stream-agent`). NVIDIA encoding is used when that PC reports `h264_nvenc`. The Kemokem server does not encode. A live YouTube broadcast was not run from the build machine. |
 | 10-hour notice and stop at 10 hours 55 minutes | Limited | `LIVE_NOTIFY_AFTER_MINUTES` and `LIVE_AUTO_STOP_MINUTES` in `.env`. The stop cannot pass 11 hours. The form can choose a shorter test. |
 | YouTube title, privacy, DVR, replay, and AI disclosure | Limited | Needs the channel reconnected with `youtube.force-ssl` (the comments permission). Monetization, paid promotion, age restriction beyond Made for Kids, live chat, and captions stay in YouTube Studio and are labeled that way. |
 | Manual RTMPS | Limited | The key is encrypted and hidden. Kemokem does not claim it set the title or completed the broadcast. |

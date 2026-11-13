@@ -12,6 +12,7 @@ export const streamMachines = pgTable(
     orgId: orgRef(),
     displayName: text('display_name').notNull(),
     os: text('os').notNull().default('linux'),
+    hostname: text('hostname'),
     tokenHash: text('token_hash').notNull(),
     ffmpeg: text('ffmpeg'),
     encoders: jsonb('encoders').$type<string[]>().notNull().default([]),
@@ -68,9 +69,7 @@ export const liveSessions = pgTable(
     orgId: orgRef(),
     userId: uuid('user_id'),
     playlistId: uuid('playlist_id').references(() => livePlaylists.id, { onDelete: 'set null' }),
-    machineId: uuid('machine_id')
-      .notNull()
-      .references(() => streamMachines.id, { onDelete: 'restrict' }),
+    machineId: uuid('machine_id').references(() => streamMachines.id, { onDelete: 'set null' }),
     socialAccountId: uuid('social_account_id').references(() => socialAccounts.id, { onDelete: 'set null' }),
     title: text('title').notNull(),
     playlistName: text('playlist_name'),

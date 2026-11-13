@@ -51,7 +51,11 @@ async function yt(fetchImpl: FetchFn, token: string, url: string, init: RequestI
   }
   if (!res.ok) {
     const reason = json?.error?.errors?.[0]?.reason || json?.error?.message || text || res.statusText;
-    throw new Error(redactStreamSecrets(`YouTube ${res.status} ${reason}`).slice(0, 400));
+    // Log only the API operation and part, never the query string (which may contain IDs),
+    // bearer token, ingest address or stream key. This makes unexpectedPart actionable.
+    const requestUrl = new URL(url);
+    const operation = `${(init.method ?? 'GET').toUpperCase()} ${requestUrl.pathname} part=${requestUrl.searchParams.get('part') ?? '(none)'}`;
+    throw new Error(redactStreamSecrets(`YouTube ${res.status} ${reason} [${operation}]`).slice(0, 400));
   }
   return json;
 }
@@ -138,7 +142,8 @@ export async function listUpcomingBroadcasts(fetchImpl: FetchFn, token: string) 
   const json = await yt(
     fetchImpl,
     token,
-    `${API}/liveBroadcasts?part=id,snippet,status,contentDetails&mine=true&broadcastStatus=upcoming&maxResults=50`,
+    // YouTube requires exactly one filter: mine, id OR broadcastStatus.
+    `${API}/liveBroadcasts?part=id,snippet,status,contentDetails&broadcastStatus=upcoming&maxResults=50`,
   );
   const items = Array.isArray(json?.items) ? json.items : [];
   return items
@@ -271,11 +276,17 @@ export async function updateLiveMonetization(fetchImpl: FetchFn, token: string, 
   const monetizationDetails =
     ads === 'on'
       ? { adsMonetizationStatus: 'on', cuepointSchedule: { enabled: true, ytOptimizedCuepointConfig: 'MEDIUM' } }
-      : { adsMonetizationStatus: 'off', cuepointSchedule: { enabled: false } };
-  await yt(fetchImpl, token, `${API}/liveBroadcasts?part=monetizationDetails`, {
+      : { adsMonetizationStatus: 'off' }; // YouTube forbids cuepointSchedule when ads are off.
+  const result = await yt(fetchImpl, token, `${API}/liveBroadcasts?part=monetizationDetails`, {
     method: 'PUT',
     body: JSON.stringify({ id: broadcastId, monetizationDetails }),
   });
+  // The returned resource normally includes the requested part. Reject an explicit mismatch,
+  // while allowing API responses that omit that field (the UI can verify in YouTube Studio).
+  const confirmed = result?.monetizationDetails?.adsMonetizationStatus;
+  if (confirmed && confirmed !== ads) {
+    throw new Error(`YouTube returned adsMonetizationStatus=${String(confirmed)} instead of ${ads}.`);
+  }
 }
 
 function stripUndefined(value: Record<string, unknown>) {

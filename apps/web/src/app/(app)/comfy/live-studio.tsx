@@ -580,12 +580,12 @@ function FolderPath({
   row,
   onChange,
 }: {
-  row: { id: string; roots: string[]; browsePath?: string | null; browseListing?: { name: string; kind: string }[] };
+  row: { id: string; roots: string[]; browsePath?: string | null; browseListing?: { name: string; relative?: string; kind: string }[] };
   onChange: () => void;
 }) {
   const [folder, setFolder] = useState(row.roots[0] || row.browsePath || 'C:\\MehakLive');
   const [note, setNote] = useState<string | null>(null);
-  const videos = (row.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4' && !file.relative.replace(/\\/g, '/').startsWith('stream/'));
+  const videos = (row.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4' && !(file.relative ?? '').replace(/\\/g, '/').startsWith('stream/'));
   return (
     <div className="mt-3 space-y-2">
       <Field label="Video folder" hint="The folder on this computer. The agent lists the mp4 files here. They are not copied.">

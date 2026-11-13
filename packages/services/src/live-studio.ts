@@ -599,6 +599,9 @@ export async function startLiveSession(
   settings.description = (settings.description ?? '').slice(0, 5000);
   settings.categoryId = settings.categoryId || '10';
   settings.language = settings.language || 'en';
+  // User preference for Kemokem Go Live: request monetization unless explicitly disabled.
+  // This is not a guarantee of YPP/ad eligibility; YouTube may reject the update.
+  if (settings.mode === 'youtube' && settings.ads !== 'off') settings.ads = 'on';
   let ingest: string | null = null;
   let accountId: string | null = null;
   if (settings.mode === 'manual') {
@@ -1020,7 +1023,8 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
   let bound = false;
   try {
     const { token } = await youtubeToken(ctx, row.socialAccountId!);
-    const upcoming = await listUpcomingBroadcasts(fetchImpl, token).catch(() => []);
+    // Do not silently create another broadcast when listing failed; that risks duplicate Upcoming entries.
+    const upcoming = await listUpcomingBroadcasts(fetchImpl, token);
     const reusable = upcoming.filter(
       (item) => item.title === row.title && !item.boundStreamId && ['created', 'ready', 'testing'].includes(item.lifeCycleStatus),
     );
@@ -1187,6 +1191,16 @@ async function bindSavedBroadcast(
         updatedAt: new Date(),
       })
       .where(eq(liveSessions.id, row.id));
+    // A prior attempt may have created the broadcast but failed before binding.
+    // Apply the requested monetization on this recovery path as well.
+    // An ineligible channel/ads failure must not prevent video ingestion.
+    if (settings.ads === 'on' || settings.ads === 'off') {
+      try {
+        await updateLiveMonetization(fetchImpl, token, row.youtubeBroadcastId!, settings.ads);
+      } catch (e) {
+        await db.update(liveSessions).set({ error: clean(e), updatedAt: new Date() }).where(eq(liveSessions.id, row.id));
+      }
+    }
   } catch (e) {
     await db.update(liveSessions).set({ error: clean(e), updatedAt: new Date() }).where(eq(liveSessions.id, row.id));
   }

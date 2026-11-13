@@ -23,7 +23,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 function youtubeMock() {
-  const calls: { method: string; path: string }[] = [];
+  const calls: { method: string; path: string; part: string | null; body: any }[] = [];
   let life = 'ready';
   let streamStatus = 'inactive';
   let actualStart: string | null = null;
@@ -31,8 +31,11 @@ function youtubeMock() {
   const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
     const u = new URL(String(url));
     const method = init?.method ?? 'GET';
-    calls.push({ method, path: u.pathname });
+    const part = u.searchParams.get('part');
+    const body = init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : null;
+    calls.push({ method, path: u.pathname, part, body });
     if (u.pathname.endsWith('/liveBroadcasts') && method === 'GET' && u.searchParams.get('broadcastStatus') === 'upcoming') {
+      if (u.searchParams.has('mine')) return json({ error: { errors: [{ reason: 'invalidFilters' }] } }, 400);
       return json({
         items: offerUpcoming
           ? [
@@ -48,6 +51,13 @@ function youtubeMock() {
     }
     if (u.pathname.endsWith('/liveBroadcasts') && method === 'POST') {
       return json({ id: 'bcast1', status: { lifeCycleStatus: 'created' } });
+    }
+    if (u.pathname.endsWith('/liveBroadcasts') && method === 'PUT') {
+      if (part !== 'monetizationDetails') return json({ error: { errors: [{ reason: 'unexpectedPart' }] } }, 400);
+      if (body?.monetizationDetails?.adsMonetizationStatus === 'off' && body?.monetizationDetails?.cuepointSchedule) {
+        return json({ error: { errors: [{ reason: 'invalidCuepointSchedule' }] } }, 400);
+      }
+      return json({ id: 'bcast1', monetizationDetails: body.monetizationDetails });
     }
     if (u.pathname.endsWith('/liveBroadcasts/bind')) return json({ id: 'bcast1' });
     if (u.pathname.endsWith('/liveBroadcasts/transition')) {
@@ -157,6 +167,11 @@ describe('Go live dispatch', () => {
     expect(yt.creates()).toBe(1);
     expect(started.youtubeBroadcastId).toBe('bcast1');
     expect(yt.calls.some((c) => c.path.endsWith('/liveBroadcasts/bind'))).toBe(true);
+    // Monetization defaults to ON for new YouTube sessions unless the user selected OFF.
+    expect(yt.calls.some((c) => c.method === 'PUT' && c.path.endsWith('/liveBroadcasts') &&
+      c.part === 'monetizationDetails' && c.body?.monetizationDetails?.adsMonetizationStatus === 'on' &&
+      c.body?.monetizationDetails?.cuepointSchedule?.enabled === true)).toBe(true);
+    expect(yt.calls.some((c) => c.path.endsWith('/liveBroadcasts') && c.method === 'GET' && c.part?.includes('id'))).toBe(true);
 
     const job = await agentJob(h.db, org.env, machine.token);
     expect(job).toMatchObject({
@@ -293,10 +308,13 @@ describe('Go live dispatch', () => {
     await startLiveSession(
       org.ctx,
       again.id,
-      { socialAccountId: account.id, title: 'Mehak Live', settings: { resolution: '1080p', loop: true, mode: 'youtube' } },
+      { socialAccountId: account.id, title: 'Mehak Live', settings: { resolution: '1080p', loop: true, mode: 'youtube', ads: 'off' } },
       yt.fetchImpl,
     );
     const secondStream = await agentJob(h.db, org.env, machine.token);
     expect(secondStream).toMatchObject({ phase: 'stream', masterPath: 'C:\\MehakLive\\stream\\live.mp4' });
+    expect(yt.calls.some((c) => c.method === 'PUT' && c.path.endsWith('/liveBroadcasts') &&
+      c.part === 'monetizationDetails' && c.body?.monetizationDetails?.adsMonetizationStatus === 'off' &&
+      !('cuepointSchedule' in c.body.monetizationDetails))).toBe(true);
   });
 });

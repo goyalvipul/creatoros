@@ -53,6 +53,43 @@ type Session = {
   settings?: { privacy?: string };
 };
 
+const DRAFT_KEY = 'cos-live-create';
+
+type CreateDraft = {
+  title: string;
+  description: string;
+  tags: string;
+  privacy: 'public' | 'unlisted' | 'private';
+  kids: boolean;
+  synthetic: 'unset' | 'yes' | 'no';
+  ageRestricted: boolean;
+  paidPromotion: 'unset' | 'yes' | 'no';
+  ads: 'unset' | 'on' | 'off';
+  captions: 'off' | 'embedded';
+  resolution: '1080p' | '720p';
+  loop: boolean;
+  mode: 'youtube' | 'manual';
+  accountId: string;
+  stopMinutes: string;
+  playlistName: string;
+  rtmpUrl: string;
+};
+
+function choice<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+function readCreateDraft(): Partial<CreateDraft> {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Partial<CreateDraft>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'create', label: 'Create stream' },
   { id: 'active', label: 'Active stream' },
@@ -101,7 +138,75 @@ export function LiveStudio() {
   const [streamKey, setStreamKey] = useState('');
   const [playlistName, setPlaylistName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
+  useEffect(() => {
+    const saved = readCreateDraft();
+    if (typeof saved.title === 'string') setTitle(saved.title);
+    if (typeof saved.description === 'string') setDescription(saved.description);
+    if (typeof saved.tags === 'string') setTags(saved.tags);
+    if (typeof saved.kids === 'boolean') setKids(saved.kids);
+    if (typeof saved.ageRestricted === 'boolean') setAgeRestricted(saved.ageRestricted);
+    if (typeof saved.loop === 'boolean') setLoop(saved.loop);
+    if (typeof saved.accountId === 'string') setAccountId(saved.accountId);
+    if (typeof saved.stopMinutes === 'string') setStopMinutes(saved.stopMinutes);
+    if (typeof saved.playlistName === 'string') setPlaylistName(saved.playlistName);
+    if (typeof saved.rtmpUrl === 'string') setRtmpUrl(saved.rtmpUrl);
+    setPrivacy(choice(saved.privacy, ['public', 'unlisted', 'private'] as const, 'public'));
+    setSynthetic(choice(saved.synthetic, ['unset', 'yes', 'no'] as const, 'unset'));
+    setPaidPromotion(choice(saved.paidPromotion, ['unset', 'yes', 'no'] as const, 'unset'));
+    setAds(choice(saved.ads, ['unset', 'on', 'off'] as const, 'unset'));
+    setCaptions(choice(saved.captions, ['off', 'embedded'] as const, 'off'));
+    setResolution(choice(saved.resolution, ['1080p', '720p'] as const, '1080p'));
+    setMode(choice(saved.mode, ['youtube', 'manual'] as const, 'youtube'));
+    setDraftReady(true);
+  }, []);
+  useEffect(() => {
+    if (!draftReady) return;
+    const draft: CreateDraft = {
+      title,
+      description,
+      tags,
+      privacy,
+      kids,
+      synthetic,
+      ageRestricted,
+      paidPromotion,
+      ads,
+      captions,
+      resolution,
+      loop,
+      mode,
+      accountId,
+      stopMinutes,
+      playlistName,
+      rtmpUrl,
+    };
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch {
+      // The form still works when the browser refuses storage.
+    }
+  }, [
+    draftReady,
+    title,
+    description,
+    tags,
+    privacy,
+    kids,
+    synthetic,
+    ageRestricted,
+    paidPromotion,
+    ads,
+    captions,
+    resolution,
+    loop,
+    mode,
+    accountId,
+    stopMinutes,
+    playlistName,
+    rtmpUrl,
+  ]);
   const state = useApi<{ active: Session | null; notifyMinutes: number; stopMinutes: number }>('/live/state', {
     refreshInterval: 0,
     revalidateOnFocus: false,

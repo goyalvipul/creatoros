@@ -98,7 +98,9 @@ export async function createIngestionStream(
   title: string,
   resolution: '720p' | '1080p',
 ) {
-  const json = await yt(fetchImpl, token, `${API}/liveStreams?part=snippet,cdn,status`, {
+  const json = await yt(fetchImpl, token, // contentDetails.isReusable is included in the body, so the part mask MUST include contentDetails.
+  // The previous mask included status instead and YouTube rejected it with 400 unexpectedPart.
+  `${API}/liveStreams?part=snippet,cdn,contentDetails`, {
     method: 'POST',
     body: JSON.stringify({
       snippet: { title },

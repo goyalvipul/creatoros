@@ -78,6 +78,15 @@ function youtubeMock() {
       });
     }
     if (u.pathname.endsWith('/liveStreams') && method === 'POST') {
+      // Model YouTube's unexpectedPart validation: a writable top-level body part
+      // must be named in the request's part mask. This caught the production failure.
+      const allowed = new Set((part ?? '').split(','));
+      if (Object.keys(body ?? {}).some((key) => !allowed.has(key))) {
+        return json({ error: { errors: [{ reason: 'unexpectedPart' }] } }, 400);
+      }
+      if (!allowed.has('contentDetails')) {
+        return json({ error: { errors: [{ reason: 'unexpectedPart' }] } }, 400);
+      }
       return json({
         id: 'stream1',
         cdn: { ingestionInfo: { ingestionAddress: 'rtmps://a.rtmps.youtube.com/live2', streamName: 'stream-key-1' } },
@@ -167,6 +176,8 @@ describe('Go live dispatch', () => {
     expect(yt.creates()).toBe(1);
     expect(started.youtubeBroadcastId).toBe('bcast1');
     expect(yt.calls.some((c) => c.path.endsWith('/liveBroadcasts/bind'))).toBe(true);
+    expect(yt.calls.some((c) => c.method === 'POST' && c.path.endsWith('/liveStreams') &&
+      c.part === 'snippet,cdn,contentDetails' && c.body?.contentDetails?.isReusable === false)).toBe(true);
     // Monetization defaults to ON for new YouTube sessions unless the user selected OFF.
     expect(yt.calls.some((c) => c.method === 'PUT' && c.path.endsWith('/liveBroadcasts') &&
       c.part === 'monetizationDetails' && c.body?.monetizationDetails?.adsMonetizationStatus === 'on' &&

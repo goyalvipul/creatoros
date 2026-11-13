@@ -20,7 +20,7 @@ Optional:
 
 Run this on the RTX 3060 only. Name that computer so the name includes 3060. Leave the window open as the Windows user who can see the GPU and `C:\MehakLive`.
 
-Put the mp4 files in `C:\MehakLive`. Make one video reads them there, writes `C:\MehakLive\normalized`, and saves `C:\MehakLive\live.mp4`. It does not download the videos. Go live sends `live.mp4`.
+Put the mp4 files in `C:\MehakLive`. Make one video reads them there, writes `C:\MehakLive\normalized`, and saves `C:\MehakLive\stream\live.mp4`. That stream folder is not listed as a clip. Go live uses `C:\MehakLive\stream\live.mp4` when that file is already there, without building again. It does not download the videos.
 
 ## Keep it running
 

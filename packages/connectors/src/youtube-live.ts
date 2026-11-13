@@ -133,6 +133,24 @@ export async function transitionLiveBroadcast(
   );
 }
 
+/** Upcoming broadcasts on this channel. The caller may reuse one only when the match is unambiguous. */
+export async function listUpcomingBroadcasts(fetchImpl: FetchFn, token: string) {
+  const json = await yt(
+    fetchImpl,
+    token,
+    `${API}/liveBroadcasts?part=id,snippet,status,contentDetails&mine=true&broadcastStatus=upcoming&maxResults=50`,
+  );
+  const items = Array.isArray(json?.items) ? json.items : [];
+  return items
+    .map((item: { id?: string; snippet?: { title?: string }; status?: { lifeCycleStatus?: string }; contentDetails?: { boundStreamId?: string } }) => ({
+      broadcastId: String(item.id ?? ''),
+      title: String(item.snippet?.title ?? ''),
+      lifeCycleStatus: String(item.status?.lifeCycleStatus ?? ''),
+      boundStreamId: item.contentDetails?.boundStreamId ? String(item.contentDetails.boundStreamId) : null,
+    }))
+    .filter((item: { broadcastId: string }) => item.broadcastId);
+}
+
 export async function readLiveBroadcast(fetchImpl: FetchFn, token: string, broadcastId: string) {
   const json = await yt(
     fetchImpl,

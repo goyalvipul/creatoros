@@ -1,7 +1,11 @@
 #!/usr/bin/env node
+
 /**
+
  * Kemokem streaming agent. It runs on the computer that encodes the livestream.
+
  * Makes outbound HTTPS requests. No inbound port is required.
+
  */
 
 import { execFile, spawn } from 'node:child_process';
@@ -10,7 +14,7 @@ import { createHash } from 'node:crypto';
 
 import { createReadStream, createWriteStream } from 'node:fs';
 
-import { access, lstat, mkdir, readdir, readFile, rename, stat, statfs, unlink, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, open, readdir, readFile, rename, stat, statfs, unlink, writeFile } from 'node:fs/promises';
 
 import os from 'node:os';
 
@@ -19,8 +23,6 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 import { promisify } from 'node:util';
-
-
 
 const exec = promisify(execFile);
 
@@ -34,19 +36,21 @@ const mediaRoot = process.env.KEMOKEM_MEDIA || (process.platform === 'win32' ? '
 
 const normDir = path.join(mediaRoot, 'normalized');
 
-const liveFile = path.join(mediaRoot, 'live.mp4');
+const streamDir = path.join(mediaRoot, 'stream');
 
-const liveTemp = path.join(mediaRoot, 'live.building.mp4');
+const liveFile = path.join(streamDir, 'live.mp4');
 
-const livePlan = path.join(mediaRoot, 'live.plan.json');
+const liveTemp = path.join(streamDir, 'live.building.mp4');
+
+const livePlan = path.join(streamDir, 'live.plan.json');
 
 const NORM_PROFILE = 'h264-1920x1080-30-yuv420p-aac-192k-48000-2-g60';
 
 const savedJob = path.join(home, 'job.json');
 
+const agentLogPath = process.env.KEMOKEM_LOG || (process.platform === 'win32' ? 'C:\\ProgramData\\KemokemAgent\\logs\\agent.log' : path.join(home, 'agent.log'));
+
 const every = Math.max(15, Number(process.env.KEMOKEM_HEARTBEAT_SEC || 25)) * 1000;
-
-
 
 if (!base || !token) {
 
@@ -55,8 +59,6 @@ if (!base || !token) {
   process.exit(1);
 
 }
-
-
 
 const state = {
 
@@ -75,21 +77,32 @@ const state = {
   lastProgress: {},
 
   lastLog: '',
+
   finishedPreparation: null,
+
   failedPreparation: null,
+
   lastObservedJob: null,
+
+  stopRequested: false,
+  encoderStartPending: false,
+  failedEncoderSession: null,
+  finishedEncoderSession: null,
+  encoderContext: null,
+  launchEpoch: 0,
+  deadlineSessionId: null,
+  activeStreamKey: null,
+  deadlineReportedSession: null,
 
 };
 
-
-
 function redact(value) {
-
-  return String(value).replace(/rtmps?:\/\/\S+/gi, 'rtmps://[redacted]').slice(-2000);
-
+  let result = String(value ?? '');
+  // Protect secrets even when FFmpeg/Node prints just the stream name instead of its URL.
+  if (token) result = result.split(token).join('[redacted]');
+  if (state.activeStreamKey) result = result.split(state.activeStreamKey).join('[redacted]');
+  return result.replace(/rtmps?:\/\/[^\s"']+/gi, 'rtmps://[redacted]').slice(-2000);
 }
-
-
 
 function osName() {
 
@@ -100,8 +113,6 @@ function osName() {
   return 'linux';
 
 }
-
-
 
 async function api(pathname, options = {}) {
 
@@ -143,15 +154,11 @@ let json = null;
 
 }
 
-
-
 function run(cmd, args, opts = {}) {
 
   return exec(cmd, args, { timeout: opts.timeout ?? 60_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true });
 
 }
-
-
 
 async function ffmpegInfo() {
 
@@ -175,8 +182,6 @@ const encoders = ['libx264', 'h264_nvenc', 'h264_qsv', 'h264_videotoolbox'].filt
 
 }
 
-
-
 async function disk() {
 
   try {
@@ -192,8 +197,6 @@ const info = await statfs(home);
   }
 
 }
-
-
 
 async function probe(file) {
 
@@ -241,15 +244,11 @@ const fps = video?.avg_frame_rate?.includes('/')
 
 }
 
-
-
 function targetSize(resolution) {
 
   return resolution === '720p' ? [1280, 720] : [1920, 1080];
 
 }
-
-
 
 function matchesProfile(info, resolution) {
 
@@ -281,8 +280,6 @@ const [w, h] = targetSize(resolution);
 
 }
 
-
-
 function sourceMark(fileStat, resolution) {
 
 const [w, h] = targetSize(resolution);
@@ -290,8 +287,6 @@ const [w, h] = targetSize(resolution);
   return { size: fileStat.size, mtimeMs: Math.round(fileStat.mtimeMs), profile: `${NORM_PROFILE}-${w}x${h}` };
 
 }
-
-
 
 async function readJson(file) {
 
@@ -307,8 +302,6 @@ async function readJson(file) {
 
 }
 
-
-
 async function sha256(file) {
 
 const hash = createHash('sha256');
@@ -318,8 +311,6 @@ const hash = createHash('sha256');
   return hash.digest('hex');
 
 }
-
-
 
 async function download(url, dest, expected) {
 
@@ -339,15 +330,11 @@ const got = await sha256(dest);
 
 }
 
-
-
 function quote(file) {
 
-  return `file '${file.replace(/\\/g, '/').replace(/'/g, `'\\''`)}'`;
+  return `file '${file.replace(/\\/g, '/').replace(/'/g, `'\\\''`)}'`;
 
 }
-
-
 
 async function transcode(input, output, resolution, hasAudio) {
 
@@ -433,75 +420,91 @@ const args = ['-y', '-hide_banner', '-nostats', '-loglevel', 'error', '-fflags',
 
 }
 
-
-
-function arm(stopAt) {
-
-  if (!stopAt) return;
-
-const when = Date.parse(stopAt);
-
-  if (Number.isNaN(when)) return;
-
-  if (state.armedFor != null && state.armedFor <= when) return;
-
+// A timer must only ever control the session it was created for.
+function cancelDeadline() {
   if (state.stopTimer) clearTimeout(state.stopTimer);
-
-  state.armedFor = when;
-
-  state.stopTimer = setTimeout(() => {
-
-    stopEncoder('deadline');
-
-  }, Math.max(0, when - Date.now()));
-
+  state.stopTimer = null;
+  state.armedFor = null;
+  state.deadlineSessionId = null;
 }
 
+function arm(stopAt, sessionId) {
+  const when = Date.parse(stopAt || '');
+  if (!sessionId || !Number.isFinite(when)) return false;
+  if (state.stopTimer && state.deadlineSessionId === sessionId && state.armedFor === when) return true;
+  cancelDeadline();
+  state.armedFor = when;
+  state.deadlineSessionId = sessionId;
+  const check = () => {
+    if (state.deadlineSessionId !== sessionId || state.sessionId !== sessionId || state.phase !== 'stream') return;
+    const remaining = when - Date.now();
+    if (remaining > 0) {
+      state.stopTimer = setTimeout(check, Math.min(remaining, 2_000_000_000));
+      return;
+    }
+    state.stopTimer = null;
+    state.failedEncoderSession = sessionId; // Never restart this session after its deadline.
+    const hadEncoder = Boolean(state.encoderContext && state.encoderContext.sessionId === sessionId);
+    stopEncoder('deadline');
+    if (!hadEncoder && state.deadlineReportedSession !== sessionId) {
+      state.deadlineReportedSession = sessionId;
+      state.finishedEncoderSession = sessionId;
+      void api('/live/agent/report', { method: 'POST', body: {
+        sessionId, event: 'encoder_stopped', error: 'Stream deadline has passed.',
+      }}).catch((e) => console.error(`[Kemokem deadline] ${redact(e.message)}`));
+    }
+  };
+  state.stopTimer = setTimeout(check, Math.min(Math.max(0, when - Date.now()), 2_000_000_000));
+  return true;
+}
 
+// Use the earliest known deadline for the same session. This protects against
+// server restarts, reissued jobs and accidental extensions of a live session.
+async function deadlineFor(job) {
+  const saved = await readJson(savedJob);
+  const requested = Date.parse(job.stopAt || '');
+  const now = Date.now();
+  const firstAllowed = now + 655 * 60_000;
+  let deadline = Number.isFinite(requested) ? Math.min(requested, firstAllowed) : firstAllowed;
+  if (saved?.sessionId === job.sessionId) {
+    const prior = Date.parse(saved.stopAt || '');
+    if (Number.isFinite(prior)) deadline = Math.min(deadline, prior);
+  }
+  const stopAt = new Date(deadline).toISOString();
+  if (saved?.sessionId !== job.sessionId || saved.stopAt !== stopAt) {
+    await writeFile(savedJob, JSON.stringify({ sessionId: job.sessionId, stopAt }));
+  }
+  return stopAt;
+}
 
 function killEncoder(child) {
-
-  if (!child || child.exitCode != null) return;
-
-  if (process.platform === 'win32') child.kill();
-
-  else child.kill('SIGKILL');
-
+  if (!child || child.exitCode != null || child.signalCode != null) return;
+  try { child.kill(process.platform === 'win32' ? undefined : 'SIGKILL'); }
+  catch (e) { console.error(`[Kemokem stop] ${redact(e.message)}`); }
 }
-
-
 
 function stopEncoder(reason) {
-
-const child = state.ffmpeg;
-
-  if (!child || child.exitCode != null) return;
-
+  const context = state.encoderContext;
+  if (!context || context.child.exitCode != null || context.child.signalCode != null) return;
+  if (context.requestedStop && reason !== 'force') return;
+  context.requestedStop = true;
+  state.stopRequested = true;
+  const child = context.child; // Capture the original child, not the mutable state.ffmpeg.
   if (reason === 'force') {
-
     killEncoder(child);
-
     return;
-
   }
-
   try {
-
-    child.stdin?.write('q\n');
-
-  } catch {
-
+    if (!child.stdin || child.stdin.destroyed || !child.stdin.writable) throw new Error('FFmpeg stdin unavailable');
+    child.stdin.write('q\n');
+  } catch (e) {
+    console.error(`[Kemokem stop] Graceful stop unavailable: ${redact(e.message)}`);
     killEncoder(child);
-
     return;
-
   }
-
-  setTimeout(() => killEncoder(state.ffmpeg), 20_000).unref();
-
+  context.stopTimeout = setTimeout(() => killEncoder(child), 20_000);
+  context.stopTimeout.unref();
 }
-
-
 
 async function materialize(file, dir, resolution, encoders) {
 
@@ -553,20 +556,27 @@ const expected = res.headers.get('x-content-sha256');
 
 }
 
-
-
 async function prepare(job) {
 
   if (!job.sessionId || !Array.isArray(job.files) || job.files.length === 0) {
+
     throw Object.assign(new Error('Prepare job has no sessionId or selected files. Check the server Make one video handler and /live/agent/job payload.'), { code: 'WORKER' });
+
   }
+
   console.log(`[Kemokem prepare] session=${job.sessionId} files=${job.files.length} resolution=${job.resolution || '1080p'} folder=${mediaRoot}`);
-  // The existing server protocol expects these same event names.
+
+// The existing server protocol expects these same event names.
+
   await api('/live/agent/report', { method: 'POST', body: {
+
     sessionId: job.sessionId, event: 'progress', log: `Preparation accepted by Windows agent: ${job.files.length} selected videos.`,
+
   } }).catch((e) => console.error(`[Kemokem prepare] Initial status delivery failed: ${redact(e.message)}`));
 
   await mkdir(normDir, { recursive: true });
+
+  await mkdir(streamDir, { recursive: true });
 
 const ready = [];
 
@@ -627,9 +637,13 @@ let info = null;
     }
 
     if (!info || !matchesProfile(info, job.resolution)) {
+
       console.log(`[Kemokem prepare] Normalizing ${index + 1}/${job.files.length}: ${name}`);
+
       await api('/live/agent/report', { method: 'POST', body: {
+
         sessionId: job.sessionId, event: 'progress', log: `Normalizing ${index + 1}/${job.files.length}: ${name}`,
+
       } }).catch(() => undefined);
 
 const src = await probe(local);
@@ -649,7 +663,9 @@ const partial = `${out}.part.mp4`;
       await writeFile(note, JSON.stringify(mark));
 
     } else {
+
       console.log(`[Kemokem prepare] Cache hit ${index + 1}/${job.files.length}: ${name}`);
+
     }
 
     marks.push({ name, ...mark });
@@ -693,9 +709,13 @@ let masterInfo = null;
 const list = path.join(normDir, 'list.txt');
 
     await writeFile(list, `${ready.map((item) => quote(item.file)).join('\n')}\n`);
+
     console.log(`[Kemokem prepare] Concatenating ${ready.length} normalized clips to ${liveTemp}`);
+
     await api('/live/agent/report', { method: 'POST', body: {
+
       sessionId: job.sessionId, event: 'progress', log: `Combining ${ready.length} clips into live.mp4`,
+
     } }).catch(() => undefined);
 
     try {
@@ -726,36 +746,58 @@ const built = await probe(liveTemp);
 
 const backup = `${liveFile}.bak-${process.pid}-${Date.now()}`;
 
-    let had = false;
+let had = false;
+
     try {
+
       await rename(liveFile, backup);
+
       had = true;
+
     } catch (e) {
+
       if (e.code !== 'ENOENT') {
-        // A locked/permission-denied old master is NOT the same as no old master.
+
+// A locked/permission-denied old master is NOT the same as no old master.
+
         throw new Error(`Cannot safely replace existing live.mp4: ${e.message}`);
+
       }
+
     }
 
     try {
+
       await rename(liveTemp, liveFile);
+
     } catch (e) {
+
       if (had) {
+
         await rename(backup, liveFile).catch((restoreError) => {
+
           console.error(`[Kemokem prepare] CRITICAL: rollback failed; previous master at ${backup}: ${redact(restoreError.message)}`);
+
         });
+
       }
+
       throw e;
+
     }
 
     if (had) await unlink(backup).catch(() => undefined);
+
     await writeFile(livePlan, same);
 
   } else {
+
     console.log('[Kemokem prepare] Existing master matches playlist and profile; reusing live.mp4');
+
   }
 
   console.log(`[Kemokem prepare] Master ready: ${liveFile}`);
+
   await api('/live/agent/report', {
 
     method: 'POST',
@@ -776,8 +818,6 @@ const backup = `${liveFile}.bak-${process.pid}-${Date.now()}`;
 
 }
 
-
-
 async function statFile(file) {
 
 const info = await stat(file);
@@ -786,107 +826,143 @@ const info = await stat(file);
 
 }
 
-
+// Terminal streaming failures use the same established `failed` event as preparation.
+// A per-session latch prevents another launch every heartbeat on a failed job.
+async function reportStream(job, error) {
+  const message = redact(error instanceof Error ? error.message : error);
+  state.failedEncoderSession = job.sessionId;
+  console.error(`[Kemokem stream] ${message}`);
+  try {
+    await api('/live/agent/report', { method: 'POST', body: {
+      sessionId: job.sessionId, event: 'failed', code: 'ENCODER', error: message, log: message,
+    }});
+  } catch (e) {
+    console.error(`[Kemokem stream] Could not report failure: ${redact(e.message)}`);
+  }
+}
 
 async function startEncoder(job) {
-
-  if (!job.ingest?.address || !job.ingest?.name) return;
-
-  if (job.stopAt && Date.parse(job.stopAt) <= Date.now()) {
-
-    void api('/live/agent/report', { method: 'POST', body: { sessionId: job.sessionId, event: 'encoder_stopped', error: 'The deadline had already passed.' } });
-
-    return;
-
-  }
-
-  if (state.ffmpeg && state.ffmpeg.exitCode == null) return;
-
-const master = job.masterPath || liveFile;
-
-let checked = null;
-
+  if (!job?.sessionId || state.encoderStartPending || state.encoderContext ||
+      state.failedEncoderSession === job.sessionId || state.finishedEncoderSession === job.sessionId) return;
+  if (state.sessionId !== job.sessionId || state.phase !== 'stream') return;
+  state.encoderStartPending = true;
+  const epoch = state.launchEpoch;
   try {
+    const ingest = job.ingest || {};
+    const address = ingest.rtmpsIngestionAddress || ingest.address || ingest.ingestionAddress;
+    const streamName = ingest.name || ingest.streamName;
+    if (!address || !streamName) throw new Error('YouTube ingest address or stream key is missing from the streaming job.');
+    if (!/^rtmps?:\/\//i.test(address)) throw new Error('YouTube ingest address must use RTMP or RTMPS.');
+    if (job.stopAt && Date.parse(job.stopAt) <= Date.now()) throw new Error('The server stream deadline has passed.');
+    if (state.armedFor != null && Date.now() >= state.armedFor) throw new Error('The preserved stream deadline has passed.');
+    const master = job.masterPath || liveFile;
+    // A pre-migration job may still point at C:\MehakLive\live.mp4. Never
+    // silently broadcast that stale file when the approved master is in stream/.
+    const legacyMaster = path.join(mediaRoot, 'live.mp4');
+    if (path.resolve(master).toLowerCase() === path.resolve(legacyMaster).toLowerCase()) {
+      throw new Error(`Backend returned the old master path (${master}). Expected ${liveFile}; update the existing Go Live job payload.`);
+    }
+    const checked = await probe(master);
+    if (!checked.hasAudio || !checked.durationMs || checked.videoCodec !== 'h264' || checked.audioCodec !== 'aac') {
+      throw new Error(`Master video is not a valid H.264/AAC stream: ${master}`);
+    }
+    // A STOP/HOLD/IDLE or session change while ffprobe ran cancels this launch.
+    if (epoch !== state.launchEpoch || state.sessionId !== job.sessionId || state.phase !== 'stream' ||
+        state.encoderContext || state.failedEncoderSession === job.sessionId) return;
+    if (state.armedFor != null && Date.now() >= state.armedFor) throw new Error('The stream deadline expired before FFmpeg started.');
+    const destination = `${String(address).replace(/\/$/, '')}/${streamName}`;
+    const args = ['-hide_banner', '-loglevel', 'info', '-re'];
+    if (job.loop !== false) args.push('-stream_loop', '-1');
+    args.push('-i', master, '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-c:a', 'copy', '-f', 'flv', destination);
+    state.activeStreamKey = String(streamName);
+    state.lastLog = '';
+    state.lastProgress = {};
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+    const context = { child, sessionId: job.sessionId, requestedStop: false, stopTimeout: null, terminal: false, reportedStart: false };
+    state.encoderContext = context;
+    state.ffmpeg = child;
+    state.stopRequested = false;
+    console.log(`[Kemokem stream] Launch requested session=${job.sessionId} master=${master} ingest=[redacted]`);
 
-    checked = await probe(master);
-
-  } catch {
-
-    return;
-
+    // FFmpeg can emit EPIPE on stdin after it exits; don't let this crash Node.
+    child.stdin?.on('error', (err) => console.error(`[Kemokem stream] FFmpeg stdin: ${redact(err.message)}`));
+    child.on('spawn', () => console.log(`[Kemokem stream] FFmpeg spawned PID=${child.pid} session=${job.sessionId}`));
+    child.on('error', (err) => {
+      if (context.terminal) return;
+      context.spawnError = err;
+      void reportStream(job, `FFmpeg failed to spawn: ${err.message}`);
+    });
+    child.stderr?.on('data', (chunk) => {
+      const line = redact(chunk.toString());
+      state.lastLog = (state.lastLog + line).slice(-4000);
+      const fps = /fps=\s*([\d.]+)/.exec(line);
+      const bitrate = /bitrate=\s*([^\s]+)/.exec(line);
+      const speed = /speed=\s*([^\s]+)/.exec(line);
+      const time = /time=\s*(\d+):(\d+):(\d+)/.exec(line);
+      if (!context.reportedStart && (fps || time)) {
+        context.reportedStart = true;
+        void api('/live/agent/report', { method: 'POST', body: {
+          sessionId: job.sessionId, event: 'encoder_started', log: state.lastLog,
+        }}).catch((e) => console.error(`[Kemokem stream] encoder_started report failed: ${redact(e.message)}`));
+      }
+      if (fps || bitrate || speed || time) {
+        state.lastProgress = {
+          fps: fps ? Number(fps[1]) : state.lastProgress.fps,
+          bitrate: bitrate ? bitrate[1] : state.lastProgress.bitrate,
+          speed: speed ? speed[1] : state.lastProgress.speed,
+          outTimeMs: time ? (Number(time[1]) * 3600 + Number(time[2]) * 60 + Number(time[3])) * 1000 : state.lastProgress.outTimeMs,
+        };
+      }
+    });
+    child.on('close', (code, signal) => {
+      if (context.terminal) return;
+      context.terminal = true;
+      if (context.stopTimeout) clearTimeout(context.stopTimeout);
+      if (state.encoderContext === context) {
+        state.encoderContext = null;
+        state.ffmpeg = null;
+        state.activeStreamKey = null;
+      }
+      if (context.spawnError) return; // error handler already reported failure
+      if (context.requestedStop || (code === 0 && job.loop === false)) {
+        state.finishedEncoderSession = job.sessionId;
+        void api('/live/agent/report', { method: 'POST', body: {
+          sessionId: job.sessionId, event: 'encoder_stopped', log: state.lastLog,
+        }}).catch((e) => console.error(`[Kemokem stream] encoder_stopped report failed: ${redact(e.message)}`));
+      } else {
+        void reportStream(job, `FFmpeg exited unexpectedly (${code ?? signal ?? 'unknown'}). ${state.lastLog || 'No FFmpeg output.'}`);
+      }
+    });
+  } catch (e) {
+    await reportStream(job, `FFmpeg did not start: ${e instanceof Error ? e.message : e}`);
+  } finally {
+    state.encoderStartPending = false;
   }
+}
 
-  if (!checked.hasAudio || !checked.durationMs) return;
+async function existingMaster() {
 
-const destination = `${job.ingest.address.replace(/\/$/, '')}/${job.ingest.name}`;
+const candidates = [{ file: liveFile, relative: 'stream/live.mp4' }];
 
-const args = ['-hide_banner', '-loglevel', 'info', '-re'];
+  for (const candidate of candidates) {
 
-  if (job.loop !== false) args.push('-stream_loop', '-1');
+    try {
 
-  args.push('-i', master, '-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy', '-c:a', 'copy', '-f', 'flv', destination);
+const info = await stat(candidate.file);
 
-const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+      if (info.isFile() && info.size > 0) return { relative: candidate.relative, size: info.size };
 
-  state.ffmpeg = child;
+    } catch {
 
-let log = '';
-
-  child.stderr.on('data', (chunk) => {
-
-const line = redact(chunk.toString());
-
-    log = (log + line).slice(-4000);
-
-    state.lastLog = log;
-
-const fps = /fps=\s*([\d.]+)/.exec(line);
-
-const bitrate = /bitrate=\s*([^\s]+)/.exec(line);
-
-const speed = /speed=\s*([^\s]+)/.exec(line);
-
-const time = /time=\s*(\d+):(\d+):(\d+)/.exec(line);
-
-    if (fps || bitrate || speed || time) {
-
-      state.lastProgress = {
-
-        fps: fps ? Number(fps[1]) : state.lastProgress.fps,
-
-        bitrate: bitrate ? bitrate[1] : state.lastProgress.bitrate,
-
-        speed: speed ? speed[1] : state.lastProgress.speed,
-
-        outTimeMs: time ? (Number(time[1]) * 3600 + Number(time[2]) * 60 + Number(time[3])) * 1000 : state.lastProgress.outTimeMs,
-
-      };
+// The other location may still have the saved stream.
 
     }
 
-  });
+  }
 
-  child.on('exit', () => {
-
-    if (state.ffmpeg === child) state.ffmpeg = null;
-
-    void api('/live/agent/report', {
-
-      method: 'POST',
-
-      body: { sessionId: job.sessionId, event: 'encoder_stopped', log: state.lastLog },
-
-    }).catch(() => undefined);
-
-  });
-
-  void api('/live/agent/report', { method: 'POST', body: { sessionId: job.sessionId, event: 'encoder_started' } });
-
-  arm(job.stopAt);
+  return null;
 
 }
-
-
 
 async function listing(browsePath) {
 
@@ -917,6 +993,8 @@ const lowerName = entry.name.toLowerCase();
       lowerName === 'normalised' ||
 
       lowerName === 'normalized' ||
+
+      lowerName === 'stream' ||
 
       lowerName === 'live.mp4' ||
 
@@ -964,129 +1042,157 @@ const video = ['.mp4', '.mov', '.mkv', '.webm'].includes(path.extname(entry.name
 
 }
 
+async function agentLogTail() {
 
+let fh;
 
-async function tick() {
+  try {
 
-const info = await ffmpegInfo();
+    fh = await open(agentLogPath, 'r');
 
-const space = await disk();
+const size = (await fh.stat()).size;
 
-const job = await api('/live/agent/job');
+const chunk = Math.min(size, 64 * 1024);
 
-  const jobSignature = `${job?.sessionId || 'none'}:${job?.phase || 'idle'}`;
-  if (state.lastObservedJob !== jobSignature) {
-    state.lastObservedJob = jobSignature;
-    console.log(`[Kemokem agent] Server job: phase=${job?.phase || 'idle'} session=${job?.sessionId || 'none'} files=${Array.isArray(job?.files) ? job.files.length : 'n/a'}`);
-  }
+const buf = Buffer.alloc(chunk);
 
-const listed = await listing(job?.browsePath || mediaRoot);
+    await fh.read(buf, 0, chunk, Math.max(0, size - chunk));
 
-  await api('/live/agent/heartbeat', {
+const text = buf.toString('utf8').replace(/^\uFFFD?/, '');
 
-    method: 'POST',
+const lines = text.split(/\r?\n/);
 
-    body: { os: osName(), hostname: os.hostname(), ffmpeg: info.ffmpeg, encoders: info.encoders, ...space, listing: listed },
+    if (size > chunk) lines.shift();
 
-  });
+    return lines.filter((line) => line.length > 0).slice(-35).join('\n');
 
-  if (!job || job.phase === 'idle') {
+  } catch {
 
-    if (state.ffmpeg) stopEncoder('stop');
+    return `Agent log file was not found: ${agentLogPath}`;
 
-    state.sessionId = null;
+  } finally {
 
-    state.armedFor = null;
-
-    return;
-
-  }
-
-  if (state.sessionId !== job.sessionId) {
-
-    if (state.ffmpeg) stopEncoder('stop');
-
-    state.sessionId = job.sessionId;
-
-    state.armedFor = null;
-
-    state.busy = false;
-    state.finishedPreparation = null;
-    state.failedPreparation = null;
-
-  }
-
-  if (job.phase === 'stop') {
-
-    stopEncoder(job.force ? 'force' : 'stop');
-
-    return;
-
-  }
-
-  if (job.phase === 'prepare') {
-
-    if (job.prepareDeadline && Date.parse(job.prepareDeadline) <= Date.now()) {
-
-      await api('/live/agent/report', {
-
-        method: 'POST',
-
-        body: { sessionId: job.sessionId, event: 'failed', code: 'WORKER', error: 'Preparation took too long.' },
-
-      });
-
-      return;
-
-    }
-
-    // Server might keep sending the same prepare phase after master_ready.
-    // Do not start an identical encoding job again every 25 seconds.
-    if (!state.busy && state.finishedPreparation !== job.sessionId && state.failedPreparation !== job.sessionId) {
-      state.busy = true;
-      console.log(`[Kemokem prepare] Starting session=${job.sessionId}`);
-      prepare(job)
-        .then(() => {
-          state.finishedPreparation = job.sessionId;
-          console.log(`[Kemokem prepare] Completed session=${job.sessionId}`);
-        })
-        .catch(async (e) => {
-          state.failedPreparation = job.sessionId;
-          const message = redact(e?.stderr || e?.message || e);
-          console.error(`[Kemokem prepare] FAILED session=${job.sessionId}: ${message}`);
-          await api('/live/agent/report', {
-            method: 'POST',
-            body: { sessionId: job.sessionId, event: 'failed', code: e.code || 'ENCODER', error: message },
-          }).catch((reportError) => console.error(`[Kemokem prepare] Failed to report error: ${redact(reportError.message)}`));
-        })
-        .finally(() => { state.busy = false; });
-    }
-
-    return;
-
-  }
-
-  arm(job.stopAt);
-
-  if (job.stopAt) await writeFile(savedJob, JSON.stringify({ sessionId: job.sessionId, stopAt: job.stopAt }));
-
-  if (!state.ffmpeg && !state.busy) void startEncoder(job);
-
-  else if (state.ffmpeg) {
-
-    await api('/live/agent/report', {
-
-      method: 'POST',
-
-      body: { sessionId: job.sessionId, event: 'progress', progress: state.lastProgress, log: state.lastLog },
-
-    }).catch(() => undefined);
+    await fh?.close();
 
   }
 
 }
 
+async function tick() {
+  const info = await ffmpegInfo();
+  const space = await disk();
+  const job = await api('/live/agent/job');
+  const jobSignature = `${job?.sessionId || 'none'}:${job?.phase || 'idle'}`;
+  if (state.lastObservedJob !== jobSignature) {
+    state.lastObservedJob = jobSignature;
+    console.log(`[Kemokem agent] Server job: phase=${job?.phase || 'idle'} session=${job?.sessionId || 'none'} files=${Array.isArray(job?.files) ? job.files.length : 'n/a'}`);
+  }
+  const listed = await listing(job?.browsePath || mediaRoot);
+  const master = await existingMaster();
+  if (master && Array.isArray(listed)) listed.push({ name: 'live.mp4', relative: master.relative, kind: 'master', size: master.size });
+  await api('/live/agent/heartbeat', { method: 'POST', body: {
+    os: osName(), hostname: os.hostname(), ffmpeg: info.ffmpeg, encoders: info.encoders,
+    ...space, listing: listed, agentLog: redact(await agentLogTail()),
+  }});
 
+  const phase = job?.phase || 'idle';
+  const sessionId = phase === 'idle' ? null : job?.sessionId || null;
+  const changedSession = state.sessionId !== sessionId;
+  const changedPhase = state.phase !== phase;
+  if (changedSession || changedPhase) {
+    state.launchEpoch += 1; // Invalidates in-flight ffprobe/start operations.
+    state.phase = phase;
+    cancelDeadline();
+    if (changedSession) {
+      if (state.encoderContext && state.encoderContext.sessionId !== sessionId) stopEncoder('stop');
+      state.sessionId = sessionId;
+      state.finishedPreparation = null;
+      state.failedPreparation = null;
+      state.failedEncoderSession = null;
+      state.finishedEncoderSession = null;
+      state.deadlineReportedSession = null;
+    } else if (phase === 'stream') {
+      // A user deliberately returned from HOLD/STOP to Go Live in the same session.
+      state.failedEncoderSession = null;
+      state.finishedEncoderSession = null;
+      state.deadlineReportedSession = null;
+    }
+  }
+
+  if (phase === 'idle') {
+    if (state.encoderContext) stopEncoder('stop');
+    return;
+  }
+  if (!sessionId) {
+    console.error(`[Kemokem agent] Server returned ${phase} without sessionId.`);
+    return;
+  }
+  if (phase === 'hold') {
+    // HOLD means master prepared, waiting for Go Live; it does not start an encoder.
+    if (state.encoderContext) stopEncoder('stop');
+    return;
+  }
+  if (phase === 'stop') {
+    stopEncoder(job.force ? 'force' : 'stop');
+    return;
+  }
+  if (phase === 'prepare') {
+    if (state.encoderContext) {
+      console.error('[Kemokem prepare] Cannot replace a master while FFmpeg is streaming.');
+      return;
+    }
+    if (job.prepareDeadline && Date.parse(job.prepareDeadline) <= Date.now()) {
+      await api('/live/agent/report', { method: 'POST', body: {
+        sessionId: job.sessionId, event: 'failed', code: 'WORKER', error: 'Preparation took too long.',
+      }});
+      return;
+    }
+    if (!state.busy && state.finishedPreparation !== sessionId && state.failedPreparation !== sessionId) {
+      state.busy = true;
+      console.log(`[Kemokem prepare] Starting session=${sessionId}`);
+      prepare(job)
+        .then(() => {
+          state.finishedPreparation = sessionId;
+          console.log(`[Kemokem prepare] Completed session=${sessionId}`);
+        })
+        .catch(async (e) => {
+          state.failedPreparation = sessionId;
+          const message = redact(e?.stderr || e?.message || e);
+          console.error(`[Kemokem prepare] FAILED session=${sessionId}: ${message}`);
+          await api('/live/agent/report', { method: 'POST', body: {
+            sessionId, event: 'failed', code: e.code || 'ENCODER', error: message,
+          }}).catch((reportError) => console.error(`[Kemokem prepare] Error report failed: ${redact(reportError.message)}`));
+        })
+        .finally(() => { state.busy = false; });
+    }
+    return;
+  }
+  if (phase !== 'stream') return; // Explicit allowlist; unknown phases cannot start FFmpeg.
+
+  // Persistent earlier-of policy: no retry or reboot may extend this session's deadline.
+  const stopAt = await deadlineFor(job);
+  arm(stopAt, sessionId);
+  if (Date.now() >= Date.parse(stopAt)) {
+    state.failedEncoderSession = sessionId;
+    if (state.encoderContext) stopEncoder('deadline');
+    else if (state.deadlineReportedSession !== sessionId) {
+      state.deadlineReportedSession = sessionId;
+      state.finishedEncoderSession = sessionId;
+      await api('/live/agent/report', { method: 'POST', body: {
+        sessionId, event: 'encoder_stopped', error: 'Stream deadline has passed.',
+      }}).catch((e) => console.error(`[Kemokem deadline] ${redact(e.message)}`));
+    }
+    return;
+  }
+  if (!state.encoderContext && !state.busy && !state.encoderStartPending &&
+      state.failedEncoderSession !== sessionId && state.finishedEncoderSession !== sessionId) {
+    void startEncoder(job);
+  } else if (state.encoderContext?.sessionId === sessionId) {
+    await api('/live/agent/report', { method: 'POST', body: {
+      sessionId, event: 'progress', progress: state.lastProgress, log: state.lastLog,
+    }}).catch(() => undefined);
+  }
+}
 
 async function loop() {
 
@@ -1110,20 +1216,5 @@ async function loop() {
 
 }
 
-
-
-readFile(savedJob, 'utf8')
-
-  .then((text) => {
-
-const job = JSON.parse(text);
-
-    if (job?.stopAt) arm(job.stopAt);
-
-  })
-
-  .catch(() => undefined);
-
-
-
+// Saved deadlines are reconciled only after an authenticated server job is fetched.
 loop();

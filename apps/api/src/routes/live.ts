@@ -182,14 +182,15 @@ export async function liveRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
         playlistId: uuid.nullable().optional(),
         playlistName: z.string().max(120).nullable().optional(),
         title: z.string().max(100).optional(),
-        items: z.array(item).min(1).max(200),
+        items: z.array(item).max(200).optional(),
+        useExistingMaster: z.boolean().optional(),
         settings,
         stopMinutes: z.number().int().min(1).max(660).optional(),
         rtmpUrl: z.string().max(300).nullable().optional(),
         streamKey: z.string().max(200).nullable().optional(),
       }),
     },
-    ({ ctx, body }) => createLiveSession(ctx, { ...body, title: body.title ?? '' }),
+    ({ ctx, body }) => createLiveSession(ctx, { ...body, title: body.title ?? '', items: body.items ?? [] }),
   );
   route(
     {

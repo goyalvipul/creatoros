@@ -34,7 +34,7 @@ type Session = {
   replayStatus: string | null;
   replayDetail: string | null;
   items: Item[];
-  progress: { fps?: number; bitrate?: string; speed?: string; outTimeMs?: number; savedPath?: string | null; masterReady?: boolean };
+  progress: { fps?: number; bitrate?: string; speed?: string; outTimeMs?: number; savedPath?: string | null; masterReady?: boolean; agentLog?: string };
   logExcerpt: string | null;
   policyNotifyMs: number | null;
   policyStopMs: number;
@@ -125,7 +125,7 @@ export function LiveStudio() {
       browsePath: string | null;
       currentSessionId: string | null;
       revokedAt: string | null;
-      browseListing?: { name: string; relative: string; kind: 'dir' | 'video'; size: number }[];
+      browseListing?: { name: string; relative: string; kind: 'dir' | 'video' | 'master'; size: number }[];
     }[]
   >(section === 'create' || section === 'machines' ? '/live/machines' : null, {
     refreshInterval: section === 'create' || section === 'machines' ? 10_000 : 0,
@@ -173,7 +173,15 @@ export function LiveStudio() {
   }
 
   function videosOnPc() {
-    return (pc?.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
+    return (pc?.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4' && !file.relative.replace(/\\/g, '/').startsWith('stream/'));
+  }
+
+  function savedMaster() {
+    const file = (pc?.browseListing ?? []).find((entry) => entry.kind === 'master');
+    if (!file) return null;
+    const root = (pc?.browsePath || 'C:\\MehakLive').replace(/[/\\]+$/, '');
+    const sep = root.includes('\\') ? '\\' : '/';
+    return `${root}${sep}${file.relative.replace(/[/\\]/g, sep)}`;
   }
 
   function loadFolder() {
@@ -188,7 +196,7 @@ export function LiveStudio() {
 
   useEffect(() => {
     if (items.length) return;
-    const videos = (pc?.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
+    const videos = videosOnPc();
     if (!videos.length) return;
     setItems(videos.map((file) => ({ key: file.name, source: 'agent' as const, name: file.name, agentRelative: file.name, size: file.size })));
   }, [pc, items.length]);
@@ -242,11 +250,29 @@ export function LiveStudio() {
   }
 
   async function goLive() {
-    if (!active || active.status !== 'READY') return;
+    const master = savedMaster();
+    const reusable = active?.status === 'READY' ? active.id : null;
+    if (!pc || !title || (mode === 'youtube' && !accountId) || (!reusable && !master)) return;
+    if (active && active.status !== 'READY' && active.status !== 'ENDED' && active.status !== 'FAILED') return;
     setBusy(true);
     setError(null);
     try {
-      await post(`/live/sessions/${active.id}/start`, {
+      let id = reusable;
+      if (!id) {
+        const made = await post<{ id: string }>(
+          '/live/sessions',
+          {
+            machineId: pc.id,
+            title,
+            useExistingMaster: true,
+            items: [],
+            settings: { resolution, loop, mode },
+          },
+          { idempotencyKey: crypto.randomUUID() },
+        );
+        id = made.id;
+      }
+      await post(`/live/sessions/${id}/start`, {
         socialAccountId: mode === 'youtube' ? accountId : null,
         title,
         stopMinutes: stopMinutes ? Number(stopMinutes) : undefined,
@@ -298,7 +324,7 @@ export function LiveStudio() {
       {section === 'create' ? (
         <div className="space-y-4">
           <Notice>
-            Live Studio always uses the RTX 3060. Put mp4 files in C:\MehakLive on that PC. Make one video reads them there, writes a matching file in C:\MehakLive\normalized, and saves C:\MehakLive\live.mp4. Nothing is copied over the network. Go live sends that one file. Closing this page does not stop a stream that has already started.
+            Live Studio always uses the RTX 3060. Put mp4 files in C:\MehakLive on that PC. Make one video reads them there, writes a matching file in C:\MehakLive\normalized, and saves C:\MehakLive\stream\live.mp4. Nothing is copied over the network. Go live sends that saved file, including one already at C:\MehakLive\live.mp4, without building it again. Closing this page does not stop a stream that has already started.
             The notice is {state.data?.notifyMinutes ?? 600} minutes and the automatic stop is {maxStop} minutes. The stop cannot pass 11 hours.
           </Notice>
           <Notice>
@@ -432,12 +458,16 @@ export function LiveStudio() {
             </div>
           ) : null}
           <Notice>
-            Make one video stays on the RTX 3060. Each clip is written to C:\MehakLive\normalized. The stream file is C:\MehakLive\live.mp4. YouTube stays closed until you press Go live.
+            Make one video stays on the RTX 3060. Each clip is written to C:\MehakLive\normalized. The stream file is saved in C:\MehakLive\stream and is not added to the clip list. YouTube stays closed until you press Go live.
           </Notice>
           {active?.status === 'PREPARING' ? <Notice>Reading C:\MehakLive on the RTX 3060. {active.logExcerpt || 'Waiting for that computer to start.'} This check runs every 5 seconds until the file is saved. YouTube is not open.</Notice> : null}
           {active?.status === 'READY' ? (
             <Notice>
-              Saved at {active.progress?.savedPath || 'C:\\MehakLive\\live.mp4'}. Press Go live when the title and channel are set.
+              Saved at {active.progress?.savedPath || savedMaster() || 'C:\\MehakLive\\stream\\live.mp4'}. Press Go live when the title and channel are set.
+            </Notice>
+          ) : savedMaster() ? (
+            <Notice>
+              Saved file {savedMaster()} is already on the RTX 3060. Go live uses it as-is. Make one video only when the clips have changed.
             </Notice>
           ) : null}
           <div className="text-sm">
@@ -448,7 +478,7 @@ export function LiveStudio() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="primary" busy={busy} disabled={!pc?.ready || !items.length || (!!active && active.status !== 'ENDED' && active.status !== 'FAILED')} onClick={() => void prepare()}>Make one video</Button>
-            <Button type="button" variant="primary" busy={busy} disabled={active?.status !== 'READY' || !title || (mode === 'youtube' && !accountId)} onClick={() => void goLive()}>Go live</Button>
+            <Button type="button" variant="primary" busy={busy} disabled={!pc?.ready || !title || (mode === 'youtube' && !accountId) || (!!active && active.status !== 'READY' && active.status !== 'ENDED' && active.status !== 'FAILED') || (active?.status !== 'READY' && !savedMaster())} onClick={() => void goLive()}>Go live</Button>
             {active && (active.status === 'PREPARING' || active.status === 'READY') ? (
               <Button type="button" variant="danger" onClick={async () => {
                 await post(`/live/sessions/${active.id}/stop`, { force: false });
@@ -539,7 +569,8 @@ function Active({
       </div>
       <details>
         <summary>Technical log</summary>
-        <pre className="whitespace-pre-wrap">{session.logExcerpt || 'No log yet.'}</pre>
+        {session.logExcerpt ? <pre className="whitespace-pre-wrap">{session.logExcerpt}</pre> : null}
+        <pre className="whitespace-pre-wrap">{session.progress?.agentLog || 'No lines yet from C:\\ProgramData\\KemokemAgent\\logs\\agent.log'}</pre>
       </details>
     </div>
   );
@@ -554,7 +585,7 @@ function FolderPath({
 }) {
   const [folder, setFolder] = useState(row.roots[0] || row.browsePath || 'C:\\MehakLive');
   const [note, setNote] = useState<string | null>(null);
-  const videos = (row.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4');
+  const videos = (row.browseListing ?? []).filter((file) => file.kind === 'video' && file.name.toLowerCase() !== 'live.mp4' && !file.relative.replace(/\\/g, '/').startsWith('stream/'));
   return (
     <div className="mt-3 space-y-2">
       <Field label="Video folder" hint="The folder on this computer. The agent lists the mp4 files here. They are not copied.">

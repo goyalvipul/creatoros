@@ -60,6 +60,7 @@ function youtubeMock() {
       return json({ id: 'bcast1', monetizationDetails: body.monetizationDetails });
     }
     if (u.pathname.endsWith('/liveBroadcasts/bind')) return json({ id: 'bcast1' });
+    if (u.pathname.endsWith('/liveBroadcasts') && method === 'DELETE') return json({});
     if (u.pathname.endsWith('/liveBroadcasts/transition')) {
       life = 'live';
       actualStart = new Date().toISOString();
@@ -298,8 +299,11 @@ describe('Go live dispatch', () => {
     expect(streaming).toMatchObject({ phase: 'stream', masterPath: 'C:\\MehakLive\\stream\\live.mp4', sessionId: session.id });
     await stopLiveSession(org.ctx, session.id, false);
     const stopping = await agentJob(h.db, org.env, machine.token);
-    expect(stopping).toMatchObject({ phase: 'stop', sessionId: session.id });
+    expect(stopping).toMatchObject({ phase: 'stop', force: false, sessionId: session.id });
     const [kept] = await h.db.select().from(liveSessions).where(eq(liveSessions.id, session.id));
+    expect(kept!.stopReason).toBe('MANUAL');
+    expect(kept!.ingestSafetyAt).toBeTruthy();
+    expect(kept!.ingestSafetyAt!.getTime()).toBeLessThanOrEqual(Date.now() + 30_000);
     expect(kept!.progress).toMatchObject({ savedPath: 'C:\\MehakLive\\stream\\live.mp4' });
     await applyLiveEvent(h.db, org.env, kept!, { event: 'encoder_stopped' });
     await advanceLiveSessions(h.db, org.env, new Date(), yt.fetchImpl);

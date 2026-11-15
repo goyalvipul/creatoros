@@ -597,9 +597,14 @@ export function LiveStudio() {
       {section === 'active' ? (
         <Active session={active} wall={wall} verified={verified} remaining={remaining} place={place} onStop={async (force) => {
           if (!active) return;
-          if (force && !window.confirm('Force stop ends the encoder immediately, then Kemokem still tries to complete the YouTube broadcast.')) return;
-          await post(`/live/sessions/${active.id}/stop`, { force });
-          await state.mutate();
+          if (force && !window.confirm('Force stop ends FFmpeg immediately, then Kemokem completes the YouTube broadcast.')) return;
+          setError(null);
+          try {
+            await post(`/live/sessions/${active.id}/stop`, { force });
+            await state.mutate();
+          } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'The stream did not stop.');
+          }
         }} />
       ) : null}
 

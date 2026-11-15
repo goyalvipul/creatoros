@@ -26,7 +26,7 @@ Put the mp4 files in `C:\MehakLive`. Make one video reads them there, writes `C:
 
 Windows Task Scheduler, trigger At log on, action `node.exe`, argument the full path to `agent.mjs`, and the two environment variables. The account has to be able to read the videos and use the NVIDIA encoder.
 
-Approved folders are set in Live Studio. The agent will not list a folder Kemokem did not ask for, and it skips shortcuts. It does not delete or rename your original videos.
+Approved folders are set in Live Studio. The agent will not list a folder Kemokem did not ask for, and it skips shortcuts. It does not delete or rename your original videos. Stop asks FFmpeg to quit, then ends that process tree if it is still running. Force stop ends it immediately with `taskkill /T /F`. `C:\MehakLive\stream\live.mp4` stays on disk.
 
 The stream key stays in the agent process only long enough to start FFmpeg. It is not written to the log lines sent back to Kemokem.
 

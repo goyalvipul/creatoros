@@ -93,6 +93,7 @@ const state = {
   deadlineSessionId: null,
   activeStreamKey: null,
   deadlineReportedSession: null,
+  stopAnnounced: null,
 
 };
 
@@ -477,15 +478,44 @@ async function deadlineFor(job) {
   return stopAt;
 }
 
+const ffmpegPid = path.join(home, 'ffmpeg.pid');
+
 function killEncoder(child) {
-  if (!child || child.exitCode != null || child.signalCode != null) return;
-  try { child.kill(process.platform === 'win32' ? undefined : 'SIGKILL'); }
+  const pid = child?.pid;
+  if (process.platform === 'win32' && pid) {
+    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) => {
+      if (!err) {
+        console.log(`[Kemokem stop] Ended FFmpeg process tree ${pid}`);
+        return;
+      }
+      console.error(`[Kemokem stop] taskkill ${pid} failed: ${redact(err.message)}`);
+      if (typeof child.kill !== 'function' || child.exitCode != null) return;
+      try { child.kill(); }
+      catch (e) { console.error(`[Kemokem stop] ${redact(e.message)}`); }
+    });
+    return;
+  }
+  if (!child || child.exitCode != null) return;
+  try { child.kill('SIGKILL'); }
   catch (e) { console.error(`[Kemokem stop] ${redact(e.message)}`); }
+}
+
+function killRecordedFfmpeg() {
+  readFile(ffmpegPid, 'utf8')
+    .then((text) => {
+      const pid = Number(String(text).trim());
+      if (!pid) return;
+      killEncoder({ pid });
+    })
+    .catch(() => undefined);
 }
 
 function stopEncoder(reason) {
   const context = state.encoderContext;
-  if (!context || context.child.exitCode != null || context.child.signalCode != null) return;
+  if (!context || context.child.exitCode != null) {
+    if (!context && (reason === 'force' || reason === 'stop')) killRecordedFfmpeg();
+    return;
+  }
   if (context.requestedStop && reason !== 'force') return;
   context.requestedStop = true;
   state.stopRequested = true;
@@ -878,6 +908,7 @@ async function startEncoder(job) {
     state.lastLog = '';
     state.lastProgress = {};
     const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
+    if (child.pid) await writeFile(ffmpegPid, String(child.pid));
     const context = { child, sessionId: job.sessionId, requestedStop: false, stopTimeout: null, terminal: false, reportedStart: false };
     state.encoderContext = context;
     state.ffmpeg = child;
@@ -923,6 +954,7 @@ async function startEncoder(job) {
         state.ffmpeg = null;
         state.activeStreamKey = null;
       }
+      void unlink(ffmpegPid).catch(() => undefined);
       if (context.spawnError) return; // error handler already reported failure
       if (context.requestedStop || (code === 0 && job.loop === false)) {
         state.finishedEncoderSession = job.sessionId;
@@ -1133,6 +1165,10 @@ async function tick() {
     return;
   }
   if (phase === 'stop') {
+    if (state.stopAnnounced !== sessionId) {
+      state.stopAnnounced = sessionId;
+      console.log(`[Kemokem stop] ${job.force ? 'Force stop' : 'Stop'} session=${sessionId}`);
+    }
     stopEncoder(job.force ? 'force' : 'stop');
     return;
   }

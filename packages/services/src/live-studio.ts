@@ -38,6 +38,7 @@ import {
   bindLiveBroadcast,
   createIngestionStream,
   createLiveBroadcast,
+  deleteLiveBroadcast,
   ensureFreshToken,
   listUpcomingBroadcasts,
   readIngestion,
@@ -677,15 +678,21 @@ export async function stopLiveSession(ctx: Ctx, id: string, force: boolean) {
   }
   if (!liveSessionActive(row.status)) return names(ctx.db, row);
   const now = ctx.now();
+  const proposed = force ? now : new Date(now.getTime() + 25_000);
+  const ingestSafetyAt = row.ingestSafetyAt && row.ingestSafetyAt < proposed ? row.ingestSafetyAt : proposed;
   const [next] = await ctx.db
     .update(liveSessions)
     .set({
       status: 'STOPPING',
       stopReason: force ? 'EMERGENCY' : row.stopReason ?? 'MANUAL',
+      ingestSafetyAt,
       updatedAt: now,
     })
     .where(eq(liveSessions.id, row.id))
     .returning();
+  if (row.machineId) {
+    await ctx.db.update(streamMachines).set({ currentSessionId: row.id, updatedAt: now }).where(eq(streamMachines.id, row.machineId));
+  }
   await audit(ctx, force ? 'live.session.force_stop' : 'live.session.stop', { type: 'live_session', id });
   return names(ctx.db, next!);
 }
@@ -869,9 +876,16 @@ export async function agentReport(
   fetchImpl: FetchFn = fetch,
 ) {
   const machine = await machineFromToken(db, token);
-  if (!machine || machine.currentSessionId !== body.sessionId) return null;
-  const [row] = await db.select().from(liveSessions).where(and(eq(liveSessions.id, body.sessionId), eq(liveSessions.orgId, machine.orgId)));
+  if (!machine) return null;
+  const [row] = await db
+    .select()
+    .from(liveSessions)
+    .where(and(eq(liveSessions.id, body.sessionId), eq(liveSessions.orgId, machine.orgId), eq(liveSessions.machineId, machine.id)));
   if (!row) return null;
+  if (machine.currentSessionId && machine.currentSessionId !== row.id) return null;
+  if (machine.currentSessionId !== row.id) {
+    await db.update(streamMachines).set({ currentSessionId: row.id, updatedAt: new Date() }).where(eq(streamMachines.id, machine.id));
+  }
   return applyLiveEvent(db, env, row, body, fetchImpl);
 }
 
@@ -1340,27 +1354,13 @@ async function finishBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
     return;
   }
   const ctx = { db, env, orgId: row.orgId, userId: row.userId, actor: { type: 'system' as const }, now: () => new Date() };
-  try {
-    const { token } = await youtubeToken(ctx, row.socialAccountId!);
-    let broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
-    if (broadcast && broadcast.lifeCycleStatus !== 'complete' && broadcast.lifeCycleStatus !== 'revoked') {
-      try {
-        await transitionLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId, 'complete');
-      } catch (e) {
-        const message = clean(e);
-        broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
-        if (!broadcast || (broadcast.lifeCycleStatus !== 'complete' && broadcast.lifeCycleStatus !== 'revoked')) {
-          await db.update(liveSessions).set({ error: message, updatedAt: now }).where(eq(liveSessions.id, row.id));
-          return;
-        }
-      }
-      broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
-    }
+  const ended = async (actualEnd: string | null) => {
     await db
       .update(liveSessions)
       .set({
         status: 'ENDED',
-        youtubeActualEndAt: broadcast?.actualEndTime ? new Date(broadcast.actualEndTime) : row.youtubeActualEndAt,
+        error: null,
+        youtubeActualEndAt: actualEnd ? new Date(actualEnd) : row.youtubeActualEndAt,
         replayStatus: 'pending',
         nextVerifyAt: new Date(now.getTime() + 20_000),
         updatedAt: now,
@@ -1371,6 +1371,41 @@ async function finishBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
       await tell(db, row, 'live.ended', 'Livestream ended', LIVE_ENDED_TEXT, `live.ended:${row.id}`);
       await db.update(liveSessions).set({ endedNotifiedAt: now }).where(eq(liveSessions.id, row.id));
     }
+  };
+  try {
+    const { token } = await youtubeToken(ctx, row.socialAccountId!);
+    let broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
+    if (!broadcast || broadcast.lifeCycleStatus === 'complete' || broadcast.lifeCycleStatus === 'revoked') {
+      await ended(broadcast?.actualEndTime ?? null);
+      return;
+    }
+    const life = broadcast.lifeCycleStatus;
+    if (life === 'live') {
+      try {
+        await transitionLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId, 'complete');
+      } catch (e) {
+        const message = clean(e);
+        broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
+        if (broadcast && broadcast.lifeCycleStatus !== 'complete' && broadcast.lifeCycleStatus !== 'revoked') {
+          await db.update(liveSessions).set({ error: `YouTube left the broadcast ${broadcast.lifeCycleStatus}. ${message}`, updatedAt: now }).where(eq(liveSessions.id, row.id));
+          return;
+        }
+      }
+      broadcast = await readLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
+      await ended(broadcast?.actualEndTime ?? null);
+      return;
+    }
+    // complete is valid only from live. A ready or created broadcast returns invalidTransition.
+    try {
+      await deleteLiveBroadcast(fetchImpl, token, row.youtubeBroadcastId);
+    } catch (e) {
+      const message = clean(e);
+      if (!/404|liveBroadcastNotFound/.test(message)) {
+        await db.update(liveSessions).set({ error: `YouTube left the broadcast ${life || 'unstarted'}. ${message}`, updatedAt: now }).where(eq(liveSessions.id, row.id));
+        return;
+      }
+    }
+    await ended(null);
   } catch (e) {
     await db.update(liveSessions).set({ error: clean(e), updatedAt: now }).where(eq(liveSessions.id, row.id));
   }

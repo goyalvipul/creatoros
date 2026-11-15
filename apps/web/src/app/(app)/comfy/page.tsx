@@ -731,22 +731,88 @@ function taskStatusLabel(status: string) {
   return 'Not checked yet';
 }
 
+type WindowsTask = {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  deviceState: string;
+  label: string;
+  taskName: string;
+  status: string;
+  detail: string | null;
+  checkedAt: string | null;
+  restartStatus: string | null;
+  restartError: string | null;
+};
+
+function tasksByMachine(
+  devices: { id: string; displayName: string; state: string }[],
+  tasks: WindowsTask[],
+) {
+  const groups = new Map<string, { id: string; name: string; state: string; tasks: WindowsTask[] }>();
+  for (const device of [...devices].sort((a, b) => a.displayName.localeCompare(b.displayName))) {
+    groups.set(device.id, { id: device.id, name: device.displayName, state: device.state, tasks: [] });
+  }
+  for (const task of tasks) {
+    const group = groups.get(task.deviceId) ?? {
+      id: task.deviceId,
+      name: task.deviceName,
+      state: task.deviceState,
+      tasks: [],
+    };
+    group.tasks.push(task);
+    groups.set(task.deviceId, group);
+  }
+  return [...groups.values()].filter((group) => group.tasks.length > 0);
+}
+
+function WindowsTaskRow({ task }: { task: WindowsTask }) {
+  const restarting = task.restartStatus === 'PENDING' || task.restartStatus === 'RUNNING';
+  return (
+    <li className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border p-3">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2 font-medium">
+          <span>{task.label}</span>
+          <Badge tone={task.status === 'RUNNING' ? 'ok' : task.status === 'NOT_FOUND' || task.status === 'DISABLED' ? 'bad' : 'neutral'}>
+            {restarting ? 'Restarting' : taskStatusLabel(task.status)}
+          </Badge>
+        </div>
+        <div className="text-xs text-muted">
+          {task.taskName}
+          {task.deviceState !== 'ONLINE' ? ' · PC offline' : ''}
+        </div>
+        {task.detail ? <div className="text-xs text-muted">{task.detail}</div> : null}
+        {task.restartError ? <div className="text-xs text-bad">{task.restartError}</div> : null}
+      </div>
+      <div className="flex gap-2">
+        <ActionButton
+          confirm={`Stop and start ${task.label} on ${task.deviceName}?`}
+          onAction={async () => {
+            await post(`/comfy/windows-tasks/${task.id}/restart`);
+            await refresh('/comfy/windows-tasks');
+          }}
+        >
+          Restart
+        </ActionButton>
+        <ActionButton
+          variant="danger"
+          confirm="Stop watching this task? The scheduled task itself stays on the PC."
+          onAction={async () => {
+            await del(`/comfy/windows-tasks/${task.id}`);
+            await refresh('/comfy/windows-tasks');
+          }}
+        >
+          Remove
+        </ActionButton>
+      </div>
+    </li>
+  );
+}
+
 function WindowsTasks() {
   const board = useApi<{
     devices: { id: string; displayName: string; state: string; os: string | null }[];
-    tasks: {
-      id: string;
-      deviceId: string;
-      deviceName: string;
-      deviceState: string;
-      label: string;
-      taskName: string;
-      status: string;
-      detail: string | null;
-      checkedAt: string | null;
-      restartStatus: string | null;
-      restartError: string | null;
-    }[];
+    tasks: WindowsTask[];
   }>('/comfy/windows-tasks');
   const [form, setForm] = useState({ deviceId: '', label: 'ComfyUI', taskName: '' });
   const [error, setError] = useState('');
@@ -772,50 +838,23 @@ function WindowsTasks() {
             ) : (
               <>
                 {tasks.length === 0 ? <p className="mb-3 text-sm text-muted">No scheduled tasks are being watched yet.</p> : null}
-                <ul className="mb-4 space-y-2">
-                  {tasks.map((task) => {
-                    const restarting = task.restartStatus === 'PENDING' || task.restartStatus === 'RUNNING';
+                <div className="mb-4 space-y-4">
+                  {tasksByMachine(devices, tasks).map((group) => {
+                    const running = group.tasks.filter((task) => task.status === 'RUNNING').length;
                     return (
-                      <li key={task.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border p-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2 font-medium">
-                            <span>{task.label}</span>
-                            <Badge tone={task.status === 'RUNNING' ? 'ok' : task.status === 'NOT_FOUND' || task.status === 'DISABLED' ? 'bad' : 'neutral'}>
-                              {restarting ? 'Restarting' : taskStatusLabel(task.status)}
-                            </Badge>
-                          </div>
-                          <div className="text-xs text-muted">
-                            {task.deviceName} · {task.taskName}
-                            {task.deviceState !== 'ONLINE' ? ' · PC offline' : ''}
-                          </div>
-                          {task.detail ? <div className="text-xs text-muted">{task.detail}</div> : null}
-                          {task.restartError ? <div className="text-xs text-bad">{task.restartError}</div> : null}
-                        </div>
-                        <div className="flex gap-2">
-                          <ActionButton
-                            confirm={`Stop and start ${task.label} on ${task.deviceName}?`}
-                            onAction={async () => {
-                              await post(`/comfy/windows-tasks/${task.id}/restart`);
-                              await refresh('/comfy/windows-tasks');
-                            }}
-                          >
-                            Restart
-                          </ActionButton>
-                          <ActionButton
-                            variant="danger"
-                            confirm="Stop watching this task? The scheduled task itself stays on the PC."
-                            onAction={async () => {
-                              await del(`/comfy/windows-tasks/${task.id}`);
-                              await refresh('/comfy/windows-tasks');
-                            }}
-                          >
-                            Remove
-                          </ActionButton>
-                        </div>
-                      </li>
+                      <section key={group.id}>
+                        <h3 className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
+                          <span>{group.name}</span>
+                          <Badge tone={group.state === 'ONLINE' ? 'ok' : 'neutral'}>{group.state === 'ONLINE' ? 'Online' : 'Offline'}</Badge>
+                          <span className="font-normal text-muted">{running} of {group.tasks.length} running</span>
+                        </h3>
+                        <ul className="space-y-2">
+                          {group.tasks.map((task) => <WindowsTaskRow key={task.id} task={task} />)}
+                        </ul>
+                      </section>
                     );
                   })}
-                </ul>
+                </div>
                 <div className="grid gap-3 md:grid-cols-3">
                   <Field label="PC">
                     <Select value={form.deviceId} onChange={(e) => setForm({ ...form, deviceId: e.target.value })}>

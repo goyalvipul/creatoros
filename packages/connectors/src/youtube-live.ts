@@ -139,6 +139,11 @@ export async function transitionLiveBroadcast(
   );
 }
 
+/** Removes a broadcast that never reached live. YouTube rejects complete from that state. */
+export async function deleteLiveBroadcast(fetchImpl: FetchFn, token: string, broadcastId: string) {
+  await yt(fetchImpl, token, `${API}/liveBroadcasts?id=${encodeURIComponent(broadcastId)}`, { method: 'DELETE' });
+}
+
 /** Upcoming broadcasts on this channel. The caller may reuse one only when the match is unambiguous. */
 export async function listUpcomingBroadcasts(fetchImpl: FetchFn, token: string) {
   const json = await yt(

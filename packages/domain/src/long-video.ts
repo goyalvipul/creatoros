@@ -52,12 +52,18 @@ export interface GenerationScene {
   id: string;
   continuity: 'shot' | 'context';
   status: string;
+  /** A video is already attached to this section. Generate all leaves it alone. */
+  hasVideo?: boolean;
 }
 
 const BUSY = new Set(['QUEUED', 'RUNNING']);
 const DONE = new Set(['READY']);
 
-/** Groups scenes into MiniMax jobs. Context continues the current group. A finished scene is left out. A group holds at most 8 scenes. */
+function alreadyDone(scene: GenerationScene) {
+  return DONE.has(scene.status) || scene.hasVideo === true;
+}
+
+/** Groups scenes into MiniMax jobs. Context continues the current group. A finished or already linked scene is left out. A group holds at most 8 scenes. */
 export function planGenerationGroups(scenes: GenerationScene[], mode: 'one' | 'all', selectedId?: string): string[][] {
   if (mode === 'one') {
     const index = scenes.findIndex((scene) => scene.id === selectedId);
@@ -74,7 +80,7 @@ export function planGenerationGroups(scenes: GenerationScene[], mode: 'one' | 'a
     current = [];
   };
   for (const scene of scenes) {
-    if (DONE.has(scene.status) || BUSY.has(scene.status)) {
+    if (BUSY.has(scene.status) || alreadyDone(scene)) {
       close();
       continue;
     }
@@ -219,9 +225,9 @@ export function clipPlanCard(durationMs: number): '3060' | '3090' {
 }
 
 /** A clip plan may run this far past the song, or end this far before it. */
-export const CLIP_PLAN_SONG_LEEWAY_MS = 3_000;
+export const CLIP_PLAN_SONG_LEEWAY_MS = 15_000;
 
-/** Place each clip at the duration written in the plan. The total may differ from the song by up to 3 seconds. */
+/** Place each clip at the duration written in the plan. The total may differ from the song by up to 15 seconds. */
 export function spansFromClipSeconds(durationMs: number, seconds: number[]): { spans: SceneSpan[]; songDifferenceMs: number } | { error: string } {
   const total = Math.round(durationMs);
   if (total <= 0) return { error: 'Upload the song before applying a clip plan.' };
@@ -235,11 +241,12 @@ export function spansFromClipSeconds(durationMs: number, seconds: number[]): { s
     cursor += ms;
   }
   const songDifferenceMs = cursor - total;
+  const leewaySec = CLIP_PLAN_SONG_LEEWAY_MS / 1000;
   if (songDifferenceMs > CLIP_PLAN_SONG_LEEWAY_MS) {
-    return { error: `The clips run ${(songDifferenceMs / 1000).toFixed(1)} seconds past the song. They can run up to 3 seconds past it.` };
+    return { error: `The clips run ${(songDifferenceMs / 1000).toFixed(1)} seconds past the song. They can run up to ${leewaySec} seconds past it.` };
   }
   if (songDifferenceMs < -CLIP_PLAN_SONG_LEEWAY_MS) {
-    return { error: `The clips end ${(Math.abs(songDifferenceMs) / 1000).toFixed(1)} seconds before the song ends. They can end up to 3 seconds early.` };
+    return { error: `The clips end ${(Math.abs(songDifferenceMs) / 1000).toFixed(1)} seconds before the song ends. They can end up to ${leewaySec} seconds early.` };
   }
   return { spans, songDifferenceMs };
 }

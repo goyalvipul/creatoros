@@ -871,7 +871,12 @@ export async function queueLongVideoScene(ctx: Ctx, projectId: string, sceneId: 
 export async function queueNextLongVideoGroup(ctx: Ctx, projectId: string) {
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   const groups = planGenerationGroups(
-    scenes.map((scene) => ({ id: scene.id, continuity: scene.continuity === 'context' ? 'context' : 'shot', status: scene.status })),
+    scenes.map((scene) => ({
+      id: scene.id,
+      continuity: scene.continuity === 'context' ? 'context' : 'shot',
+      status: scene.status,
+      hasVideo: Boolean(scene.takePath || scene.shownJobId),
+    })),
     'all',
   );
   const group = groups[0];

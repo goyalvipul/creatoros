@@ -111,6 +111,7 @@ export function LongVideos({ active = true }: { active?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [song, setSong] = useState<File | null>(null);
+  const [librarySong, setLibrarySong] = useState<{ id: string; fileName: string } | null>(null);
   const [planFile, setPlanFile] = useState<File | null>(null);
   const [images, setImages] = useState<File[]>([]);
   const songInput = useRef<HTMLInputElement>(null);
@@ -122,7 +123,7 @@ export function LongVideos({ active = true }: { active?: boolean }) {
       setError('Name the project.');
       return;
     }
-    if ((planFile || images.length > 0) && !song) {
+    if ((planFile || images.length > 0) && !song && !librarySong) {
       setError('Choose the song as well. The sections are timed from it.');
       return;
     }
@@ -136,6 +137,7 @@ export function LongVideos({ active = true }: { active?: boolean }) {
       .then(async (row) => {
         try {
           if (song) await uploadSong(row.id, song);
+          else if (librarySong) await post(`/long-videos/${row.id}/library`, { fileId: librarySong.id });
           if (planFile) sessionStorage.setItem('cos-long-plan-note', await applyClipPlan(row.id, planFile, images));
         } catch (err) {
           await del(`/long-videos/${row.id}`).catch(() => undefined);
@@ -152,7 +154,7 @@ export function LongVideos({ active = true }: { active?: boolean }) {
     <div className="space-y-4 p-4">
       <Card>
         <CardTitle>New long video</CardTitle>
-        <p className="mt-1 text-sm text-muted">Name the project, then add the song, the clip JSON, and the pictures. Create builds every section from that file.</p>
+        <p className="mt-1 text-sm text-muted">Name the project, then add the song from the library or an upload, the clip JSON, and the pictures. Create builds every section from that file.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_240px]">
           <Field label="Project name">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -167,13 +169,14 @@ export function LongVideos({ active = true }: { active?: boolean }) {
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button size="sm" type="button" disabled={busy} onClick={() => songInput.current?.click()}>Song</Button>
-          <input ref={songInput} className="sr-only" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac" onChange={(e) => { setSong(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          <input ref={songInput} className="sr-only" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac" onChange={(e) => { setSong(e.target.files?.[0] ?? null); setLibrarySong(null); e.target.value = ''; }} />
+          <LibraryPick kind="AUDIO" label="Library song" onPick={(file) => { setLibrarySong(file); setSong(null); }} />
           <Button size="sm" type="button" disabled={busy} onClick={() => planInput.current?.click()}>Clip plan</Button>
           <input ref={planInput} className="sr-only" type="file" accept="application/json,.json" onChange={(e) => { setPlanFile(e.target.files?.[0] ?? null); e.target.value = ''; }} />
           <Button size="sm" type="button" disabled={busy} onClick={() => imageInput.current?.click()}>Pictures</Button>
           <input ref={imageInput} className="sr-only" type="file" accept="image/*,.png,.jpg,.jpeg,.webp" multiple onChange={(e) => { setImages([...(e.target.files ?? [])]); e.target.value = ''; }} />
           <Button type="button" disabled={busy} onClick={create}>{busy ? 'Creating' : 'Create project'}</Button>
-          <span className="text-xs text-muted">{song ? song.name : 'No song'} · {planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
+          <span className="text-xs text-muted">{librarySong ? librarySong.fileName : song ? song.name : 'No song'} · {planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
         </div>
         {error ? <Notice tone="bad">{error}</Notice> : null}
       </Card>
@@ -221,6 +224,7 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
   const [sectionSeconds, setSectionSeconds] = useState<string | null>(null);
   const [planEpoch, setPlanEpoch] = useState(0);
   const [planNote, setPlanNote] = useState<string | null>(null);
+  const [batchStarting, setBatchStarting] = useState(false);
   useEffect(() => {
     setSectionSeconds(null);
     const note = sessionStorage.getItem('cos-long-plan-note');
@@ -300,7 +304,19 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
             Delete
           </Button>
           <Button variant="ghost" onClick={() => act(post(`/long-videos/${id}/batch`, { state: 'pause' }))}>Pause</Button>
-          <Button onClick={() => act(post(`/long-videos/${id}/batch`, { state: 'run' }))}>Generate all</Button>
+          <Button
+            busy={batchStarting || project.batchState === 'run'}
+            onClick={() => {
+              setBatchStarting(true);
+              setError(null);
+              post(`/long-videos/${id}/batch`, { state: 'run' })
+                .then(() => refresh(`/long-videos/${id}`))
+                .catch((e: unknown) => setError(e instanceof ApiError ? e.message : 'Generate all did not start.'))
+                .finally(() => setBatchStarting(false));
+            }}
+          >
+            {batchStarting || project.batchState === 'run' ? 'Generating…' : 'Generate all'}
+          </Button>
           {aiOn ? (
             <Button variant="ghost" onClick={() => {
               if (!window.confirm('Generate images only for scenes that have none? Up to 4, one at a time. Cost estimate unavailable — this may be billable. MiniMax will not start.')) return;
@@ -811,7 +827,7 @@ function SceneCard({
   );
 }
 
-function LibraryPick({ kind, onPick }: { kind: 'AUDIO' | 'IMAGE'; onPick: (file: { id: string; fileName: string }) => void }) {
+function LibraryPick({ kind, label = 'Library', onPick }: { kind: 'AUDIO' | 'IMAGE'; label?: string; onPick: (file: { id: string; fileName: string }) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const list = useApi<{ items: { id: string; fileName: string }[] }>(open ? '/library' : null, {
@@ -819,7 +835,7 @@ function LibraryPick({ kind, onPick }: { kind: 'AUDIO' | 'IMAGE'; onPick: (file:
   });
   return (
     <div>
-      <Button size="sm" type="button" variant="ghost" onClick={() => setOpen((value) => !value)}>Library</Button>
+      <Button size="sm" type="button" variant="ghost" onClick={() => setOpen((value) => !value)}>{label}</Button>
       {open ? (
         <div className="mt-1 w-64 max-w-full rounded-lg border border-border bg-panel p-2">
           <Input value={q} placeholder={kind === 'AUDIO' ? 'Search songs' : 'Search images'} onChange={(e) => setQ(e.target.value)} />

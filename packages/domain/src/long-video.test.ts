@@ -38,7 +38,8 @@ describe('long video scenes', () => {
     ]);
     expect(laid.songDifferenceMs).toBe(-2_000);
     expect('error' in spansFromClipSeconds(16_000, [10, 8])).toBe(false);
-    expect(spansFromClipSeconds(16_000, [10, 10])).toEqual({ error: 'The clips run 4.0 seconds past the song. They can run up to 3 seconds past it.' });
+    expect('error' in spansFromClipSeconds(16_000, [10, 10])).toBe(false);
+    expect(spansFromClipSeconds(16_000, [20, 12])).toEqual({ error: 'The clips run 16.0 seconds past the song. They can run up to 15 seconds past it.' });
     const ordered = orderByPlanName(
       [
         { id: 'street', name: 'street.png' },
@@ -94,6 +95,17 @@ describe('long video scenes', () => {
       ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'],
       ['c8'],
     ]);
+    expect(
+      planGenerationGroups(
+        [
+          { id: 'done', continuity: 'shot', status: 'DRAFT', hasVideo: true },
+          { id: 'next', continuity: 'context', status: 'DRAFT' },
+          { id: 'busy', continuity: 'shot', status: 'RUNNING', hasVideo: true },
+          { id: 'wait', continuity: 'shot', status: 'FAILED' },
+        ],
+        'all',
+      ),
+    ).toEqual([['next'], ['wait']]);
   });
 
   it('slides the song boundary into the next section and keeps the song whole', () => {

@@ -36,6 +36,9 @@ describe('auth', () => {
   it('rejects weak passwords and accepts a passphrase', () => {
     expect(validatePassword('short').length).toBeGreaterThan(0);
     expect(validatePassword('password1').length).toBeGreaterThan(0);
+    expect(validatePassword('12345678901').length).toBeGreaterThan(0);
+    expect(validatePassword('123456789012').length).toBeGreaterThan(0); // explicitly blocked common password
+    expect(validatePassword('strong enough passphrase')).toEqual([]);
     expect(validatePassword('correct horse battery staple', 'a@b.c')).toEqual([]);
   });
 

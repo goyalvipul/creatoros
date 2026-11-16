@@ -1,4 +1,4 @@
-# Creator OS — agent handoff (read this first)
+> Security review (2026-11-15, branch `security_review`, not deployed): password creation/reset now requires 12 characters; existing credentials continue working. CSRF validation accepts only configured `APP_BASE_URL`/`ALLOWED_ORIGINS` for requests with an Origin header, and livestream multipart upload now calls the same validator. Review and set allowed browser origins before deployment. Run `pnpm check`, `pnpm test:integration`, and `pnpm test:e2e`; no tests or deploys were executed by the GitHub connector session.\n\n# Creator OS — agent handoff (read this first)
 
 One-file briefing for a new AI agent or a person picking up this repository. It says what the product is, where the code lives, how a change is made, which commands deploy it, and what is true right now.
 

@@ -90,7 +90,7 @@ export function ctxFor(deps: AppDeps, req: FastifyRequest): Ctx {
   };
 }
 
-function originAllowed(req: FastifyRequest, deps: AppDeps): boolean {
+export function originAllowed(req: FastifyRequest, deps: AppDeps): boolean {
   const origin = req.headers.origin;
   if (origin) {
     // Only explicitly configured application origins may make cookie-authenticated writes.

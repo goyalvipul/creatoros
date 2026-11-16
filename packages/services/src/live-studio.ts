@@ -755,7 +755,7 @@ export async function streamHeartbeat(
   return { ok: true, browsePath: machine.browsePath };
 }
 
-async function jobFiles(db: Db, env: ServiceEnv, machineHost: string | null, items: Item[]) {
+async function jobFiles(db: Db, env: ServiceEnv, orgId: string, machineHost: string | null, items: Item[]) {
   const host = machineHost?.trim().toLowerCase() ?? '';
   const files = [];
   for (const item of items) {
@@ -768,13 +768,14 @@ async function jobFiles(db: Db, env: ServiceEnv, machineHost: string | null, ite
         .select({ displayPath: fileInstances.displayPath, hostname: devices.hostname })
         .from(fileInstances)
         .innerJoin(devices, eq(devices.id, fileInstances.deviceId))
-        .where(eq(fileInstances.id, item.fileInstanceId));
+        .where(and(eq(fileInstances.id, item.fileInstanceId), eq(fileInstances.orgId, orgId)));
       if (host && file?.hostname && file.hostname.trim().toLowerCase() === host && file.displayPath) {
         files.push({ id: item.id, source: 'agent', name: item.name, path: file.displayPath, sha256: item.sha256 ?? null });
         continue;
       }
       const exp = Date.now() + 30 * 60_000;
-      const media = signMediaToken(env.agentPairingSecret, { instanceId: item.fileInstanceId, userId: 'live-agent', exp });
+      if (!file) throw notFound('File');
+      const media = signMediaToken(env.agentPairingSecret, { instanceId: item.fileInstanceId, orgId, userId: 'live-agent', exp });
       files.push({
         id: item.id,
         source: 'library',
@@ -832,7 +833,7 @@ export async function agentJob(db: Db, env: ServiceEnv, token: string) {
   const base = {
     sessionId: session.id,
     browsePath: folder,
-    files: await jobFiles(db, env, machine.hostname, asItems(session.playlistSnapshot)),
+    files: await jobFiles(db, env, session.orgId, machine.hostname, asItems(session.playlistSnapshot)),
     loop: settings.loop !== false,
     resolution: settings.resolution ?? '1080p',
     prepareDeadline: new Date(session.jobCreatedAt.getTime() + PREPARE_LIMIT_MS).toISOString(),
@@ -1121,7 +1122,7 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
     if (settings.thumbnailFileId) {
       try {
         const exp = Date.now() + 5 * 60_000;
-        const media = signMediaToken(env.agentPairingSecret, { instanceId: settings.thumbnailFileId, userId: 'live-thumb', exp });
+        const media = signMediaToken(env.agentPairingSecret, { instanceId: settings.thumbnailFileId, orgId: row.orgId, userId: 'live-thumb', exp });
         const res = await fetchImpl(`${env.appBaseUrl}/api/v1/files/${settings.thumbnailFileId}/stream?token=${encodeURIComponent(media)}`);
         if (!res.ok) throw new Error('The thumbnail could not be read from the library.');
         const bytes = new Uint8Array(await res.arrayBuffer());

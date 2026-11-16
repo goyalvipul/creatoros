@@ -77,7 +77,7 @@ describe('first run and auth', () => {
     for (const headers of [
       { origin: 'https://evil.example', host: 'evil.example' },
       { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' },
-    ]) {
+    ] as Record<string, string>[]) {
       const spoofed = await api.call('POST', `${V1}/ideas`, {
         cookie: owner,
         body: { title: 'spoofed' },

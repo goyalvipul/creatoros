@@ -704,13 +704,17 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
       params: idParam,
     },
     async ({ ctx, params, session }) => {
+      const file = (await ctx.db.execute(sql`
+        select id from file_instances where id = ${params.id} and org_id = ${session.orgId}
+      `)) as unknown as { rows: { id: string }[] };
+      if (!file.rows.length) throw notFound('File');
       const exp = Date.now() + 15 * 60_000;
       const token = signMediaToken(env.agentPairingSecret, {
         instanceId: params.id,
+        orgId: session.orgId,
         userId: session.userId,
         exp,
       });
-      void ctx;
       return {
         url: `${env.appBaseUrl}/api/v1/files/${params.id}/stream?token=${encodeURIComponent(token)}`,
         expiresAt: new Date(exp),
@@ -724,11 +728,11 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
     async (req, reply) => {
       const { id } = idParam.parse(req.params);
       const token = (req.query as any)?.token as string | undefined;
-      if (!req.session) {
-        const ok = token ? verifyMediaToken(env.agentPairingSecret, token) : null;
-        if (!ok || ok.instanceId !== id) throw unauthorized();
-      }
-      const orgFilter = req.session ? sql`and f.org_id = ${req.session.orgId}` : sql``;
+      const signed = !req.session && token ? verifyMediaToken(env.agentPairingSecret, token) : null;
+      if (!req.session && (!signed || signed.instanceId !== id)) throw unauthorized();
+      // A signed URL must never bypass tenant isolation, even when a file UUID is known.
+      const orgId = req.session?.orgId ?? signed!.orgId;
+      const orgFilter = sql`and f.org_id = ${orgId}`;
       const r = (await db.execute(sql`
       select f.id, f.root_id as "rootId", f.display_path as "displayPath", f.file_name as "fileName", f.mime, f.availability, f.org_id as "orgId",
              d.id as "deviceId", d.state as "deviceState", d.listen_urls as "listenUrls", r.state as "rootState"

@@ -42,8 +42,9 @@ export async function buildApp(
             serializers: logSerializers,
             ...(opts.logStream ? { stream: opts.logStream } : {}),
           } as any),
-    // Caddy / Tailscale Serve sit in front; trust their X-Forwarded-* headers for protocol and client IP.
-    trustProxy: true,
+    // The API sits behind the Caddy container; trust exactly the immediate proxy hop.
+    // Trusting an unbounded X-Forwarded-For chain lets clients spoof their IP for logging and rate limits.
+    trustProxy: 1,
     bodyLimit: 10 * 1024 * 1024,
   });
 

@@ -667,6 +667,7 @@ export async function executePublish(
       const exp = Date.now() + 30 * 60_000;
       const mediaToken = signMediaToken(ctx.env.agentPairingSecret, {
         instanceId: item.fileInstanceId,
+        orgId: ctx.orgId,
         userId: ctx.userId ?? 'publish',
         exp,
       });
@@ -717,6 +718,7 @@ export async function executePublish(
       const exp = Date.now() + 30 * 60_000;
       const mediaToken = signMediaToken(ctx.env.agentPairingSecret, {
         instanceId: item.fileInstanceId,
+        orgId: ctx.orgId,
         userId: ctx.userId ?? 'publish',
         exp,
       });

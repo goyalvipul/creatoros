@@ -248,9 +248,9 @@ describe('publishing upload', () => {
     expect(matrix.rows.map((r) => r.id)).not.toContain(hidden.id);
     const row = matrix.rows.find((r) => r.id === variant.id)!;
     expect(row.attached).toBe(2);
-    expect(row.cells.find((c) => c.accountId === yt.id)!.published).toBe(1);
-    expect(row.cells.find((c) => c.accountId === yt.id)!.active).toBe(1);
-    expect(row.cells.find((c) => c.accountId === tt.id)!.published).toBe(0);
-    expect(row.cells.find((c) => c.accountId === tt.id)!.active).toBe(0);
+    expect(row.cells.find((c: { accountId: string }) => c.accountId === yt.id)!.published).toBe(1);
+    expect(row.cells.find((c: { accountId: string }) => c.accountId === yt.id)!.active).toBe(1);
+    expect(row.cells.find((c: { accountId: string }) => c.accountId === tt.id)!.published).toBe(0);
+    expect(row.cells.find((c: { accountId: string }) => c.accountId === tt.id)!.active).toBe(0);
   });
 });

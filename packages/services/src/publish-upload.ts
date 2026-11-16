@@ -86,6 +86,7 @@ export async function uploadPublishVideo(
     try {
       const upstream = await fetchImpl(u, {
         method: 'POST',
+        redirect: 'error',
         headers: { 'content-type': 'application/octet-stream', 'content-length': String(input.size) },
         body: input.body as unknown as BodyInit,
         duplex: 'half',

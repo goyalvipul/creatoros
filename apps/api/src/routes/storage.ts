@@ -779,6 +779,7 @@ export function storageRoutes(app: FastifyInstance, deps: AppDeps) {
           const connectTimer = setTimeout(() => connect.abort(), 15_000);
           try {
             upstream = await fetch(u, {
+              redirect: 'error',
               headers: range ? { range } : {},
               signal: AbortSignal.any([ac.signal, connect.signal]),
             });

@@ -93,14 +93,9 @@ export function ctxFor(deps: AppDeps, req: FastifyRequest): Ctx {
 function originAllowed(req: FastifyRequest, deps: AppDeps): boolean {
   const origin = req.headers.origin;
   if (origin) {
-    const o = origin.replace(/\/$/, '');
-    if (deps.config.allowedOrigins.includes(o)) return true;
-    // same-origin through a proxy or LAN address: Origin host equals the Host header
-    try {
-      return new URL(o).host === (req.headers['x-forwarded-host'] ?? req.headers.host);
-    } catch {
-      return false;
-    }
+    // Only explicitly configured application origins may make cookie-authenticated writes.
+    // Host and X-Forwarded-Host are client-influenced and cannot establish a trusted origin.
+    return deps.config.allowedOrigins.includes(origin.replace(/\/$/, ''));
   }
   // Non-browser clients (curl, scripts, tests) have no Origin; they must send an explicit header, which a cross-site form cannot.
   return Boolean(req.headers['x-requested-with']);

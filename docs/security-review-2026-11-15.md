@@ -8,6 +8,8 @@ Status: initial static review and targeted fixes; **not a completed comprehensiv
 2. **CSRF origin trust boundary (High, configuration dependent).** `apps/api/src/http.ts` previously accepted any `Origin` whose host matched request-supplied `Host` or `X-Forwarded-Host`, even if that origin was not configured. This can weaken the application origin boundary when an ingress forwards attacker-controlled host headers. The code now accepts only explicit configured application origins. Regression tests cover Host and X-Forwarded-Host spoofing.
 3. **Direct livestream upload origin validation (Medium).** `apps/api/src/routes/live.ts` previously checked only `x-requested-with: creatoros` on the cookie-authenticated multipart upload. It now also checks the configured origin whenever an Origin header is present, using the shared CSRF validator.
 
+4. **Security CI secret scanner could not run (Medium, tooling reliability).** The initial PR run failed with a Gitleaks Git revision error because the security job used GitHub Actions' shallow checkout. The security job now fetches full history (`fetch-depth: 0`) so commit-range scanning can execute. This was a scan setup error, **not evidence that secrets were detected**.
+
 ## Positive controls seen in code
 
 - Argon2id password hashing and hashed session tokens.

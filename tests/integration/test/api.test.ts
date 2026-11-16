@@ -105,6 +105,17 @@ describe('first run and auth', () => {
     expect(loginForeign.status).toBe(403);
   });
 
+  it('blocks foreign-origin calls on direct AI and long-video write handlers', async () => {
+    for (const url of [`${V1}/ai/metadata`, `${V1}/long-videos`]) {
+      const response = await api.call('POST', url, {
+        cookie: owner,
+        body: {},
+        headers: { origin: 'https://untrusted.example', 'x-requested-with': 'creatoros' },
+      });
+      expect(response.status).toBe(403);
+    }
+  });
+
   it('refuses to mint media tokens for files outside the current workspace', async () => {
     const otherFileId = randomUUID();
     const response = await api.call('POST', `${V1}/files/${otherFileId}/stream-token`, {

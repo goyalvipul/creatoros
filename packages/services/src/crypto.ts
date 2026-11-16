@@ -49,9 +49,19 @@ export const hmacHex = (key: string | Buffer, data: string) =>
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
 export function safeEqualHex(a: string, b: string): boolean {
+  // Buffer.from(hex) silently ignores malformed trailing nibbles and non-hex suffixes.
+  // Reject non-canonical encodings before the constant-time byte comparison.
+  if (
+    a.length !== b.length ||
+    a.length === 0 ||
+    a.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/i.test(a) ||
+    !/^[0-9a-f]+$/i.test(b)
+  )
+    return false;
   const ba = Buffer.from(a, 'hex');
   const bb = Buffer.from(b, 'hex');
-  return ba.length === bb.length && ba.length > 0 && timingSafeEqual(ba, bb);
+  return timingSafeEqual(ba, bb);
 }
 
 /** Human friendly one-time pairing code, e.g. `K7QM-93XD-ALP2` (no ambiguous characters). */

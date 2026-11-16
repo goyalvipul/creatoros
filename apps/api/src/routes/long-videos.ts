@@ -30,16 +30,17 @@ import {
   updateLongVideoScene,
 } from '@creatoros/services';
 import { attachmentHeaders } from '../attachment';
-import { ctxFor, type AppDeps } from '../http';
+import { ctxFor, originAllowed, type AppDeps } from '../http';
 import { zipStored } from '../zip-store';
 
 const idParam = z.object({ id: z.string().uuid() });
 const sceneParam = z.object({ id: z.string().uuid(), sceneId: z.string().uuid() });
 
-function editor(req: FastifyRequest) {
+function editor(req: FastifyRequest, deps: AppDeps) {
   if (!req.session) throw unauthorized();
   if (req.session.role === 'VIEWER') throw forbidden();
-  if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
+  if (req.headers['x-requested-with'] !== 'creatoros' || !originAllowed(req, deps))
+    throw forbidden('Cross-site request blocked (CSRF protection).');
 }
 
 export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
@@ -50,7 +51,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({ title: z.string().min(1).max(160), brandId: z.string().uuid().nullable().optional(), aspect: z.string().max(80).optional() }).parse(req.body);
     const row = await createLongVideo(ctxFor(deps, req), body);
     return { data: row, meta: { requestId: req.correlationId }, error: null };
@@ -63,7 +64,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.patch('/long-videos/:id', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const body = z
       .object({
@@ -82,7 +83,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos/:id/audio', { bodyLimit: 90 * 1024 * 1024 }, async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const incoming = await req.file();
     if (!incoming) throw badRequest('Choose a song file.');
@@ -186,40 +187,40 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos/:id/rebalance', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const body = z.object({ seconds: z.number().min(4).max(15).optional() }).parse(req.body ?? {});
     return { data: await rebalanceLongVideo(ctxFor(deps, req), id, body.seconds), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.patch('/long-videos/:id/scenes/:sceneId', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = sceneParam.parse(req.params);
     const body = z.object({ label: z.string().max(160).optional(), prompt: z.string().optional(), mode: z.enum(['vocal', 'broll']).optional(), continuity: z.enum(['shot', 'context']).optional(), durationSec: z.number().min(1).max(120).optional(), workerId: z.string().uuid().nullable().optional() }).parse(req.body);
     return { data: await updateLongVideoScene(ctxFor(deps, req), params.id, params.sceneId, body), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/scenes/:sceneId/split', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = sceneParam.parse(req.params);
     return { data: await splitLongVideoScene(ctxFor(deps, req), params.id, params.sceneId), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.delete('/long-videos/:id/scenes/:sceneId', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = sceneParam.parse(req.params);
     return { data: await deleteLongVideoScene(ctxFor(deps, req), params.id, params.sceneId), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/library', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const body = z.object({ fileId: z.string().uuid(), sceneId: z.string().uuid().nullable().optional() }).parse(req.body);
     return { data: await addLongVideoFromLibrary(ctxFor(deps, req), id, body.fileId, body.sceneId ?? null), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/plan', { bodyLimit: 220 * 1024 * 1024 }, async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     let jsonText = '';
     const files: { name: string; bytes: Buffer }[] = [];
@@ -235,7 +236,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos/:id/refs', { bodyLimit: 25 * 1024 * 1024 }, async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const sceneId = z.string().uuid().optional().parse((req.query as { sceneId?: string }).sceneId);
     const incoming = await req.file();
@@ -245,39 +246,39 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.delete('/long-videos/:id/refs/:refId', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = z.object({ id: z.string().uuid(), refId: z.string().uuid() }).parse(req.params);
     await removeLongVideoRef(ctxFor(deps, req), params.id, params.refId);
     return { data: { ok: true }, meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/scenes/:sceneId/cancel', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = sceneParam.parse(req.params);
     return { data: await cancelLongVideoScene(ctxFor(deps, req), params.id, params.sceneId), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.delete('/long-videos/:id', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     return { data: await deleteLongVideo(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/scenes/:sceneId/generate', async (req) => {
-    editor(req);
+    editor(req, deps);
     const params = sceneParam.parse(req.params);
     return { data: await queueLongVideoScene(ctxFor(deps, req), params.id, params.sceneId), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/batch', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const body = z.object({ state: z.enum(['run', 'pause', 'off']) }).parse(req.body);
     return { data: await setLongVideoBatch(ctxFor(deps, req), id, body.state), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/export', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     return { data: await requestLongVideoExport(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });

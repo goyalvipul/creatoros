@@ -73,6 +73,18 @@ describe('first run and auth', () => {
       headers: { origin: 'https://evil.example' },
     });
     expect(foreign.status).toBe(403);
+    // A spoofed Host or X-Forwarded-Host must not override the configured origin allowlist.
+    for (const headers of [
+      { origin: 'https://evil.example', host: 'evil.example' },
+      { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' },
+    ]) {
+      const spoofed = await api.call('POST', `${V1}/ideas`, {
+        cookie: owner,
+        body: { title: 'spoofed' },
+        headers,
+      });
+      expect(spoofed.status).toBe(403);
+    }
     const noHeader = await api.app.inject({
       method: 'POST',
       url: `${V1}/ideas`,

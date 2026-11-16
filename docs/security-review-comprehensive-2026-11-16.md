@@ -41,6 +41,10 @@ AI generation, long-video updates/uploads, ComfyUI uploads, and a direct content
 
 The API and workers previously used default `fetch` redirect-following behavior when calling agent file-stream and upload endpoints. These internal signed agent calls now use `redirect: 'error'` across the library streaming, publishing upload, livestream source, video-trim upload and file proxy paths. This prevents a compromised or incorrectly configured agent from sending the server through HTTP redirects to unrelated destinations. It **does not** eliminate SSRF from untrusted original agent-reported URLs; validate permitted destinations and network egress separately.
 
+### S7 — Malformed hex signatures could compare equal (Medium)
+
+A targeted unit test demonstrated that appending a trailing hexadecimal nibble to a valid HMAC could still verify, because Node's `Buffer.from(value, 'hex')` silently discards incomplete or invalid suffixes. `safeEqualHex` now rejects unequal lengths, empty/odd-length input and non-hex characters before constant-time comparison. The helper is used for agent request signatures, signed media URLs, cover links and signed workflow calls. No signing keys or algorithms were changed.
+
 ## Regression tests / CI
 
 Added unit tests in `packages/services/src/crypto-media.test.ts` for tenant-binding, expiration, tampering, wrong secret, old token rejection and malformed tokens. Added integration coverage that an owner cannot mint a media URL for a non-existent file. The prior branch contains password and Host-header spoof tests. GitHub Actions now includes an independent `security-hardening` job to run `pnpm typecheck` and `pnpm test:unit` even when the existing formatting job stops early.

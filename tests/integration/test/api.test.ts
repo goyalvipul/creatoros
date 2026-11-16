@@ -105,6 +105,16 @@ describe('first run and auth', () => {
     expect(loginForeign.status).toBe(403);
   });
 
+  it('refuses to mint media tokens for files outside the current workspace', async () => {
+    const otherFileId = randomUUID();
+    const response = await api.call('POST', `${V1}/files/${otherFileId}/stream-token`, {
+      cookie: owner,
+      body: {},
+    });
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
+  });
+
   it('enforces roles: viewer reads, editor edits, only owner administers', async () => {
     for (const [email, role] of [
       ['editor@creator.test', 'EDITOR'],

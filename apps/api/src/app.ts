@@ -44,7 +44,7 @@ export async function buildApp(
           } as any),
     // The API sits behind the Caddy container; trust exactly the immediate proxy hop.
     // Trusting an unbounded X-Forwarded-For chain lets clients spoof their IP for logging and rate limits.
-    trustProxy: 1,
+    trustProxy: (_address, hop) => hop === 0,
     bodyLimit: 10 * 1024 * 1024,
   });
 

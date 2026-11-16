@@ -905,7 +905,13 @@ function PublishDesk({
         {accounts.map((account) => {
           const draft = drafts.find((d) => d.itemId === current.id && d.accountId === account.id);
           const state = draft?.uploadState as string | undefined;
-          const posted = state === 'PUBLISHED';
+          const sent = new Set<string>((draft?.sentPosts ?? []).map((post: { form: string }) => post.form));
+          if (account.platform === 'instagram' && state === 'PUBLISHED' && sent.size === 0)
+            sent.add(draft?.contentForm === 'TRIAL' ? 'TRIAL' : 'REEL');
+          const instagramBusy = state === 'QUEUED' || state === 'UPLOADING' || state === 'SCHEDULED' || state === 'UNCERTAIN';
+          const instagramOpen = account.platform === 'instagram' && !instagramBusy && (!sent.has('REEL') || !sent.has('TRIAL'));
+          const rowLocked = account.platform === 'instagram' ? !instagramOpen : locked(state);
+          const posted = account.platform === 'instagram' ? sent.has('REEL') && sent.has('TRIAL') : state === 'PUBLISHED';
           return (
             <li key={account.id} className="rounded-xl border border-border p-3">
               <div className="flex items-start justify-between gap-2">
@@ -927,10 +933,10 @@ function PublishDesk({
               )}
               {!account.canPublish && <p className="mt-1 text-xs text-muted">{account.reason}</p>}
               <div className="mt-2 flex gap-2">
-                <Button size="sm" variant="primary" disabled={!account.canPublish || locked(state)} onClick={() => onSend(current, account, draft)}>
-                  {posted ? 'Published' : 'Publish'}
+                <Button size="sm" variant="primary" disabled={!account.canPublish || rowLocked} onClick={() => onSend(current, account, draft)}>
+                  {posted ? 'Published' : account.platform === 'instagram' && (sent.has('REEL') || sent.has('TRIAL')) ? 'Publish the other' : 'Publish'}
                 </Button>
-                <Button size="sm" disabled={!account.canPublish || locked(state)} onClick={() => onSend(current, account, draft, true)}>
+                <Button size="sm" disabled={!account.canPublish || rowLocked} onClick={() => onSend(current, account, draft, true)}>
                   Schedule
                 </Button>
               </div>

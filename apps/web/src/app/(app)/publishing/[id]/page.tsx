@@ -508,6 +508,18 @@ function PublishPanel({
   }, [title, caption, tags, onCopy]);
 
   const zone = (tz ?? 'America/Vancouver').split('/').pop()?.replace(/_/g, ' ');
+  const sentForms = new Set<string>((draft?.sentPosts ?? []).map((post: { form: string }) => post.form));
+  const instagramKind = contentForm === 'TRIAL' ? 'TRIAL' : 'REEL';
+  const activeKind = draft?.contentForm === 'TRIAL' ? 'TRIAL' : 'REEL';
+  const instagramBusy =
+    draft?.uploadState === 'QUEUED' ||
+    draft?.uploadState === 'UPLOADING' ||
+    draft?.uploadState === 'SCHEDULED' ||
+    draft?.uploadState === 'UNCERTAIN';
+  const publishLocked =
+    account.platform === 'instagram'
+      ? sentForms.has(instagramKind) || (instagramBusy && activeKind === instagramKind)
+      : locked(draft?.uploadState);
   const aiReady = aiUse === 'YES' || aiUse === 'NO';
   const detailsReady =
     account.platform === 'youtube'
@@ -616,11 +628,23 @@ function PublishPanel({
         <li>{draft?.uploadState === 'SCHEDULED' || draft?.uploadState === 'PUBLISHED' ? '✓' : '○'} Owner confirmation</li>
       </ul>
       {draft?.error && <p className="text-xs text-bad">{draft.error}</p>}
-      {draft?.url && (
-        <a href={draft.url} target="_blank" rel="noreferrer" className="block truncate text-xs text-accent hover:underline">
-          {draft.url}
-        </a>
+      {account.platform === 'instagram' && sentForms.has('REEL') && (
+        <p className="text-xs text-muted">Posted as a reel. A trial reel is a separate post.</p>
       )}
+      {account.platform === 'instagram' && sentForms.has('TRIAL') && (
+        <p className="text-xs text-muted">Posted as a trial reel.</p>
+      )}
+      {account.platform === 'instagram'
+        ? (draft?.sentPosts ?? []).filter((post: { url?: string | null }) => post.url).map((post: { form: string; url: string }) => (
+            <a key={post.form} href={post.url} target="_blank" rel="noreferrer" className="block truncate text-xs text-accent hover:underline">
+              {post.form === 'TRIAL' ? 'Trial reel' : 'Reel'} · {post.url}
+            </a>
+          ))
+        : draft?.url && (
+            <a href={draft.url} target="_blank" rel="noreferrer" className="block truncate text-xs text-accent hover:underline">
+              {draft.url}
+            </a>
+          )}
       {draft?.scheduledAt && <p className="text-xs text-muted">Saved for {when(draft.scheduledAt, tz)}.</p>}
       <div className="flex flex-wrap gap-2">
         <ActionButton
@@ -641,7 +665,7 @@ function PublishPanel({
         </ActionButton>
         <ActionButton
           confirm={`Send ${item.fileName} to ${account.handle} now? This posts the file.`}
-          disabled={!account.canPublish || locked(draft?.uploadState) || !detailsReady}
+          disabled={!account.canPublish || publishLocked || !detailsReady}
           onAction={async () => {
             await post('/publishing/publish', { ...body, requestId: crypto.randomUUID() });
             await refresh(`/variants/${variantId}/publish`, '/publishing/matrix');

@@ -226,7 +226,7 @@ export interface LtxDraftInput {
 /** Local checks only. This does not contact a machine. */
 export function validateLtxDraft(
   input: LtxDraftInput,
-  opts: { requireMedia: boolean; requireWorker: boolean },
+  opts: { requireMedia: boolean; requireWorker: boolean; allowUploadCopy?: boolean },
 ): { errors: LtxIssue[]; warnings: LtxIssue[] } {
   const errors: LtxIssue[] = [];
   const warnings: LtxIssue[] = [];
@@ -234,8 +234,8 @@ export function validateLtxDraft(
     if (!ok) errors.push({ field, message });
   };
   if (opts.requireMedia) {
-    const imageReady = !!input.imageFileId || (!!input.imageUploadName && input.imageUploadWorkerId === input.workerId);
-    const audioReady = !!input.audioFileId || (!!input.audioUploadName && input.audioUploadWorkerId === input.workerId);
+    const imageReady = !!input.imageFileId || (!!input.imageUploadName && (opts.allowUploadCopy || input.imageUploadWorkerId === input.workerId));
+    const audioReady = !!input.audioFileId || (!!input.audioUploadName && (opts.allowUploadCopy || input.audioUploadWorkerId === input.workerId));
     need('imageFileId', imageReady, input.imageUploadName && input.imageUploadWorkerId !== input.workerId
       ? 'That image was uploaded to a different PC. Upload it again, or choose one from the library.'
       : 'Choose a starting image from the library, or upload one to the PC you picked.');

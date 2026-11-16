@@ -119,13 +119,23 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
     await ctx.db.execute(sql`
       select d.id, d.item_id as "itemId", d.social_account_id as "accountId", d.title, d.caption, d.hashtags, d.privacy,
              d.content_form as "contentForm", d.playlist_ids as "playlistIds", d.ai_use as "aiUse",
-             d.scheduled_at as "scheduledAt",
+             d.scheduled_at as "scheduledAt", d.sent_posts as "sentPosts", sa.platform as platform,
              d.upload_state as "uploadState", d.error, d.publication_id as "publicationId",
              r.canonical_url as url, r.state as "recordState"
       from publish_drafts d
       left join publication_records r on r.id = d.publication_id
+      left join social_accounts sa on sa.id = d.social_account_id
       where d.item_id in (select id from publish_items where variant_id = ${variantId})`),
-  );
+  ).map((draft) => {
+    const posts = parseSentPosts(draft.sentPosts);
+    if (draft.platform === 'instagram' && posts.length === 0 && draft.uploadState === 'PUBLISHED') {
+      return {
+        ...draft,
+        sentPosts: [{ form: instagramKind(draft.contentForm), url: draft.url ?? null, publicationId: draft.publicationId }],
+      };
+    }
+    return { ...draft, sentPosts: posts };
+  });
   const accounts = await publishAccounts(ctx);
   return { ...v, items, drafts, accounts };
 }
@@ -255,9 +265,45 @@ function threadsKind(mime: string, name: string): 'IMAGE' | 'VIDEO' {
   throw new UploadOutcome('Threads can take a JPEG, PNG, or an MP4 or MOV video from this screen.', false);
 }
 
+type SentPost = { form: 'REEL' | 'TRIAL'; url: string | null; publicationId: string | null };
+
+function instagramKind(contentForm?: string | null): 'REEL' | 'TRIAL' {
+  return contentForm === 'TRIAL' ? 'TRIAL' : 'REEL';
+}
+
+function parseSentPosts(value: unknown): SentPost[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((row) => {
+    if (!row || typeof row !== 'object') return [];
+    const form = (row as SentPost).form;
+    if (form !== 'REEL' && form !== 'TRIAL') return [];
+    return [{ form, url: (row as SentPost).url ?? null, publicationId: (row as SentPost).publicationId ?? null }];
+  });
+}
+
+/** A published Instagram draft from before sent_posts still counts as the reel, or the trial, it already sent. */
+async function rememberedInstagramPosts(
+  db: Ctx['db'],
+  existing: { sentPosts: unknown; uploadState: string; contentForm: string | null; publicationId: string | null },
+): Promise<SentPost[]> {
+  const saved = parseSentPosts(existing.sentPosts);
+  if (saved.length) return saved;
+  if (existing.uploadState !== 'PUBLISHED') return [];
+  let url: string | null = null;
+  if (existing.publicationId) {
+    const [rec] = await db
+      .select({ url: publicationRecords.canonicalUrl })
+      .from(publicationRecords)
+      .where(eq(publicationRecords.id, existing.publicationId));
+    url = rec?.url ?? null;
+  }
+  return [{ form: instagramKind(existing.contentForm), url, publicationId: existing.publicationId }];
+}
+
 /**
  * Stores the per-platform text and queues one upload. The same requestId never uploads twice.
  * A file already published, uploading, or uncertain is not sent again.
+ * Instagram may send the same file twice: once as a reel and once as a trial reel.
  */
 export async function requestPublish(
   ctx: Ctx,
@@ -304,7 +350,23 @@ export async function requestPublish(
     .from(publishDrafts)
     .where(and(eq(publishDrafts.itemId, item.id), eq(publishDrafts.socialAccountId, input.socialAccountId)));
   if (existing?.requestId === input.requestId) return draftView(existing);
-  if (existing && (existing.uploadState === 'QUEUED' || existing.uploadState === 'UPLOADING' || existing.uploadState === 'PUBLISHED'))
+  const instagram = account.platform === 'instagram';
+  const kind = instagramKind(input.contentForm);
+  const sentPosts = instagram && existing ? await rememberedInstagramPosts(ctx.db, existing) : [];
+  if (instagram && existing) {
+    if (existing.uploadState === 'QUEUED' || existing.uploadState === 'UPLOADING')
+      throw conflict('This upload is already in progress.', undefined, 'ALREADY_PUBLISHING');
+    if (existing.uploadState === 'SCHEDULED')
+      throw conflict('This upload is already scheduled.', undefined, 'ALREADY_PUBLISHING');
+    if (existing.uploadState === 'UNCERTAIN')
+      throw conflict('This upload may already have been sent. Check Instagram before trying again.', undefined, 'ALREADY_PUBLISHING');
+    if (sentPosts.some((post) => post.form === kind))
+      throw conflict(
+        kind === 'TRIAL' ? 'This file is already published as a trial reel.' : 'This file is already published to that account.',
+        undefined,
+        'ALREADY_PUBLISHING',
+      );
+  } else if (existing && (existing.uploadState === 'QUEUED' || existing.uploadState === 'UPLOADING' || existing.uploadState === 'PUBLISHED'))
     throw conflict(
       existing.uploadState === 'PUBLISHED'
         ? 'This file is already published to that account.'
@@ -314,6 +376,7 @@ export async function requestPublish(
     );
 
   const extra = youtubeChoices(account.platform, input, existing);
+  const secondInstagram = instagram && sentPosts.length > 0;
   const values = {
     title: input.title?.trim() || null,
     caption: input.caption?.trim() || null,
@@ -326,6 +389,8 @@ export async function requestPublish(
     uploadState: 'QUEUED',
     error: null,
     updatedAt: new Date(),
+    ...(instagram ? { sentPosts } : {}),
+    ...(secondInstagram ? { publicationId: null } : {}),
   };
   let draft = existing;
   if (existing) {
@@ -419,7 +484,25 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
     .select()
     .from(publishDrafts)
     .where(and(eq(publishDrafts.itemId, item.id), eq(publishDrafts.socialAccountId, input.socialAccountId)));
-  if (
+  const instagram = account.platform === 'instagram';
+  const kind = instagramKind(input.contentForm);
+  const sentPosts = instagram && existing ? await rememberedInstagramPosts(ctx.db, existing) : [];
+  if (instagram && existing) {
+    if (existing.uploadState === 'QUEUED' || existing.uploadState === 'UPLOADING' || existing.uploadState === 'SCHEDULED')
+      throw conflict(
+        existing.uploadState === 'SCHEDULED' ? 'This upload is already scheduled.' : 'This upload is already in progress.',
+        undefined,
+        'ALREADY_PUBLISHING',
+      );
+    if (existing.uploadState === 'UNCERTAIN')
+      throw conflict('This upload may already have been sent. Check Instagram before trying again.', undefined, 'ALREADY_PUBLISHING');
+    if (sentPosts.some((post) => post.form === kind))
+      throw conflict(
+        kind === 'TRIAL' ? 'This file is already published as a trial reel.' : 'This file is already published to that account.',
+        undefined,
+        'ALREADY_PUBLISHING',
+      );
+  } else if (
     existing &&
     (existing.uploadState === 'QUEUED' ||
       existing.uploadState === 'UPLOADING' ||
@@ -433,6 +516,7 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
       undefined,
       'ALREADY_PUBLISHING',
     );
+  const secondInstagram = instagram && sentPosts.length > 0;
 
   const text = {
     title: input.title?.trim() || null,
@@ -441,7 +525,7 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
     privacy: recordPrivacy(account.platform, input.privacy),
   };
   return ctx.db.transaction(async (tx) => {
-    let publicationId = existing?.publicationId ?? null;
+    let publicationId = secondInstagram ? null : (existing?.publicationId ?? null);
     if (publicationId) {
       const [cur] = await tx
         .select({ state: publicationRecords.state })
@@ -505,6 +589,7 @@ export async function schedulePublish(ctx: Ctx, input: ScheduleRequest) {
       playlistIds: extra.playlistIds,
       aiUse: extra.aiUse,
       requestId: input.requestId,
+      ...(instagram ? { sentPosts } : {}),
       uploadState: 'SCHEDULED',
       scheduledAt,
       publicationId,
@@ -850,9 +935,22 @@ export async function executePublish(
       provenance: 'VERIFIED_PLATFORM',
       actorUserId: ctx.userId,
     });
+    const sentPosts =
+      account.platform === 'instagram'
+        ? [
+            ...parseSentPosts(claimed.sentPosts).filter((post) => post.form !== instagramKind(claimed.contentForm)),
+            { form: instagramKind(claimed.contentForm), url: result.url, publicationId: rec!.id },
+          ]
+        : undefined;
     await ctx.db
       .update(publishDrafts)
-      .set({ uploadState: 'PUBLISHED', publicationId: rec!.id, error: playlistNote, updatedAt: new Date() })
+      .set({
+        uploadState: 'PUBLISHED',
+        publicationId: rec!.id,
+        error: playlistNote,
+        updatedAt: new Date(),
+        ...(sentPosts ? { sentPosts } : {}),
+      })
       .where(eq(publishDrafts.id, claimed.id));
     await audit(ctx, 'publish.uploaded', { type: 'publication', id: rec!.id }, undefined, {
       platform: account.platform,

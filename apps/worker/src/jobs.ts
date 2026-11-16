@@ -3,6 +3,7 @@ import {
   createBackup,
   detectNearDuplicates,
   executePublish,
+  dispatchAutogen,
   pollRunningLtx,
   submitQueuedLtx,
   evictPreviews,
@@ -78,6 +79,11 @@ async function each<T>(d: WorkerDeps, items: T[], name: string, fn: (item: T) =>
 }
 
 export async function jobLtx(d: WorkerDeps) {
+  try {
+    await dispatchAutogen(d.db, d.env);
+  } catch (e) {
+    log(d, 'warn', 'autogen skipped', { err: String(e) });
+  }
   const queued = await submitQueuedLtx(d.db, d.env);
   const running = await pollRunningLtx(d.db, d.env);
   const { pollRunningH3, pollRunningQwen, submitQueuedH3, submitQueuedQwen } = await import('@creatoros/services');

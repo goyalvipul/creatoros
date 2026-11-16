@@ -3,6 +3,7 @@ export * from './paths';
 export * from './file-ops';
 export * from './video-trim';
 export * from './ltx';
+export * from './autogen';
 export * from './priority';
 export * from './time';
 export * from './money';

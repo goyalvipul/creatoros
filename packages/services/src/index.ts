@@ -42,6 +42,7 @@ export * from './tiktok-webhooks';
 export * from './social';
 export * from './workflows';
 export * from './comfy';
+export * from './autogen';
 export * from './qwen';
 export * from './h3';
 export * from './long-videos';

@@ -1040,7 +1040,8 @@ async function ensureBroadcast(db: Db, env: ServiceEnv, row: typeof liveSessions
     // Do not silently create another broadcast when listing failed; that risks duplicate Upcoming entries.
     const upcoming = await listUpcomingBroadcasts(fetchImpl, token);
     const reusable = upcoming.filter(
-      (item) => item.title === row.title && !item.boundStreamId && ['created', 'ready', 'testing'].includes(item.lifeCycleStatus),
+      (item: { title: string; boundStreamId: string | null; lifeCycleStatus: string }) =>
+        item.title === row.title && !item.boundStreamId && ['created', 'ready', 'testing'].includes(item.lifeCycleStatus),
     );
     const created =
       reusable.length === 1

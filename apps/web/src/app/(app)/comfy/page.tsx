@@ -14,6 +14,7 @@ import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
 import { LongVideos } from './long-videos';
 import { LiveStudio } from './live-studio';
+import { AutoGen } from './autogen';
 import { AiPromptTools, AiSwitch } from '@/components/ai-tools';
 
 type Issue = { field: string; message: string };
@@ -450,7 +451,7 @@ const PRESET_FALLBACK = {
   upscale: { width: 1152, height: 2048, quality: 'ULTRA' },
 };
 
-const STUDIO_TABS = ['ltx', 'audio', 'h3', 'long', 'live', 'history', 'settings'] as const;
+const STUDIO_TABS = ['ltx', 'audio', 'h3', 'long', 'live', 'history', 'autogen', 'settings'] as const;
 type StudioTab = (typeof STUDIO_TABS)[number];
 
 function studioTabFromHash(hash: string): StudioTab | null {
@@ -487,6 +488,7 @@ export default function ComfyPage() {
     { id: 'live' as const, label: 'Live Studio' },
     { id: 'audio' as const, label: 'Audio' },
     { id: 'history' as const, label: 'History' },
+    { id: 'autogen' as const, label: 'AutoGen' },
     { id: 'settings' as const, label: 'Settings' },
   ];
   return (
@@ -514,7 +516,7 @@ export default function ComfyPage() {
             </div>
             <AiSwitch />
           </div>
-          <div className={tab === 'history' || tab === 'settings' ? 'p-5' : undefined}>
+          <div className={tab === 'history' || tab === 'settings' || tab === 'autogen' ? 'p-5' : undefined}>
             <StudioBody tab={tab} recall={recall} onHistory={() => selectTab('history')} onUse={(clip) => { setRecall(clip); selectTab('ltx'); }} />
           </div>
         </div>
@@ -535,7 +537,7 @@ function StudioBody({
   onUse,
   onHistory,
 }: {
-  tab: 'ltx' | 'audio' | 'h3' | 'long' | 'live' | 'history' | 'settings';
+  tab: 'ltx' | 'audio' | 'h3' | 'long' | 'live' | 'history' | 'autogen' | 'settings';
   recall: SavedClip | null;
   onUse: (clip: SavedClip) => void;
   onHistory: () => void;
@@ -557,6 +559,9 @@ function StudioBody({
       {tab === 'live' ? <LiveStudio /> : null}
       <div hidden={tab !== 'history'}>
         <HistoryTab onUse={onUse} />
+      </div>
+      <div hidden={tab !== 'autogen'}>
+        <AutoGen active={tab === 'autogen'} />
       </div>
       <div hidden={tab !== 'settings'} className="space-y-4">
         {tab === 'settings' ? (

@@ -1,7 +1,7 @@
 import { boolean, doublePrecision, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { createdAt, pk, ts, updatedAt } from './columns';
 import { orgRef, users } from './identity';
-import { creativeProjects } from './production';
+import { creativeProjects, generationJobs } from './production';
 import { devices, fileInstances } from './storage';
 
 /** A ComfyUI the owner can send work to. The address stays on the server. */
@@ -175,4 +175,53 @@ export const windowsTaskRestarts = pgTable(
     finishedAt: ts('finished_at'),
   },
   (t) => [index('windows_task_restarts_device_idx').on(t.deviceId, t.status)],
+);
+
+/** One AutoGen pass: a song, one image, one prompt, and a start time for each clip. */
+export const autogenRuns = pgTable(
+  'autogen_runs',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    projectId: uuid('project_id').references(() => creativeProjects.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    prompt: text('prompt').notNull().default(''),
+    status: text('status').notNull().default('RUNNING'),
+    audioFileId: uuid('audio_file_id').references(() => fileInstances.id, { onDelete: 'set null' }),
+    imageFileId: uuid('image_file_id').references(() => fileInstances.id, { onDelete: 'set null' }),
+    audioUploadName: text('audio_upload_name'),
+    audioUploadWorkerId: uuid('audio_upload_worker_id').references(() => gpuWorkers.id, { onDelete: 'set null' }),
+    imageUploadName: text('image_upload_name'),
+    imageUploadWorkerId: uuid('image_upload_worker_id').references(() => gpuWorkers.id, { onDelete: 'set null' }),
+    audioLengthSec: doublePrecision('audio_length_sec'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('autogen_runs_org_idx').on(t.orgId, t.createdAt)],
+);
+
+/** A clip waiting for a free PC. The 3060 renders 20 seconds and the 3090 renders 30. */
+export const autogenClips = pgTable(
+  'autogen_clips',
+  {
+    id: pk(),
+    orgId: orgRef(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => autogenRuns.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    startSec: doublePrecision('start_sec').notNull(),
+    durationSec: doublePrecision('duration_sec'),
+    status: text('status').notNull().default('WAITING'),
+    attempt: integer('attempt').notNull().default(0),
+    excludeWorkerId: uuid('exclude_worker_id').references(() => gpuWorkers.id, { onDelete: 'set null' }),
+    workerId: uuid('worker_id').references(() => gpuWorkers.id, { onDelete: 'set null' }),
+    workerLabel: text('worker_label'),
+    jobId: uuid('job_id').references(() => generationJobs.id, { onDelete: 'set null' }),
+    error: text('error'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('autogen_clips_run_idx').on(t.runId, t.ordinal), index('autogen_clips_status_idx').on(t.status)],
 );

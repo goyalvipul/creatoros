@@ -425,7 +425,7 @@ export async function getLtxStudio(ctx: Ctx) {
   };
 }
 
-async function checkedForm(ctx: Ctx, form: LtxForm, opts: { requireMedia: boolean; requireWorker: boolean }) {
+async function checkedForm(ctx: Ctx, form: LtxForm, opts: { requireMedia: boolean; requireWorker: boolean; allowUploadCopy?: boolean }) {
   const image = await media(ctx, form.imageFileId, 'IMAGE');
   const audio = await media(ctx, form.audioFileId, 'AUDIO');
   const worker = await workerOrNull(ctx, form.workerId);
@@ -478,12 +478,12 @@ export async function validateLtx(ctx: Ctx, form: LtxForm) {
 }
 
 /** Queues a render. The worker uploads the image and audio, then posts the API prompt. */
-export async function generateLtx(ctx: Ctx, form: LtxForm) {
+export async function generateLtx(ctx: Ctx, form: LtxForm, opts?: { skipDraft?: boolean; allowUploadCopy?: boolean }) {
   const workflow = ltxApiWorkflow();
   if (!workflow) throw badRequest(LTX_FILE_MISSING);
-  const checked = await checkedForm(ctx, form, { requireMedia: true, requireWorker: true });
+  const checked = await checkedForm(ctx, form, { requireMedia: true, requireWorker: true, allowUploadCopy: opts?.allowUploadCopy });
   if (checked.errors.length) throw badRequest(checked.errors[0]!.message, checked.errors);
-  await saveLtxDraft(ctx, form);
+  if (!opts?.skipDraft) await saveLtxDraft(ctx, form);
   const [job] = await ctx.db
     .insert(generationJobs)
     .values({

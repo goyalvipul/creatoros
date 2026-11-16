@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
-import { eq, fileInstances, providerConnections, publicationRecords, socialAccounts } from '@creatoros/db';
+import { eq, fileInstances, providerConnections, publicationRecords, publishDrafts, socialAccounts } from '@creatoros/db';
 import {
   AppError,
   createAsset,
@@ -10,6 +10,7 @@ import {
   createSocialAccount,
   createVariant,
   encryptJson,
+  getPublishTitle,
   linkPublishFile,
   listLibrary,
   publishingMatrix,
@@ -140,7 +141,7 @@ describe('publishing upload', () => {
     await expect(
       requestPublish(
         ctx,
-        { itemId: linked.id, socialAccountId: yt.id, requestId, title: 'Live', privacy: null },
+        { itemId: linked.id, socialAccountId: yt.id, requestId, title: 'Live', privacy: null, contentForm: 'VIDEO' },
         run,
       ),
     ).rejects.toBeInstanceOf(AppError);
@@ -155,6 +156,8 @@ describe('publishing upload', () => {
         caption: 'A song',
         hashtags: ['song'],
         privacy: 'UNLISTED',
+        contentForm: 'VIDEO',
+        aiUse: 'NO',
       },
       run,
     );
@@ -175,6 +178,8 @@ describe('publishing upload', () => {
         caption: 'A song',
         hashtags: ['song'],
         privacy: 'UNLISTED',
+        contentForm: 'VIDEO',
+        aiUse: 'NO',
       },
       run,
     );
@@ -190,6 +195,8 @@ describe('publishing upload', () => {
           requestId: randomUUID(),
           title: 'Live again',
           privacy: 'PUBLIC',
+          contentForm: 'VIDEO',
+        aiUse: 'NO',
         },
         run,
       ),
@@ -225,6 +232,8 @@ describe('publishing upload', () => {
         requestId: randomUUID(),
         title: 'B-roll',
         privacy: 'PRIVATE',
+        contentForm: 'VIDEO',
+        aiUse: 'NO',
       },
       {
         runNow: true,
@@ -252,5 +261,96 @@ describe('publishing upload', () => {
     expect(row.cells.find((c) => c.accountId === yt.id)!.active).toBe(1);
     expect(row.cells.find((c) => c.accountId === tt.id)!.published).toBe(0);
     expect(row.cells.find((c) => c.accountId === tt.id)!.active).toBe(0);
+  });
+
+  it('lets Instagram publish the same file once as a reel and once as a trial reel', async () => {
+    const { ctx } = await makeOrg(h);
+    ctx.env = { ...ctx.env, appBaseUrl: 'https://os.example' };
+    const brand = await createBrand(ctx, { name: 'Mehak' });
+    const channel = await createChannel(ctx, { brandId: brand.id, name: 'Mehak' });
+    const ig = await createSocialAccount(ctx, { channelId: channel.id, platform: 'instagram', handle: '@mehakviking' });
+    const scope = 'instagram_business_content_publish';
+    const [conn] = await h.db
+      .insert(providerConnections)
+      .values({
+        orgId: ctx.orgId,
+        provider: 'instagram',
+        principalHint: 'IG1',
+        state: 'ACTIVE',
+        scopes: [scope],
+        encryptedTokenRef: encryptJson({ accessToken: 'ig', scopes: [scope] }, ctx.env.encryptionKey),
+      })
+      .returning();
+    await h.db.update(socialAccounts).set({ providerConnectionId: conn!.id }).where(eq(socialAccounts.id, ig.id));
+    const dev = await pairTestDevice(ctx, 'windows', 'GPU-12');
+    const root = await makeRoot(ctx, dev.deviceId, 'D:\\Media');
+    const [clip] = await h.db
+      .insert(fileInstances)
+      .values({
+        orgId: ctx.orgId,
+        rootId: root.id,
+        deviceId: dev.deviceId,
+        canonicalPath: 'd:/media/reel.mp4',
+        displayPath: 'D:\\Media\\reel.mp4',
+        fileName: 'reel.mp4',
+        ext: 'mp4',
+        size: 4,
+        fileType: 'VIDEO',
+      })
+      .returning();
+    const asset = await createAsset(ctx, { title: 'Song', kind: 'VIDEO', fileInstanceId: clip!.id });
+    const variant = await createVariant(ctx, { assetId: asset.id, titleMaster: 'Master', format: 'MASTER' });
+    const linked = await linkPublishFile(ctx, variant.id, clip!.id);
+    let posts = 0;
+    let trial: string | null = null;
+    const fetchImpl = async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith('/media')) {
+        trial = parsed.searchParams.get('trial_params');
+        return new Response(JSON.stringify({ id: `container-${posts + 1}` }), { status: 200 });
+      }
+      if (parsed.pathname.endsWith('/media_publish')) {
+        posts += 1;
+        return new Response(JSON.stringify({ id: `media-${posts}` }), { status: 200 });
+      }
+      if (parsed.searchParams.get('fields') === 'status_code,status')
+        return new Response(JSON.stringify({ status_code: 'FINISHED' }), { status: 200 });
+      if (parsed.searchParams.get('fields') === 'permalink')
+        return new Response(JSON.stringify({ permalink: `https://www.instagram.com/reel/${parsed.pathname.split('/').pop()}/` }), { status: 200 });
+      return new Response('unexpected', { status: 500 });
+    };
+    const run = { runNow: true as const, fetch: fetchImpl as typeof fetch, loadFile: async () => fileBytes() };
+    const reel = await requestPublish(ctx, { itemId: linked.id, socialAccountId: ig.id, requestId: randomUUID(), caption: 'Power', aiUse: 'YES' }, run);
+    expect(reel.uploadState).toBe('PUBLISHED');
+    expect(trial).toBeNull();
+    const title = await getPublishTitle(ctx, variant.id);
+    const draft = title.drafts.find((row: { accountId: string }) => row.accountId === ig.id);
+    expect(draft.sentPosts.map((post: { form: string }) => post.form)).toEqual(['REEL']);
+    expect(draft.uploadState).toBe('PUBLISHED');
+
+    const again = await requestPublish(
+      ctx,
+      { itemId: linked.id, socialAccountId: ig.id, requestId: randomUUID(), caption: 'Power', contentForm: 'TRIAL', aiUse: 'YES' },
+      run,
+    );
+    expect(again.uploadState).toBe('PUBLISHED');
+    expect(trial).toContain('MANUAL');
+    expect(posts).toBe(2);
+    const [saved] = await h.db.select().from(publishDrafts).where(eq(publishDrafts.itemId, linked.id));
+    expect(saved!.sentPosts.map((post) => post.form).sort()).toEqual(['REEL', 'TRIAL']);
+    const recs = await h.db.select().from(publicationRecords).where(eq(publicationRecords.variantId, variant.id));
+    expect(recs).toHaveLength(2);
+
+    await expect(
+      requestPublish(
+        ctx,
+        { itemId: linked.id, socialAccountId: ig.id, requestId: randomUUID(), caption: 'Power', contentForm: 'TRIAL', aiUse: 'YES' },
+        run,
+      ),
+    ).rejects.toMatchObject({ code: 'ALREADY_PUBLISHING' });
+    await expect(
+      requestPublish(ctx, { itemId: linked.id, socialAccountId: ig.id, requestId: randomUUID(), caption: 'Power', aiUse: 'YES' }, run),
+    ).rejects.toMatchObject({ code: 'ALREADY_PUBLISHING' });
+    expect(posts).toBe(2);
   });
 });

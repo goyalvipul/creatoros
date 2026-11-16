@@ -3,7 +3,7 @@ import { attachmentHeaders } from '../attachment';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { AppError, checkGpuWorker, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
+import { AppError, checkGpuWorker, createAutogenRun, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
 import { ctxFor, makeRouter } from '../http';
 
@@ -202,6 +202,42 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
   route(
     { method: 'GET', url: '/comfy/workers/:id/loras', tag: 'ComfyUI', summary: 'List LoRA files installed on that PC', role: 'OWNER', params: idParam },
     ({ ctx, params }) => listWorkerLoras(ctx, params.id),
+  );
+  route(
+    { method: 'GET', url: '/comfy/autogen', tag: 'ComfyUI', summary: 'AutoGen runs and the PCs that can render them', role: 'OWNER' },
+    ({ ctx }) => listAutogen(ctx),
+  );
+  route(
+    {
+      method: 'POST',
+      url: '/comfy/autogen',
+      tag: 'ComfyUI',
+      summary: 'Queue LTX clips from one song, one image, and one prompt',
+      role: 'OWNER',
+      body: z.object({
+        prompt: z.string().max(20000),
+        timestamps: z.string().max(2000),
+        songName: z.string().min(1).max(300),
+        audioLengthSec: z.number().positive().max(7200).nullable().optional(),
+        audioFileId: uuid.nullable().optional(),
+        imageFileId: uuid.nullable().optional(),
+        audioUploadName: z.string().max(300).nullable().optional(),
+        audioUploadWorkerId: uuid.nullable().optional(),
+        imageUploadName: z.string().max(300).nullable().optional(),
+        imageUploadWorkerId: uuid.nullable().optional(),
+      }),
+    },
+    async ({ ctx, body }) => {
+      const created = await createAutogenRun(ctx, body);
+      if (deps.enqueue) {
+        try {
+          await deps.enqueue('requests', 'ltx', { autogen: created.id });
+        } catch {
+          // The LTX pass still picks the clips up on its next run.
+        }
+      }
+      return created;
+    },
   );
   route(
     { method: 'GET', url: '/comfy/windows-tasks', tag: 'ComfyUI', summary: 'Windows scheduled tasks the owner can see and restart', role: 'OWNER' },

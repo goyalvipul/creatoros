@@ -193,6 +193,11 @@ export const publishDrafts = pgTable(
       .default(sql`'{}'::text[]`),
     /** YES or NO. Sent as YouTube status.containsSyntheticMedia. */
     aiUse: text('ai_use'),
+    /** Instagram only. One reel and one trial reel can both be sent for the same file. */
+    sentPosts: jsonb('sent_posts')
+      .$type<{ form: 'REEL' | 'TRIAL'; url: string | null; publicationId: string | null }[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     requestId: text('request_id'),
     /** When set and upload_state is SCHEDULED, the worker publishes at this instant. */
     scheduledAt: ts('scheduled_at'),

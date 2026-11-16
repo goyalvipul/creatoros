@@ -60,7 +60,7 @@ export async function openAgentFile(
   for (const base of urls) {
     try {
       const u = `${base.replace(/\/$/, '')}/v1/stream?root=${encodeURIComponent(f.rootId)}&path=${encodeURIComponent(f.displayPath)}&exp=${exp}&sig=${sig}`;
-      const upstream = await fetchImpl(u);
+      const upstream = await fetchImpl(u, { redirect: 'error' });
       if (upstream.status === 404) throw new AppError(410, 'FILE_MISSING', 'The agent could not find this file on disk.');
       if (!upstream.ok || !upstream.body) {
         lastErr = `HTTP ${upstream.status}`;

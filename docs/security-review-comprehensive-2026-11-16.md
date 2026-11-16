@@ -1,6 +1,6 @@
 # Comprehensive security review — source-code remediation pass
 
-Date: 2026-11-16. Branch: `security_check_comprehensive` (based on `security_review`, not `main`). No production deployment, data modification or merge.
+Date: 2026-11-16. Branch: `security_check_comprehensive` (based on `security_review`, not `main`). No production deployment, data modification or merge. Changes remain in a draft pull request.
 
 ## Scope and assurance
 
@@ -36,6 +36,10 @@ AI generation, long-video updates/uploads, ComfyUI uploads, and a direct content
 ### S5 — Fastify trusted arbitrary proxy header chains (Medium / deployment dependent)
 
 `trustProxy: true` was changed to `trustProxy: 1` because the API is exposed behind Caddy in the Compose topology. This limits forwarded IP attribution to the immediate proxy hop, reducing rate-limit/audit spoofing opportunities. Validate the actual deployment topology, especially if the API is called directly outside Caddy.
+
+### S6 — Internal agent requests followed redirects (Medium / defense in depth)
+
+The API and workers previously used default `fetch` redirect-following behavior when calling agent file-stream and upload endpoints. These internal signed agent calls now use `redirect: 'error'` across the library streaming, publishing upload, livestream source, video-trim upload and file proxy paths. This prevents a compromised or incorrectly configured agent from sending the server through HTTP redirects to unrelated destinations. It **does not** eliminate SSRF from untrusted original agent-reported URLs; validate permitted destinations and network egress separately.
 
 ## Regression tests / CI
 

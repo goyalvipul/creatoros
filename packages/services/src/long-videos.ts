@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,13 +17,14 @@ import {
   longVideoScenes,
   sql,
 } from '@creatoros/db';
-import { clipPlanCard, clipTitle, generationSeconds, h3AspectRatio, imageFileKey, isDefaultClipTitle, longVideoOutputFolder, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, spansFromClipSeconds, type SceneSpan } from '@creatoros/domain';
+import { clipPlanCard, clipTitle, h3AspectRatio, h3RequestSeconds, imageFileKey, isDefaultClipTitle, longVideoOutputFolder, motionVideoRange, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, songSpansForClips, type MotionTrackPlan, type SceneSpan } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { notify } from './notifications';
 import { badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
 const AUDIO = new Set(['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg']);
 const IMAGE = new Set(['jpg', 'jpeg', 'png', 'webp']);
+const VIDEO = new Set(['mp4', 'mov', 'webm']);
 
 function extOf(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
@@ -450,28 +452,160 @@ async function rewriteQueuedPrompt(ctx: Ctx, jobId: string, sceneId: string, pro
     .where(and(eq(generationJobs.id, jobId), eq(generationJobs.status, 'QUEUED')));
 }
 
-/** A shorter scene gives the spare song to the next one. A longer scene takes that song from the next one. The last scene trades with the one before it. */
+function motionReviewFor(
+  plan: { tracks: MotionTrackPlan[] } | null | undefined,
+  trackId: string | null,
+  startMs: number,
+  endMs: number,
+  sourceDurationMs: number | null,
+) {
+  if (!trackId) return null;
+  const track = plan?.tracks.find((item) => item.id === trackId);
+  if (!track) return 'missing';
+  return motionVideoRange(track, startMs, endMs, sourceDurationMs).status === 'ready' ? null : motionVideoRange(track, startMs, endMs, sourceDurationMs).status;
+}
+
+/** A shorter scene gives the spare song to the next one. A longer scene takes that song from the following scenes and removes one that is fully used. The last scene trades with the scenes before it. */
 async function resizeLongVideoScene(ctx: Ctx, projectId: string, sceneId: string, durationSec: number) {
+  const project = await owned(ctx, projectId);
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   const index = scenes.findIndex((s) => s.id === sceneId);
   if (index < 0) throw notFound('Scene');
-  const scene = scenes[index]!;
-  if (scene.status === 'QUEUED' || scene.status === 'RUNNING') throw badRequest('Wait until this scene finishes before changing its length.');
   const moved = resizeSceneSpan(
     scenes.map((item) => ({ startMs: item.startMs, endMs: item.endMs })),
     index,
     durationSec * 1000,
   );
   if ('error' in moved) throw badRequest(moved.error);
-  for (const [sceneIndex, span] of moved.spans.entries()) {
-    const row = scenes[sceneIndex]!;
-    if (row.startMs === span.startMs && row.endMs === span.endMs) continue;
+  const removed = new Set(moved.removed);
+  const changing = scenes.filter((scene, sceneIndex) => removed.has(sceneIndex) || moved.spans[sceneIndex] == null || scene.startMs !== moved.spans[sceneIndex]?.startMs || scene.endMs !== moved.spans[sceneIndex]?.endMs);
+  if (changing.some((scene) => scene.status === 'QUEUED' || scene.status === 'RUNNING')) {
+    throw badRequest('Wait until the section that would change finishes before changing this length.');
+  }
+  const motions = await ctx.db.select().from(longVideoRefs).where(and(eq(longVideoRefs.projectId, projectId), eq(longVideoRefs.kind, 'motion')));
+  const plan = project.motionPlan;
+  const durationOf = (trackId: string | null) => {
+    const track = plan?.tracks.find((item) => item.id === trackId);
+    const source = plan?.sources.find((item) => item.id === track?.sourceId);
+    const ref = source ? motions.find((item) => imageFileKey(item.name) === imageFileKey(source.filename)) : undefined;
+    return ref?.durationMs ?? null;
+  };
+  if (removed.size) {
+    const gone = new Set(scenes.filter((_, sceneIndex) => removed.has(sceneIndex)).map((scene) => scene.id));
+    const refRows = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId));
+    await ctx.db
+      .update(longVideoProjects)
+      .set({
+        sceneUndo: {
+          scenes: scenes.map((scene) => ({
+            id: scene.id,
+            position: scene.position,
+            startMs: scene.startMs,
+            endMs: scene.endMs,
+            label: scene.label,
+            mode: scene.mode,
+            prompt: scene.prompt,
+            songNotes: scene.songNotes,
+            imageNotes: scene.imageNotes,
+            imageOrder: scene.imageOrder,
+            continuity: scene.continuity,
+            workerId: scene.workerId,
+            takePath: scene.takePath,
+            priorTakePath: scene.priorTakePath,
+            renderMs: scene.renderMs,
+            motionTrackId: scene.motionTrackId,
+            outdated: scene.outdated,
+          })),
+          refs: refRows
+            .filter((ref) => ref.sceneId && gone.has(ref.sceneId))
+            .map((ref) => ({ id: ref.id, sceneId: ref.sceneId, kind: ref.kind, name: ref.name, path: ref.path, durationMs: ref.durationMs, contentSha256: ref.contentSha256 })),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(longVideoProjects.id, projectId));
+  }
+  const kept = scenes.filter((_, sceneIndex) => !removed.has(sceneIndex));
+  for (const [keptIndex, span] of moved.spans.entries()) {
+    const row = kept[keptIndex];
+    if (!row) continue;
+    const same = row.startMs === span.startMs && row.endMs === span.endMs && row.position === keptIndex + 1;
     await ctx.db
       .update(longVideoScenes)
-      .set({ startMs: span.startMs, endMs: span.endMs, outdated: Boolean(row.takePath), updatedAt: new Date() })
+      .set({
+        position: keptIndex + 1,
+        startMs: span.startMs,
+        endMs: span.endMs,
+        label: clipLabel(row.label, keptIndex + 1),
+        outdated: same ? row.outdated : Boolean(row.takePath) || row.outdated,
+        motionReview: motionReviewFor(plan, row.motionTrackId, span.startMs, span.endMs, durationOf(row.motionTrackId)),
+        updatedAt: new Date(),
+      })
       .where(eq(longVideoScenes.id, row.id));
   }
+  for (const sceneIndex of moved.removed) {
+    const row = scenes[sceneIndex];
+    if (row) await ctx.db.delete(longVideoScenes).where(eq(longVideoScenes.id, row.id));
+  }
   await syncQueuedSong(ctx, projectId);
+}
+
+export async function undoLongVideoResize(ctx: Ctx, projectId: string) {
+  const project = await owned(ctx, projectId);
+  const undo = project.sceneUndo as { scenes?: Record<string, unknown>[]; refs?: Record<string, unknown>[] } | null;
+  const saved = undo?.scenes;
+  if (!saved?.length) throw badRequest('There is no section change to undo.');
+  const live = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId));
+  if (live.some((scene) => scene.status === 'QUEUED' || scene.status === 'RUNNING')) {
+    throw badRequest('Wait until the current render finishes before undoing the section change.');
+  }
+  const liveIds = new Set(live.map((scene) => scene.id));
+  for (const raw of saved) {
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    const values = {
+      position: Number(raw.position),
+      startMs: Number(raw.startMs),
+      endMs: Number(raw.endMs),
+      label: String(raw.label ?? ''),
+      mode: raw.mode === 'broll' ? 'broll' : 'vocal',
+      prompt: String(raw.prompt ?? ''),
+      songNotes: String(raw.songNotes ?? ''),
+      imageNotes: String(raw.imageNotes ?? ''),
+      imageOrder: Array.isArray(raw.imageOrder) ? raw.imageOrder.filter((item): item is string => typeof item === 'string') : [],
+      continuity: raw.continuity === 'context' ? 'context' : 'shot',
+      workerId: typeof raw.workerId === 'string' ? raw.workerId : null,
+      takePath: typeof raw.takePath === 'string' ? raw.takePath : null,
+      priorTakePath: typeof raw.priorTakePath === 'string' ? raw.priorTakePath : null,
+      renderMs: typeof raw.renderMs === 'number' ? raw.renderMs : null,
+      motionTrackId: typeof raw.motionTrackId === 'string' ? raw.motionTrackId : null,
+      motionReview: null,
+      outdated: raw.outdated === true || (typeof raw.takePath === 'string' && raw.takePath.length > 0),
+      status: typeof raw.takePath === 'string' && raw.takePath ? 'READY' : 'DRAFT',
+      updatedAt: new Date(),
+    };
+    if (liveIds.has(id)) await ctx.db.update(longVideoScenes).set(values).where(eq(longVideoScenes.id, id));
+    else await ctx.db.insert(longVideoScenes).values({ id, projectId, ...values });
+  }
+  for (const raw of undo?.refs ?? []) {
+    const id = typeof raw.id === 'string' ? raw.id : '';
+    const sceneId = typeof raw.sceneId === 'string' ? raw.sceneId : null;
+    if (!id || !sceneId) continue;
+    await ctx.db.insert(longVideoRefs).values({
+      id,
+      projectId,
+      sceneId,
+      kind: typeof raw.kind === 'string' ? raw.kind : 'image',
+      name: String(raw.name ?? 'picture'),
+      path: String(raw.path ?? ''),
+      durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : null,
+      contentSha256: typeof raw.contentSha256 === 'string' ? raw.contentSha256 : null,
+    });
+  }
+  const savedIds = new Set(saved.map((raw) => (typeof raw.id === 'string' ? raw.id : '')));
+  for (const scene of live) {
+    if (!savedIds.has(scene.id)) await ctx.db.delete(longVideoScenes).where(eq(longVideoScenes.id, scene.id));
+  }
+  await ctx.db.update(longVideoProjects).set({ sceneUndo: null, updatedAt: new Date() }).where(eq(longVideoProjects.id, projectId));
+  return getLongVideo(ctx, projectId);
 }
 
 async function syncQueuedSong(ctx: Ctx, projectId: string) {
@@ -495,7 +629,7 @@ async function syncQueuedSong(ctx: Ctx, projectId: string) {
       if (!scene || !segment) continue;
       segment.audioStartSec = scene.startMs / 1000;
       segment.audioUseSec = (scene.endMs - scene.startMs) / 1000;
-      segment.durationSec = generationSeconds(scene.endMs - scene.startMs).requestSec;
+      segment.durationSec = h3RequestSeconds(scene.endMs - scene.startMs, scene.renderMs).renderSec;
       changed = true;
     }
     if (!changed) continue;
@@ -610,7 +744,7 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
   }
   const parsed = parseClipPlan(value);
   if ('error' in parsed) throw badRequest(parsed.error);
-  const laid = spansFromClipSeconds(project.durationMs, parsed.plan.clips.map((clip) => clip.durationSec));
+  const laid = songSpansForClips(project.durationMs, parsed.plan.clips);
   if ('error' in laid) throw badRequest(laid.error);
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   if (scenes.some((scene) => scene.status === 'QUEUED' || scene.status === 'RUNNING')) throw badRequest('Wait until the current render finishes before applying a clip plan.');
@@ -652,11 +786,23 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
   const gpu3090 = cardId('3090');
   const needs3060 = laid.spans.some((span) => clipPlanCard(span.endMs - span.startMs) === '3060');
   const gpu3060 = needs3060 ? cardId('3060') : null;
-  await ctx.db.update(longVideoProjects).set({ workerId: gpu3090, updatedAt: new Date() }).where(eq(longVideoProjects.id, projectId));
+  await ctx.db
+    .update(longVideoProjects)
+    .set({ workerId: gpu3090, motionPlan: parsed.plan.motion.tracks.length ? parsed.plan.motion : project.motionPlan, updatedAt: new Date() })
+    .where(eq(longVideoProjects.id, projectId));
   let shortSceneCount = 0;
   const globalKeys = new Set(parsed.plan.globalImages.map((name) => imageFileKey(name)));
   const oldRefs = await ctx.db.select().from(longVideoRefs).where(eq(longVideoRefs.projectId, projectId));
-  for (const ref of oldRefs) await removeLongVideoRef(ctx, projectId, ref.id);
+  for (const ref of oldRefs) {
+    if (ref.kind === 'motion') continue;
+    await removeLongVideoRef(ctx, projectId, ref.id);
+  }
+  const motions = oldRefs.filter((ref) => ref.kind === 'motion');
+  const sourceDuration = (sourceId: string) => {
+    const source = parsed.plan.motion.sources.find((item) => item.id === sourceId);
+    const ref = source ? motions.find((item) => imageFileKey(item.name) === imageFileKey(source.filename)) : undefined;
+    return ref?.durationMs ?? null;
+  };
 
   for (let i = 0; i < parsed.plan.clips.length; i++) {
     const clip = parsed.plan.clips[i]!;
@@ -664,6 +810,8 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
     const row = scenes[i];
     const short = clipPlanCard(span.endMs - span.startMs) === '3060';
     if (short) shortSceneCount += 1;
+    const track = parsed.plan.motion.tracks.find((item) => item.id === clip.motionTrackId);
+    const review = clip.motionTrackId ? motionReviewFor(parsed.plan.motion, clip.motionTrackId, span.startMs, span.endMs, track ? sourceDuration(track.sourceId) : null) : null;
     const values = {
       position: i + 1,
       startMs: span.startMs,
@@ -674,7 +822,11 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
       songNotes: clip.songDetails,
       imageNotes: clip.imageDetails,
       imageOrder: clip.images,
+      continuity: i === 0 || !clip.context ? 'shot' : 'context',
       workerId: short ? gpu3060 : null,
+      renderMs: Math.round(clip.durationSec * 1000),
+      motionTrackId: clip.motionTrackId,
+      motionReview: review,
       outdated: Boolean(row?.takePath),
       error: null as string | null,
       updatedAt: new Date(),
@@ -856,6 +1008,71 @@ async function uploadToWorker(origin: string, file: { bytes: Buffer; name: strin
   return body.subfolder ? `${body.subfolder}/${body.name}` : body.name;
 }
 
+async function probeVideo(file: string) {
+  const chunks: Buffer[] = [];
+  const err = await run('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file], chunks);
+  if (err) throw badRequest(err.includes('not installed') ? 'The API server does not have ffprobe, so the video was not saved.' : err);
+  const body = JSON.parse(Buffer.concat(chunks).toString()) as { format?: { duration?: string }; streams?: { codec_type?: string }[] };
+  const durationMs = Math.round(Number(body.format?.duration ?? 0) * 1000);
+  if (!body.streams?.some((stream) => stream.codec_type === 'video') || !Number.isFinite(durationMs) || durationMs < 2000) {
+    throw badRequest('That file has no video, or it is shorter than 2 seconds.');
+  }
+  return { durationMs };
+}
+
+async function cutSilentVideo(source: string, startSec: number, useSec: number, dest: string) {
+  const err = await run('ffmpeg', ['-y', '-v', 'error', '-i', source, '-ss', String(startSec), '-t', String(useSec), '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', dest]);
+  if (err) throw badRequest(`The video trim failed. The original file was not changed. ${err}`.slice(0, 300));
+}
+
+async function motionClipFor(
+  ctx: Ctx,
+  project: { id: string; motionPlan: { sources: { id: string; filename: string }[]; tracks: MotionTrackPlan[] } | null },
+  scene: { position: number; startMs: number; endMs: number; motionTrackId: string | null },
+  refs: { id: string; kind: string; name: string; path: string; durationMs: number | null }[],
+  workerUrl: string,
+) {
+  const track = project.motionPlan?.tracks.find((item) => item.id === scene.motionTrackId);
+  const source = project.motionPlan?.sources.find((item) => item.id === track?.sourceId);
+  if (!track || !source) throw badRequest(`Scene ${scene.position} points at a motion track that is not on this project.`);
+  const ref = refs.find((item) => item.kind === 'motion' && imageFileKey(item.name) === imageFileKey(source.filename));
+  if (!ref) throw badRequest(`Upload ${source.filename} before generating scene ${scene.position}.`);
+  const range = motionVideoRange(track, scene.startMs, scene.endMs, ref.durationMs);
+  if (range.status !== 'ready') throw badRequest(`Scene ${scene.position} motion reference is ${range.status}. Fix the dance video or the song range before generating.`);
+  const cache = `long-videos/${project.id}/motion-cache/${ref.id}_${range.videoStartMs}_${range.videoEndMs}.mp4`;
+  const abs = safeFile(ctx.env.attachmentsDir, cache);
+  try {
+    await readFile(abs);
+  } catch {
+    await mkdir(path.dirname(abs), { recursive: true });
+    await cutSilentVideo(safeFile(ctx.env.attachmentsDir, ref.path), range.videoStartMs / 1000, (range.videoEndMs - range.videoStartMs) / 1000, abs);
+  }
+  return uploadToWorker(workerUrl, { bytes: await readFile(abs), name: `lv_motion_${ref.id.slice(0, 8)}_${range.videoStartMs}.mp4`, mime: 'video/mp4' });
+}
+
+export async function addLongVideoMotion(ctx: Ctx, projectId: string, file: { bytes: Buffer; name: string }) {
+  await owned(ctx, projectId);
+  const ext = extOf(file.name);
+  if (!VIDEO.has(ext)) throw badRequest('Use an mp4, mov, or webm video.');
+  if (file.bytes.length > 250 * 1024 * 1024) throw badRequest('That video is over 250 MB.');
+  const [ref] = await ctx.db.insert(longVideoRefs).values({ projectId, sceneId: null, kind: 'motion', name: file.name.slice(0, 160), path: 'pending' }).returning();
+  const rel = `long-videos/${projectId}/refs/${ref!.id}.${ext}`;
+  const abs = safeFile(ctx.env.attachmentsDir, rel);
+  await mkdir(path.dirname(abs), { recursive: true });
+  await writeFile(abs, file.bytes);
+  let durationMs: number;
+  try {
+    durationMs = (await probeVideo(abs)).durationMs;
+  } catch (err) {
+    await rm(abs, { force: true });
+    await ctx.db.delete(longVideoRefs).where(eq(longVideoRefs.id, ref!.id));
+    throw err;
+  }
+  const sha = createHash('sha256').update(file.bytes).digest('hex');
+  await ctx.db.update(longVideoRefs).set({ path: rel, durationMs, contentSha256: sha }).where(eq(longVideoRefs.id, ref!.id));
+  return { ...ref!, path: rel, durationMs, kind: 'motion' as const };
+}
+
 export async function queueLongVideoScene(ctx: Ctx, projectId: string, sceneId: string) {
   const scenes = await ctx.db.select().from(longVideoScenes).where(eq(longVideoScenes.projectId, projectId)).orderBy(longVideoScenes.position);
   const groups = planGenerationGroups(
@@ -916,9 +1133,10 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
   const segments = [];
   for (const [index, scene] of chosen.entries()) {
     const slice = scene.endMs - scene.startMs;
-    const planned = generationSeconds(slice);
-    if (slice > 15_000) throw badRequest(planned.note ?? `Scene ${scene.position} is over 15 seconds. Split it before generating.`);
-    const pool = refs.filter((ref) => ref.sceneId === scene.id || ref.sceneId == null);
+    const asked = h3RequestSeconds(slice, scene.renderMs);
+    if (asked.note && (slice > 15_000 || (scene.renderMs ?? 0) > 15_000)) throw badRequest(`Scene ${scene.position}: ${asked.note}`);
+    if (scene.motionReview) throw badRequest(`Scene ${scene.position} motion reference is ${scene.motionReview}. Upload the dance video or fix the song range before generating.`);
+    const pool = refs.filter((ref) => ref.kind !== 'motion' && (ref.sceneId === scene.id || ref.sceneId == null));
     const pictures = orderByPlanName(pool, scene.imageOrder ?? []).slice(0, 8);
     if (!pictures.length) throw badRequest(`Add a reference picture to scene ${scene.position}, or one shared picture for the project.`);
     const images = [];
@@ -930,7 +1148,8 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
       });
       images.push({ fileId: null, uploadName: imageName, uploadWorkerId: worker.id, shared: picture.sceneId == null });
     }
-    segmentSeconds.push(planned.requestSec);
+    const videoName = scene.motionTrackId ? await motionClipFor(ctx, project, scene, refs, worker.baseUrl) : null;
+    segmentSeconds.push(asked.renderSec);
     segments.push({
       continuity: index === 0 ? 'shot' : 'context',
       taskMode,
@@ -941,8 +1160,12 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
       audioUploadWorkerId: worker.id,
       audioTrim: true,
       audioStartSec: scene.startMs / 1000,
-      audioUseSec: (scene.endMs - scene.startMs) / 1000,
-      durationSec: planned.requestSec,
+      audioUseSec: asked.audioSec,
+      videoFileId: null,
+      videoUploadName: videoName,
+      videoUploadWorkerId: videoName ? worker.id : null,
+      videoTrim: false,
+      durationSec: asked.renderSec,
       images,
     });
   }
@@ -967,6 +1190,7 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
         aspectRatio: h3Aspect(project.aspect),
         megapixels: project.megapixels === 0.5 || project.megapixels === 1.5 ? project.megapixels : 1,
         audioLocked: true,
+        videoLocked: true,
         prompt: segments.map((segment) => segment.prompt).filter(Boolean).join('\n'),
         segments,
       },

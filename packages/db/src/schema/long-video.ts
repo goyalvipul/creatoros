@@ -34,6 +34,11 @@ export const longVideoProjects = pgTable(
     exportStatus: text('export_status'),
     exportPath: text('export_path'),
     exportError: text('export_error'),
+    motionPlan: jsonb('motion_plan').$type<{
+      sources: { id: string; filename: string }[];
+      tracks: { id: string; sourceId: string; songStartMs: number; songEndMs: number; anchors: { songMs: number; videoMs: number }[] }[];
+    } | null>(),
+    sceneUndo: jsonb('scene_undo').$type<Record<string, unknown> | null>(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     archivedAt: ts('archived_at'),
@@ -66,6 +71,9 @@ export const longVideoScenes = pgTable(
     takePath: text('take_path'),
     priorTakePath: text('prior_take_path'),
     outdated: boolean('outdated').notNull().default(false),
+    renderMs: integer('render_ms'),
+    motionTrackId: text('motion_track_id'),
+    motionReview: text('motion_review'),
     error: text('error'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -84,6 +92,8 @@ export const longVideoRefs = pgTable(
     kind: text('kind').notNull().default('image'),
     name: text('name').notNull(),
     path: text('path').notNull(),
+    durationMs: integer('duration_ms'),
+    contentSha256: text('content_sha256'),
     createdAt: createdAt(),
   },
   (t) => [index('long_video_refs_project_idx').on(t.projectId)],

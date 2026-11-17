@@ -101,6 +101,12 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     audioTrim: z.boolean().optional().default(false),
     audioStartSec: z.number().min(0).max(3600).nullable().optional(),
     audioUseSec: z.number().positive().max(30).nullable().optional(),
+    videoFileId: uuid.nullable().optional().default(null),
+    videoUploadName: z.string().max(300).nullable().optional().default(null),
+    videoUploadWorkerId: uuid.nullable().optional().default(null),
+    videoTrim: z.boolean().optional().default(false),
+    videoStartSec: z.number().min(0).max(3600).nullable().optional(),
+    videoUseSec: z.number().positive().max(30).nullable().optional(),
     durationSec: z.number().positive().max(30).nullable(),
     images: z.array(h3Image).max(8),
   });
@@ -115,6 +121,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     megapixels: z.union([z.literal(0.5), z.literal(1), z.literal(1.5)]),
     audioLocked: z.boolean(),
     shareAudio: z.boolean(),
+    videoLocked: z.boolean().optional().default(true),
+    shareVideo: z.boolean().optional().default(false),
     segments: z.array(h3Segment).max(8),
   });
   route(
@@ -289,7 +297,7 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     if (req.session.role !== 'OWNER') throw forbidden();
     if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
     const { id } = idParam.parse(req.params);
-    const kind = z.enum(['image', 'audio']).parse((req.query as { kind?: string }).kind);
+    const kind = z.enum(['image', 'audio', 'video']).parse((req.query as { kind?: string }).kind);
     const incoming = await req.file();
     if (!incoming) throw new AppError(400, 'BAD_REQUEST', 'Choose a file to upload.');
     const bytes = await incoming.toBuffer();

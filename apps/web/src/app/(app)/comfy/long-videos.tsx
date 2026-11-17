@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { H3_ASPECTS, clipTitle, h3AspectRatio, longVideoOutputFolder, orderByPlanName } from '@creatoros/domain';
+import { H3_ASPECTS, clipTitle, h3AspectRatio, h3RequestSeconds, imageFileKey, longVideoOutputFolder, motionVideoRange, orderByPlanName } from '@creatoros/domain';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { Button, Card, CardTitle, EmptyState, Field, Input, Notice, Select } from '@/components/ui';
 import { AiImageTools, AiPromptTools } from '@/components/ai-tools';
@@ -26,6 +26,11 @@ type Project = {
   exportPath: string | null;
   exportError: string | null;
   targetSceneMs: number;
+  sceneUndo: { scenes?: unknown[] } | null;
+  motionPlan: {
+    sources: { id: string; filename: string }[];
+    tracks: { id: string; sourceId: string; songStartMs: number; songEndMs: number; anchors: { songMs: number; videoMs: number }[] }[];
+  } | null;
 };
 type Scene = {
   id: string;
@@ -47,9 +52,12 @@ type Scene = {
   takePath: string | null;
   priorTakePath: string | null;
   outdated: boolean;
+  renderMs: number | null;
+  motionTrackId: string | null;
+  motionReview: string | null;
   error: string | null;
 };
-type RefImage = { id: string; sceneId: string | null; name: string; createdAt?: string };
+type RefImage = { id: string; sceneId: string | null; kind?: string; name: string; durationMs?: number | null; createdAt?: string };
 type Detail = { project: Project; scenes: Scene[]; refs: RefImage[]; workers: Worker[] };
 type Worker = { id: string; label: string; enabled: boolean };
 
@@ -381,6 +389,12 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
           <FileButton label={project.audioName ? 'Replace song' : 'Upload song'} accept="audio/*,.mp3,.wav,.m4a,.flac" onFile={(file) => uploadAudio(id, file, setError)} />
           <LibraryPick kind="AUDIO" onPick={(file) => act(post(`/long-videos/${id}/library`, { fileId: file.id }))} />
           {project.audioName ? <span className="text-sm text-muted">{project.audioName} · {clock(project.durationMs ?? 0)}</span> : null}
+          <FileButton label="Upload dance video" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onFile={(file) => uploadMotion(id, file, setError)} />
+          {project.sceneUndo?.scenes?.length ? (
+            <Button size="sm" type="button" onClick={() => act(post(`/long-videos/${id}/undo`, {}))}>
+              Undo section change
+            </Button>
+          ) : null}
           <label className="flex items-center gap-1 text-xs text-muted">
             Each section
             <input
@@ -427,6 +441,13 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
           <LibraryPick kind="IMAGE" onPick={(file) => act(post(`/long-videos/${id}/library`, { fileId: file.id }))} />
           <RefRow projectId={id} refs={refs.filter((r) => r.sceneId == null)} />
         </div>
+        {refs.some((ref) => ref.kind === 'motion') ? (
+          <ul className="mt-2 space-y-1 text-sm text-muted">
+            {refs.filter((ref) => ref.kind === 'motion').map((ref) => (
+              <li key={ref.id}>Dance video {ref.name}{ref.durationMs ? ` · ${clock(ref.durationMs)}` : ''}</li>
+            ))}
+          </ul>
+        ) : null}
         {project.peaks?.length ? (
           <div className="mt-4 flex h-16 items-end gap-px" aria-hidden>
             {project.peaks.map((n, i) => (
@@ -453,7 +474,8 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
             portrait={shownAspect(project.aspect).startsWith('9:16')}
             canPlay={!!project.durationMs}
             own={refs.filter((r) => r.sceneId === scene.id)}
-            shared={refs.filter((r) => r.sceneId == null)}
+            shared={refs.filter((r) => r.sceneId == null && r.kind !== 'motion')}
+            motion={motionLine(project.motionPlan, refs, scene)}
             onPlay={(offset) => playScene(scene, offset)}
             onStop={stopAudio}
             onError={setError}
@@ -573,6 +595,7 @@ function SceneCard({
   canPlay,
   own,
   shared,
+  motion,
   onPlay,
   onStop,
   onError,
@@ -591,6 +614,7 @@ function SceneCard({
   canPlay: boolean;
   own: RefImage[];
   shared: RefImage[];
+  motion: string | null;
   onPlay: (offsetSec?: number) => void;
   onStop: () => void;
   onError: (message: string | null) => void;
@@ -690,7 +714,9 @@ function SceneCard({
         <div className="font-medium">Scene {String(scene.position).padStart(2, '0')}</div>
         <span className="text-xs text-muted">{scene.status}{scene.outdated ? ' · old take' : ''}</span>
       </div>
-      <div className="mt-1 text-sm text-muted">{clock(scene.startMs)}–{clock(scene.endMs)} · {((scene.endMs - scene.startMs) / 1000).toFixed(1)}s</div>
+      <div className="mt-1 text-sm text-muted">{clock(scene.startMs)}–{clock(scene.endMs)} · {((scene.endMs - scene.startMs) / 1000).toFixed(1)}s song</div>
+      <p className="text-xs text-muted">{audioLine(scene)}{last ? ' Changing the last section takes time from the sections before it.' : ''}</p>
+      {motion ? <p className="text-xs text-muted">{motion}</p> : null}
       <Input className="mt-2" aria-label="Clip title" placeholder={clipTitle(scene.position)} value={label} onChange={(e) => setLabel(e.target.value)} />
       <Field label="PC">
         <Select
@@ -993,9 +1019,37 @@ function PlanImport({
       />
       <Button size="sm" type="button" disabled={busy} onClick={apply}>{busy ? 'Applying' : 'Apply plan'}</Button>
       <span className="text-xs text-muted">{planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
-      <p className="w-full text-xs text-muted">JSON list of clips: clip_name, images_attached, clip_duration (seconds), vocal (yes or no), prompt, song_details, image_details. Picture file names must match images_attached. A picture named on every clip is shared. Quotes and line breaks in a prompt use normal JSON escaping and are kept as written.</p>
+      <p className="w-full text-xs text-muted">JSON list of clips: clip_name, images_attached, clip_duration (the MiniMax render length, in seconds), vocal (yes or no), context (true to continue the previous shot), prompt, song_details, image_details. Song time in song_details, or song_start_ms and song_end_ms, is the audio that is sent. A dance video is uploaded once on the project. A v2 plan can name it in motion_sources and map it with motion_tracks.</p>
     </div>
   );
+}
+
+function uploadMotion(projectId: string, file: File, setError: (m: string | null) => void) {
+  const body = new FormData();
+  body.append('file', file);
+  setError(null);
+  fetch(`/api/v1/long-videos/${projectId}/motion`, { method: 'POST', credentials: 'same-origin', headers: { 'x-requested-with': 'creatoros' }, body })
+    .then(async (res) => {
+      if (!res.ok) throw new ApiError(res.status, 'ERROR', (await res.json()).error?.message ?? 'Upload failed');
+      refresh(`/long-videos/${projectId}`);
+    })
+    .catch((err: ApiError) => setError(err.message));
+}
+
+function audioLine(scene: Scene) {
+  const asked = h3RequestSeconds(scene.endMs - scene.startMs, scene.renderMs);
+  return `H3 audio ${asked.audioSec.toFixed(1)}s from ${(scene.startMs / 1000).toFixed(1)}s · render ${asked.renderSec.toFixed(1)}s`;
+}
+
+function motionLine(plan: Project['motionPlan'], refs: RefImage[], scene: Scene) {
+  if (!scene.motionTrackId || !plan) return scene.motionReview ? `Motion: ${scene.motionReview}` : null;
+  const track = plan.tracks.find((item) => item.id === scene.motionTrackId);
+  const source = plan.sources.find((item) => item.id === track?.sourceId);
+  const ref = source ? refs.find((item) => item.kind === 'motion' && imageFileKey(item.name) === imageFileKey(source.filename)) : undefined;
+  if (!track) return 'Motion: missing track';
+  const range = motionVideoRange(track, scene.startMs, scene.endMs, ref?.durationMs ?? null);
+  const status = scene.motionReview ?? range.status;
+  return `Motion ${track.id} ${(range.videoStartMs / 1000).toFixed(1)}s–${(range.videoEndMs / 1000).toFixed(1)}s · ${status}`;
 }
 
 function uploadAudio(projectId: string, file: File, setError: (m: string | null) => void) {

@@ -698,6 +698,7 @@ async function uploadTrim(
     try {
       const upstream = await fetch(u, {
         method: 'POST',
+        redirect: 'error',
         headers: { 'content-type': 'application/octet-stream', 'content-length': String(size) },
         body: createReadStream(outputPath) as unknown as BodyInit,
         duplex: 'half',

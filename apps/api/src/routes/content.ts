@@ -103,7 +103,7 @@ import {
   upsertScenes,
   listScenes,
 } from '@creatoros/services';
-import { ctxFor, idParam, makeRouter, withMeta, type AppDeps } from '../http';
+import { ctxFor, idParam, makeRouter, originAllowed, withMeta, type AppDeps } from '../http';
 
 const date = z.coerce.date();
 const uuid = z.uuid();
@@ -1294,7 +1294,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     '/variants/:id/upload',
     { bodyLimit: 4 * 1024 * 1024 * 1024 },
     async (req, reply) => {
-      if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
+      if (req.headers['x-requested-with'] !== 'creatoros' || !originAllowed(req, deps))
+        throw forbidden('Cross-site request blocked (CSRF protection).');
       if (!req.session) throw unauthorized();
       if (req.session.role !== 'OWNER') throw forbidden();
       const { id } = idParam.parse(req.params);

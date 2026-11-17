@@ -62,6 +62,7 @@ describe('MiniMax H3 graph', () => {
           taskMode: 'ref',
           prompt: 'Wide.',
           images: [{ name: 'mehak.png', shared: false }],
+          audioName: null,
           durationSec: 8,
         },
       ],

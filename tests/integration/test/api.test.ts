@@ -73,6 +73,18 @@ describe('first run and auth', () => {
       headers: { origin: 'https://evil.example' },
     });
     expect(foreign.status).toBe(403);
+    // A spoofed Host or X-Forwarded-Host must not override the configured origin allowlist.
+    for (const headers of [
+      { origin: 'https://evil.example', host: 'evil.example' },
+      { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example' },
+    ] as Record<string, string>[]) {
+      const spoofed = await api.call('POST', `${V1}/ideas`, {
+        cookie: owner,
+        body: { title: 'spoofed' },
+        headers,
+      });
+      expect(spoofed.status).toBe(403);
+    }
     const noHeader = await api.app.inject({
       method: 'POST',
       url: `${V1}/ideas`,
@@ -91,6 +103,27 @@ describe('first run and auth', () => {
       headers: { origin: 'https://evil.example' },
     });
     expect(loginForeign.status).toBe(403);
+  });
+
+  it('blocks foreign-origin calls on direct AI and long-video write handlers', async () => {
+    for (const url of [`${V1}/ai/metadata`, `${V1}/long-videos`]) {
+      const response = await api.call('POST', url, {
+        cookie: owner,
+        body: {},
+        headers: { origin: 'https://untrusted.example', 'x-requested-with': 'creatoros' },
+      });
+      expect(response.status).toBe(403);
+    }
+  });
+
+  it('refuses to mint media tokens for files outside the current workspace', async () => {
+    const otherFileId = randomUUID();
+    const response = await api.call('POST', `${V1}/files/${otherFileId}/stream-token`, {
+      cookie: owner,
+      body: {},
+    });
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe('NOT_FOUND');
   });
 
   it('enforces roles: viewer reads, editor edits, only owner administers', async () => {

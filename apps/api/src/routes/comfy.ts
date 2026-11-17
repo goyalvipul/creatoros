@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { AppError, checkGpuWorker, createAutogenRun, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
-import { ctxFor, makeRouter } from '../http';
+import { ctxFor, makeRouter, originAllowed } from '../http';
 
 const uuid = z.uuid();
 
@@ -295,7 +295,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
   app.post('/comfy/workers/:id/upload', { bodyLimit: 260 * 1024 * 1024 }, async (req, reply) => {
     if (!req.session) throw unauthorized();
     if (req.session.role !== 'OWNER') throw forbidden();
-    if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
+    if (req.headers['x-requested-with'] !== 'creatoros' || !originAllowed(req, deps))
+      throw forbidden('Cross-site request blocked (CSRF protection).');
     const { id } = idParam.parse(req.params);
     const kind = z.enum(['image', 'audio', 'video']).parse((req.query as { kind?: string }).kind);
     const incoming = await req.file();

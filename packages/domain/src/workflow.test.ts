@@ -10,6 +10,8 @@ import {
   usesOrGroups,
   validateDefinition,
   type EventForMatch,
+  type Condition,
+  type Step,
 } from './workflow';
 
 const ev = (over: Partial<EventForMatch> = {}): EventForMatch => ({
@@ -24,7 +26,11 @@ const ev = (over: Partial<EventForMatch> = {}): EventForMatch => ({
 });
 const def = (steps: unknown[]) => ({ schemaVersion: 1, trigger: { event: 'MESSAGE_RECEIVED' }, steps });
 const act = (id: string, action: unknown) => ({ kind: 'action', id, action });
-const cond = (id: string, condition: unknown) => ({ kind: 'condition', id, condition });
+const cond = (id: string, condition: unknown): Extract<Step, { kind: 'condition' }> => ({
+  kind: 'condition',
+  id,
+  condition: condition as Condition,
+});
 
 describe('workflow conditions', () => {
   it('matches keywords case-insensitively and supports exact word matching', () => {

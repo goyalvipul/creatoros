@@ -35,7 +35,7 @@ import {
 } from '@creatoros/services';
 import { YOUTUBE_LIVE_UNSUPPORTED } from '@creatoros/domain';
 import type { AppDeps } from '../http';
-import { ctxFor, makeRouter } from '../http';
+import { ctxFor, makeRouter, originAllowed } from '../http';
 
 const uuid = z.uuid();
 const item = z.object({
@@ -272,7 +272,8 @@ export async function liveRoutes(app: FastifyInstance, deps: AppDeps): Promise<v
   app.post('/live/uploads', async (req) => {
       if (!req.session) throw unauthorized();
       requireRole(req.session, 'EDITOR');
-      if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked.');
+      if (req.headers['x-requested-with'] !== 'creatoros' || !originAllowed(req, deps))
+        throw forbidden('Cross-site request blocked.');
       const ctx = ctxFor(deps, req);
       const saved = [];
       const parts = req.files();

@@ -136,7 +136,7 @@ async function pullLibraryFile(db: Db, env: ServiceEnv, orgId: string, fileId: s
   let last = '';
   for (const base of urls) {
     try {
-      const res = await fetch(`${base.replace(/\/$/, '')}/v1/stream?root=${encodeURIComponent(file.rootId)}&path=${encodeURIComponent(file.displayPath)}&exp=${exp}&sig=${sig}`);
+      const res = await fetch(`${base.replace(/\/$/, '')}/v1/stream?root=${encodeURIComponent(file.rootId)}&path=${encodeURIComponent(file.displayPath)}&exp=${exp}&sig=${sig}`, { redirect: 'error' });
       if (res.ok && res.body) {
         upstream = res;
         break;

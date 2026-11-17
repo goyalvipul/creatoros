@@ -49,9 +49,19 @@ export const hmacHex = (key: string | Buffer, data: string) =>
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
 export function safeEqualHex(a: string, b: string): boolean {
+  // Buffer.from(hex) silently ignores malformed trailing nibbles and non-hex suffixes.
+  // Reject non-canonical encodings before the constant-time byte comparison.
+  if (
+    a.length !== b.length ||
+    a.length === 0 ||
+    a.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/i.test(a) ||
+    !/^[0-9a-f]+$/i.test(b)
+  )
+    return false;
   const ba = Buffer.from(a, 'hex');
   const bb = Buffer.from(b, 'hex');
-  return ba.length === bb.length && ba.length > 0 && timingSafeEqual(ba, bb);
+  return timingSafeEqual(ba, bb);
 }
 
 /** Human friendly one-time pairing code, e.g. `K7QM-93XD-ALP2` (no ambiguous characters). */
@@ -79,12 +89,12 @@ export function redact<T>(value: T): T {
   return walk(value);
 }
 
-/** Sign a short-lived media access token bound to an instance id. */
+/** Versioned, short-lived, organization-scoped signed URL for file playback and provider ingestion. */
 export function signMediaToken(
   secret: string,
-  parts: { instanceId: string; userId: string; exp: number },
+  parts: { instanceId: string; orgId: string; userId: string; exp: number },
 ): string {
-  const payload = `${parts.instanceId}.${parts.userId}.${parts.exp}`;
+  const payload = `v2.${parts.instanceId}.${parts.orgId}.${parts.userId}.${parts.exp}`;
   return `${Buffer.from(payload).toString('base64url')}.${hmacHex(secret, payload)}`;
 }
 
@@ -92,12 +102,23 @@ export function verifyMediaToken(
   secret: string,
   token: string,
   now = Date.now(),
-): { instanceId: string; userId: string } | null {
-  const [p, sig] = token.split('.');
-  if (!p || !sig) return null;
+): { instanceId: string; orgId: string; userId: string } | null {
+  const [p, sig, extra] = token.split('.');
+  if (!p || !sig || extra || p.length > 2048) return null;
   const payload = Buffer.from(p, 'base64url').toString('utf8');
   if (!safeEqualHex(hmacHex(secret, payload), sig)) return null;
-  const [instanceId, userId, exp] = payload.split('.');
-  if (!instanceId || !userId || Number(exp) < now) return null;
-  return { instanceId, userId };
+  const [version, instanceId, orgId, userId, exp, more] = payload.split('.');
+  const expiresAt = Number(exp);
+  if (
+    version !== 'v2' ||
+    !instanceId ||
+    !orgId ||
+    !userId ||
+    more !== undefined ||
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt > now + 30 * 60_000
+  )
+    return null;
+  return { instanceId, orgId, userId };
 }

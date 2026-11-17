@@ -22,18 +22,19 @@ import {
   unauthorized,
   updateAiSettings,
 } from '@creatoros/services';
-import { ctxFor, type AppDeps } from '../http';
+import { ctxFor, originAllowed, type AppDeps } from '../http';
 
 function signed(req: FastifyRequest) {
   if (!req.session) throw unauthorized();
 }
-function editor(req: FastifyRequest) {
+function editor(req: FastifyRequest, deps: AppDeps) {
   signed(req);
   if (req.session!.role === 'VIEWER') throw forbidden();
-  if (req.headers['x-requested-with'] !== 'creatoros') throw forbidden('Cross-site request blocked (CSRF protection).');
+  if (req.headers['x-requested-with'] !== 'creatoros' || !originAllowed(req, deps))
+    throw forbidden('Cross-site request blocked (CSRF protection).');
 }
-function owner(req: FastifyRequest) {
-  editor(req);
+function owner(req: FastifyRequest, deps: AppDeps) {
+  editor(req, deps);
   if (req.session!.role !== 'OWNER') throw forbidden('Only the owner can change AI settings.');
 }
 
@@ -61,13 +62,13 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.patch('/ai/settings', async (req) => {
-    owner(req);
+    owner(req, deps);
     const row = await updateAiSettings(ctxFor(deps, req), (req.body ?? {}) as Record<string, unknown>);
     return { data: row, meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/ai/providers/test', async (req) => {
-    owner(req);
+    owner(req, deps);
     const body = z.object({ provider: z.enum(['openai', 'gemini']) }).parse(req.body);
     return { data: await testAiProvider(ctxFor(deps, req), body.provider), meta: { requestId: req.correlationId }, error: null };
   });
@@ -79,7 +80,7 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.put('/ai/profile', async (req) => {
-    owner(req);
+    owner(req, deps);
     const body = z.object({
       brandId: z.string().uuid().nullable().optional(),
       name: z.string().max(120).optional(),
@@ -101,7 +102,7 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/ai/prompts', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({
       task: z.enum(['scene_prompt_generate', 'scene_prompt_improve', 'scene_prompt_variations']),
       targetType: z.enum(['long_scene', 'h3']),
@@ -120,13 +121,13 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/ai/prompts/:id/apply', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { data: await markPromptApplied(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/ai/images', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({
       projectId: z.string().uuid(),
       sceneId: z.string().uuid(),
@@ -141,13 +142,13 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/ai/images/missing', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({ projectId: z.string().uuid(), acceptBillable: z.literal(true) }).parse(req.body);
     return { data: await queueMissingSceneImages(ctxFor(deps, req), body.projectId, true), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/ai/analyze', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({
       fileId: z.string().uuid().nullable().optional(),
       projectId: z.string().uuid().nullable().optional(),
@@ -158,7 +159,7 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/ai/metadata', async (req) => {
-    editor(req);
+    editor(req, deps);
     const body = z.object({
       fileId: z.string().uuid(),
       platform: z.string().max(40),
@@ -192,7 +193,7 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/ai/assets/:id/attach', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { data: await attachAiAsset(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });

@@ -109,6 +109,13 @@ export interface H3SegmentDraft {
   audioUseSec?: number | null;
   /** Seconds. Null means use the scanned file length. */
   durationSec: number | null;
+  videoFileId: string | null;
+  videoUploadName: string | null;
+  videoUploadWorkerId: string | null;
+  /** When true, only videoStartSec for videoUseSec seconds is sent. Off sends the whole file. */
+  videoTrim?: boolean;
+  videoStartSec?: number | null;
+  videoUseSec?: number | null;
   images: H3ImageDraft[];
 }
 
@@ -128,6 +135,8 @@ export const h3Drafts = pgTable(
     megapixels: doublePrecision('megapixels').notNull().default(1),
     audioLocked: boolean('audio_locked').notNull().default(true),
     shareAudio: boolean('share_audio').notNull().default(false),
+    videoLocked: boolean('video_locked').notNull().default(true),
+    shareVideo: boolean('share_video').notNull().default(false),
     segments: jsonb('segments').$type<H3SegmentDraft[]>().notNull().default([]),
     updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: createdAt(),

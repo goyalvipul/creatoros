@@ -140,6 +140,98 @@ describe('MiniMax H3 graph', () => {
     expect(audio.segments[0]?.start_frame).toBe(0);
     expect(audio.segments[0]?.end_frame).toBe(Math.round(3 * 24));
     expect(audio.segments[0]?.content.file_name).toBe('slice.flac');
+    const video = track.tracks.find((t) => t.type === 'video')!;
+    expect(video.segments).toEqual([]);
     expect(audio.segments[0]?.content.duration).toBeCloseTo(3, 2);
+  });
+
+  it('puts a trimmed reference video on the video track and locks it only when every segment has one', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'cosmove',
+      seed: 1,
+      segments: [
+        {
+          continuity: 'shot',
+          taskMode: 'ref',
+          prompt: 'Follow the reference.',
+          images: [{ name: 'mehak.png', shared: false }],
+          audioName: 'a.wav',
+          videoName: 'move.mp4',
+          durationSec: 8,
+          videoSpanSec: 4,
+        },
+        {
+          continuity: 'context',
+          taskMode: 'ref',
+          prompt: 'Keep going.',
+          images: [{ name: 'mehak.png', shared: false }],
+          audioName: null,
+          durationSec: 6,
+        },
+      ],
+      aspectRatio: '9:16 (Portrait Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+      videoLocked: true,
+    });
+    const track = JSON.parse(String(prompt['29']?.inputs?.track_data)) as {
+      tracks: { type: string; audio_locked?: boolean; segments: { start_frame: number; end_frame: number; content: { media_type?: string; file_name?: string } }[] }[];
+    };
+    const video = track.tracks.find((t) => t.type === 'video')!;
+    const audio = track.tracks.find((t) => t.type === 'audio')!;
+    expect(video.segments).toHaveLength(1);
+    expect(video.segments[0]?.content.media_type).toBe('video');
+    expect(video.segments[0]?.content.file_name).toBe('move.mp4');
+    expect(video.segments[0]?.end_frame).toBe(Math.round(4 * 24));
+    expect(video.audio_locked).toBe(false);
+    expect(audio.audio_locked).toBe(false);
+  });
+
+  it('sends a different song slice and a different motion clip on two segments', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'cosdance',
+      seed: 3,
+      segments: [
+        {
+          continuity: 'shot',
+          taskMode: 'ref',
+          prompt: 'First step.',
+          images: [{ name: 'mehak.png', shared: true }],
+          audioName: 'song-a.flac',
+          audioSpanSec: 8.2,
+          videoName: 'dance-a.mp4',
+          videoSpanSec: 8.2,
+          durationSec: 10.5,
+        },
+        {
+          continuity: 'context',
+          taskMode: 'ref',
+          prompt: 'Second step.',
+          images: [{ name: 'mehak.png', shared: true }],
+          audioName: 'song-b.flac',
+          audioSpanSec: 7.8,
+          videoName: 'dance-b.mp4',
+          videoSpanSec: 7.8,
+          durationSec: 9,
+        },
+      ],
+      aspectRatio: '16:9 (Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+      videoLocked: true,
+    });
+    const track = JSON.parse(String(prompt['29']?.inputs?.track_data)) as {
+      tracks: { type: string; audio_locked?: boolean; segments: { start_frame: number; end_frame: number; content: { file_name?: string; media_type?: string } }[] }[];
+    };
+    const audio = track.tracks.find((item) => item.type === 'audio')!;
+    const video = track.tracks.find((item) => item.type === 'video')!;
+    expect(audio.segments.map((segment) => segment.content.file_name)).toEqual(['song-a.flac', 'song-b.flac']);
+    expect(video.segments.map((segment) => segment.content.file_name)).toEqual(['dance-a.mp4', 'dance-b.mp4']);
+    expect(audio.segments[0]?.end_frame).toBe(Math.round(8.2 * 24));
+    expect(audio.segments[1]?.start_frame).toBe(Math.round(10.5 * 24));
+    expect(video.segments[1]?.start_frame).toBe(Math.round(10.5 * 24));
+    expect(audio.audio_locked).toBe(true);
+    expect(video.audio_locked).toBe(true);
+    expect(video.segments[0]?.content.media_type).toBe('video');
   });
 });

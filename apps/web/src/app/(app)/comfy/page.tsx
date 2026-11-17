@@ -2506,7 +2506,7 @@ function FilePick({
   onSelect,
   onUpload,
 }: {
-  kind: 'IMAGE' | 'AUDIO';
+  kind: 'IMAGE' | 'AUDIO' | 'VIDEO';
   label: string;
   selected: string | null;
   uploaded?: boolean;
@@ -2530,13 +2530,19 @@ function FilePick({
             : 'Search the library, or upload a file onto the PC you picked.'
       }
     >
-      <Input value={q} placeholder={kind === 'IMAGE' ? 'Search images' : 'Search audio'} onChange={(e) => setQ(e.target.value)} />
+      <Input value={q} placeholder={kind === 'IMAGE' ? 'Search images' : kind === 'VIDEO' ? 'Search videos' : 'Search audio'} onChange={(e) => setQ(e.target.value)} />
       <label className="mt-2 inline-flex cursor-pointer text-sm text-accent underline">
         {busy ? 'Uploading…' : 'Upload to the PC'}
         <input
           className="sr-only"
           type="file"
-          accept={kind === 'IMAGE' ? 'image/png,image/jpeg,image/webp' : 'audio/mpeg,audio/wav,audio/flac,audio/mp4,audio/aac,audio/ogg'}
+          accept={
+            kind === 'IMAGE'
+              ? 'image/png,image/jpeg,image/webp'
+              : kind === 'VIDEO'
+                ? 'video/mp4,video/quicktime,video/webm'
+                : 'audio/mpeg,audio/wav,audio/flac,audio/mp4,audio/aac,audio/ogg'
+          }
           disabled={busy}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -3141,6 +3147,14 @@ type H3Clip = {
   audioStartSec: number;
   audioUseSec: number;
   audioSeconds: number | null;
+  videoFileId: string | null;
+  videoUploadName: string | null;
+  videoUploadWorkerId: string | null;
+  videoName: string | null;
+  videoTrim: boolean;
+  videoStartSec: number;
+  videoUseSec: number;
+  videoSeconds: number | null;
   durationSec: string;
   images: H3Image[];
 };
@@ -3215,6 +3229,14 @@ function blankH3Clip(prompt: string, continuity: H3Join): H3Clip {
     audioStartSec: 0,
     audioUseSec: 0,
     audioSeconds: null,
+    videoFileId: null,
+    videoUploadName: null,
+    videoUploadWorkerId: null,
+    videoName: null,
+    videoTrim: false,
+    videoStartSec: 0,
+    videoUseSec: 0,
+    videoSeconds: null,
     durationSec: '00:08:00',
     images: [],
   };
@@ -3233,11 +3255,59 @@ function h3AudioFields(clip: H3Clip) {
   };
 }
 
-function h3AudioLabel(clip: H3Clip, locked: boolean) {
-  if (!clip.audioName) return 'MiniMax audio';
-  const lock = locked ? ' 🔒' : '';
-  if (clip.audioTrim && clip.audioUseSec > 0) return `${clockShort(clip.audioStartSec)}–${clockShort(clip.audioStartSec + clip.audioUseSec)}${lock}`;
-  return `${clip.audioName}${lock}`;
+function h3VideoFields(clip: H3Clip) {
+  return {
+    videoFileId: clip.videoFileId,
+    videoUploadName: clip.videoUploadName,
+    videoUploadWorkerId: clip.videoUploadWorkerId,
+    videoName: clip.videoName,
+    videoTrim: clip.videoTrim,
+    videoStartSec: clip.videoStartSec,
+    videoUseSec: clip.videoUseSec,
+    videoSeconds: clip.videoSeconds,
+  };
+}
+
+function h3MediaLabel(name: string | null, empty: string, trim: boolean, start: number, use: number) {
+  if (!name) return empty;
+  if (trim && use > 0) return `${clockShort(start)}–${clockShort(start + use)}`;
+  return name;
+}
+
+function TrackMarks({
+  share,
+  locked,
+  shareLabel,
+  lockLabel,
+  onShare,
+  onLock,
+}: {
+  share: boolean;
+  locked: boolean;
+  shareLabel: string;
+  lockLabel: string;
+  onShare: () => void;
+  onLock: () => void;
+}) {
+  const button = 'grid h-5 w-5 shrink-0 place-items-center rounded text-white/90 hover:bg-black/20';
+  return (
+    <span className="mr-0.5 flex shrink-0">
+      <button type="button" className={button} title={shareLabel} aria-pressed={share} onClick={onShare}>
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+          <circle cx="4" cy="8" r="1.6" fill={share ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" />
+          <circle cx="12" cy="4" r="1.6" fill={share ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" />
+          <circle cx="12" cy="12" r="1.6" fill={share ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" />
+          <path d="M5.5 7.2 10.4 4.8M5.5 8.8l4.9 2.4" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      </button>
+      <button type="button" className={button} title={lockLabel} aria-pressed={locked} onClick={onLock}>
+        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+          <rect x="3.2" y="7" width="9.6" height="6.2" rx="1" fill={locked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" />
+          <path d={locked ? 'M5.2 7V5.2a2.8 2.8 0 0 1 5.6 0V7' : 'M5.2 7V5.2a2.8 2.8 0 0 1 5.2-.8'} fill="none" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      </button>
+    </span>
+  );
 }
 
 function H3AudioTrim({
@@ -3373,6 +3443,84 @@ function H3AudioTrim({
   );
 }
 
+function H3VideoTrim({
+  clip,
+  workerId,
+  onChange,
+}: {
+  clip: H3Clip;
+  workerId: string | null;
+  onChange: (patch: Partial<H3Clip>) => void;
+}) {
+  const src = clip.videoFileId
+    ? `/api/v1/files/${clip.videoFileId}/stream`
+    : clip.videoUploadName && (clip.videoUploadWorkerId || workerId)
+      ? `/api/v1/comfy/workers/${clip.videoUploadWorkerId || workerId}/input?name=${encodeURIComponent(clip.videoUploadName)}`
+      : null;
+  const total = clip.videoSeconds;
+  const cap = Math.min(H3_MAX_SECONDS, total != null && total > 0 ? total : H3_MAX_SECONDS);
+  function setTrim(start: number, length: number) {
+    const file = total != null && total > 0 ? total : start + Math.max(length, cap);
+    const nextStart = Math.max(0, Math.min(start, Math.max(0, file - 0.2)));
+    const room = Math.min(H3_MAX_SECONDS, Math.max(0.2, file - nextStart));
+    const nextLen = Math.round(Math.max(0.2, Math.min(length, room)) * 10) / 10;
+    onChange({ videoStartSec: Math.round(nextStart * 10) / 10, videoUseSec: nextLen });
+  }
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={clip.videoTrim}
+          onChange={(e) => {
+            const on = e.target.checked;
+            const use = clip.videoUseSec > 0 ? Math.min(clip.videoUseSec, cap) : Math.min(cap, h3Seconds(clip));
+            onChange(on ? { videoTrim: true, videoStartSec: clip.videoStartSec || 0, videoUseSec: use } : { videoTrim: false });
+          }}
+        />
+        Trim this video
+      </label>
+      <p className="text-xs text-muted">
+        {clip.videoTrim
+          ? 'Only this slice is sent as the motion reference. The shot length stays as you set it. The rest of the file stays where it is.'
+          : 'The whole uploaded video is the motion reference for this segment.'}
+      </p>
+      {clip.videoTrim ? (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Start (seconds)">
+              <LooseNumber value={clip.videoStartSec} onValue={(videoStartSec) => setTrim(videoStartSec, clip.videoUseSec || cap)} />
+            </Field>
+            <Field label="Use (seconds)">
+              <LooseNumber value={clip.videoUseSec || cap} onValue={(videoUseSec) => setTrim(clip.videoStartSec, videoUseSec)} />
+            </Field>
+          </div>
+          {total != null && total > 0 ? (
+            <TrimBar total={total} start={clip.videoStartSec} length={clip.videoUseSec || cap} onChange={setTrim} />
+          ) : (
+            <p className="text-xs text-muted">The length appears once the video has loaded.</p>
+          )}
+          {src ? (
+            <video
+              className="mt-1 max-h-40 rounded border border-border"
+              src={src}
+              controls
+              preload="metadata"
+              onLoadedMetadata={(e) => {
+                const duration = e.currentTarget.duration;
+                if (!Number.isFinite(duration)) return;
+                const room = Math.min(H3_MAX_SECONDS, Math.max(0.2, duration - clip.videoStartSec));
+                const use = Math.min(clip.videoUseSec > 0 ? clip.videoUseSec : Math.min(H3_MAX_SECONDS, duration), room);
+                onChange({ videoSeconds: duration, ...(clip.videoTrim ? { videoUseSec: use } : {}) });
+              }}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void; active?: boolean }) {
   const scope = useWorkspaceProjectIds();
   const studio = useApi<{
@@ -3387,9 +3535,12 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       megapixels?: number;
       audioLocked?: boolean;
       shareAudio?: boolean;
+      videoLocked?: boolean;
+      shareVideo?: boolean;
       segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName'> & {
         durationSec: number | null;
         audioName?: string | null;
+        videoName?: string | null;
         audioTrim?: boolean;
         audioStartSec?: number | null;
         audioUseSec?: number | null;
@@ -3406,6 +3557,8 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
     megapixels: number;
     audioLocked: boolean;
     shareAudio: boolean;
+    videoLocked: boolean;
+    shareVideo: boolean;
     clips: H3Clip[];
   } | null>(null);
   const [selected, setSelected] = useState(0);
@@ -3446,6 +3599,14 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       audioStartSec: typeof segment.audioStartSec === 'number' ? segment.audioStartSec : 0,
       audioUseSec: typeof segment.audioUseSec === 'number' ? segment.audioUseSec : 0,
       audioSeconds: null,
+      videoFileId: segment.videoFileId ?? null,
+      videoUploadName: segment.videoUploadName ?? null,
+      videoUploadWorkerId: segment.videoUploadWorkerId ?? null,
+      videoName: segment.videoName ?? segment.videoUploadName ?? null,
+      videoTrim: segment.videoTrim === true,
+      videoStartSec: typeof segment.videoStartSec === 'number' ? segment.videoStartSec : 0,
+      videoUseSec: typeof segment.videoUseSec === 'number' ? segment.videoUseSec : 0,
+      videoSeconds: null,
       durationSec: segment.durationSec != null ? formatTimecode(segment.durationSec) : '00:08:00',
       images: (segment.images ?? []).map((image) => ({
         ...image,
@@ -3466,6 +3627,8 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       megapixels: data.draft?.megapixels || 1,
       audioLocked: data.draft?.audioLocked !== false,
       shareAudio: data.draft?.shareAudio === true,
+      videoLocked: data.draft?.videoLocked !== false,
+      shareVideo: data.draft?.shareVideo === true,
       clips: clips.length ? clips : [blankH3Clip(prompt, 'shot'), blankH3Clip(prompt, 'context')],
     });
   }, [studio.data, form]);
@@ -3489,6 +3652,14 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
         patch.audioStartSec !== undefined ||
         patch.audioUseSec !== undefined ||
         patch.audioSeconds !== undefined;
+      const videoChange =
+        patch.videoFileId !== undefined ||
+        patch.videoUploadName !== undefined ||
+        patch.videoName !== undefined ||
+        patch.videoTrim !== undefined ||
+        patch.videoStartSec !== undefined ||
+        patch.videoUseSec !== undefined ||
+        patch.videoSeconds !== undefined;
       return {
         ...current,
         clips: current.clips.map((item, i) => {
@@ -3507,6 +3678,19 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
               ...(patch.audioUseSec !== undefined && patch.durationSec !== undefined ? { durationSec: patch.durationSec } : {}),
             };
           }
+          if (current.shareVideo && videoChange) {
+            return {
+              ...item,
+              ...(patch.videoFileId !== undefined ? { videoFileId: patch.videoFileId } : {}),
+              ...(patch.videoUploadName !== undefined ? { videoUploadName: patch.videoUploadName } : {}),
+              ...(patch.videoUploadWorkerId !== undefined ? { videoUploadWorkerId: patch.videoUploadWorkerId } : {}),
+              ...(patch.videoName !== undefined ? { videoName: patch.videoName } : {}),
+              ...(patch.videoTrim !== undefined ? { videoTrim: patch.videoTrim } : {}),
+              ...(patch.videoStartSec !== undefined ? { videoStartSec: patch.videoStartSec } : {}),
+              ...(patch.videoUseSec !== undefined ? { videoUseSec: patch.videoUseSec } : {}),
+              ...(patch.videoSeconds !== undefined ? { videoSeconds: patch.videoSeconds } : {}),
+            };
+          }
           if (!share) return item;
           return {
             ...item,
@@ -3520,7 +3704,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
     });
   }
 
-  async function upload(kind: 'image' | 'audio', file: File, index: number) {
+  async function upload(kind: 'image' | 'audio' | 'video', file: File, index: number) {
     if (!form?.workerId) {
       setError('Choose the PC first. The file is saved on that PC.');
       return;
@@ -3547,6 +3731,14 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
           audioUploadWorkerId: form.workerId,
           audioName: file.name,
           audioSeconds: null,
+        });
+      } else if (kind === 'video') {
+        updateClip(index, {
+          videoFileId: null,
+          videoUploadName: json.data.name,
+          videoUploadWorkerId: form.workerId,
+          videoName: file.name,
+          videoSeconds: null,
         });
       } else if (clip.images.length < 8) {
         updateClip(index, {
@@ -3596,6 +3788,8 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
           megapixels: form.megapixels,
           audioLocked: form.audioLocked,
           shareAudio: form.shareAudio,
+          videoLocked: form.videoLocked,
+          shareVideo: form.shareVideo,
           segments: form.clips.map((item, i) => ({
             continuity: i === 0 ? 'shot' : item.continuity,
             taskMode: item.taskMode,
@@ -3607,6 +3801,12 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
             audioTrim: item.audioTrim,
             audioStartSec: item.audioTrim ? item.audioStartSec : null,
             audioUseSec: item.audioTrim ? item.audioUseSec : null,
+            videoFileId: item.videoFileId,
+            videoUploadName: item.videoUploadName,
+            videoUploadWorkerId: item.videoUploadWorkerId,
+            videoTrim: item.videoTrim,
+            videoStartSec: item.videoTrim ? item.videoStartSec : null,
+            videoUseSec: item.videoTrim ? item.videoUseSec : null,
             durationSec: (() => {
               const seconds = parseTimecode(item.durationSec);
               return seconds != null && seconds > 0 ? seconds : 8;
@@ -3941,18 +4141,89 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
               <div className="mt-0.5 flex min-w-[36rem] gap-0.5">
                 {form.clips.map((item, i) => {
                   const span = h3Seconds(item);
+                  const slice = item.videoTrim && item.videoUseSec > 0 ? Math.min(span, item.videoUseSec) : span;
+                  return (
+                    <div key={`${item.key}-video`} className="min-w-[5.5rem]" style={{ flex: span }}>
+                      <div
+                        className={`flex max-w-full items-center rounded text-white ${i === index ? 'bg-orange-500' : 'bg-orange-800'}`}
+                        style={{ width: `${Math.max(18, (slice / span) * 100)}%` }}
+                      >
+                        <button
+                          type="button"
+                          title={item.videoName ?? 'No reference video'}
+                          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs"
+                          onClick={() => setSelected(i)}
+                        >
+                          {h3MediaLabel(item.videoName, 'No video', item.videoTrim, item.videoStartSec, item.videoUseSec)}
+                        </button>
+                        <TrackMarks
+                          share={form.shareVideo}
+                          locked={form.videoLocked}
+                          shareLabel="Use this video on every segment"
+                          lockLabel={form.videoLocked ? 'Video is locked when every segment has a file' : 'A segment with no video lets MiniMax choose the motion'}
+                          onShare={() => {
+                            setSelected(i);
+                            setForm((current) => {
+                              if (!current) return current;
+                              const shareVideo = !current.shareVideo;
+                              return {
+                                ...current,
+                                shareVideo,
+                                clips: shareVideo ? current.clips.map((row) => ({ ...row, ...h3VideoFields(item) })) : current.clips,
+                              };
+                            });
+                          }}
+                          onLock={() => {
+                            setSelected(i);
+                            setForm((current) => (current ? { ...current, videoLocked: !current.videoLocked } : current));
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-0.5 flex min-w-[36rem] gap-0.5">
+                {form.clips.map((item, i) => {
+                  const span = h3Seconds(item);
                   const slice = item.audioTrim && item.audioUseSec > 0 ? Math.min(span, item.audioUseSec) : span;
                   return (
                     <div key={`${item.key}-audio`} className="min-w-[5.5rem]" style={{ flex: span }}>
-                      <button
-                        type="button"
-                        title={item.audioName ?? 'MiniMax audio'}
-                        className={`block max-w-full truncate rounded px-2 py-1.5 text-left text-xs text-white ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
-                        style={{ width: `${Math.max(8, (slice / span) * 100)}%` }}
-                        onClick={() => setSelected(i)}
+                      <div
+                        className={`flex max-w-full items-center rounded text-white ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
+                        style={{ width: `${Math.max(18, (slice / span) * 100)}%` }}
                       >
-                        {h3AudioLabel(item, form.audioLocked)}
-                      </button>
+                        <button
+                          type="button"
+                          title={item.audioName ?? 'MiniMax audio'}
+                          className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs"
+                          onClick={() => setSelected(i)}
+                        >
+                          {h3MediaLabel(item.audioName, 'MiniMax audio', item.audioTrim, item.audioStartSec, item.audioUseSec)}
+                        </button>
+                        <TrackMarks
+                          share={form.shareAudio}
+                          locked={form.audioLocked}
+                          shareLabel="Use this audio on every segment"
+                          lockLabel={form.audioLocked ? 'Audio is locked when every segment has a file' : 'A segment with no file lets MiniMax make the sound'}
+                          onShare={() => {
+                            setSelected(i);
+                            setForm((current) => {
+                              if (!current) return current;
+                              const shareAudio = !current.shareAudio;
+                              return {
+                                ...current,
+                                shareAudio,
+                                clips: shareAudio ? current.clips.map((row) => ({ ...row, ...h3AudioFields(item) })) : current.clips,
+                              };
+                            });
+                          }}
+                          onLock={() => {
+                            setSelected(i);
+                            setForm((current) => (current ? { ...current, audioLocked: !current.audioLocked } : current));
+                          }}
+                        />
+                      </div>
                     </div>
                   );
                 })}
@@ -3972,6 +4243,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                         shared: true,
                       }));
                       if (current.shareAudio) Object.assign(next, h3AudioFields(clip));
+                      if (current.shareVideo) Object.assign(next, h3VideoFields(clip));
                       setSelected(current.clips.length);
                       return { ...current, clips: [...current.clips, next] };
                     })
@@ -3997,32 +4269,26 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
               ) : null}
             </div>
             <div className="mt-3 space-y-2">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.shareAudio}
-                  onChange={(e) => {
-                    const shareAudio = e.target.checked;
-                    setForm((current) => {
-                      if (!current) return current;
-                      return {
-                        ...current,
-                        shareAudio,
-                        clips: shareAudio ? current.clips.map((item) => ({ ...item, ...h3AudioFields(clip) })) : current.clips,
-                      };
-                    });
-                  }}
-                />
-                One audio for every segment
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={form.audioLocked}
-                  onChange={(e) => setForm((current) => (current ? { ...current, audioLocked: e.target.checked } : current))}
-                />
-                Lock audio when a file is attached. A segment with no file lets MiniMax make the sound.
-              </label>
+              <FilePick
+                kind="VIDEO"
+                label="Reference video"
+                selected={clip.videoName}
+                uploaded={!!clip.videoUploadName}
+                busy={busy === `video-${clip.key}`}
+                onSelect={(file) =>
+                  updateClip(index, {
+                    videoFileId: file.id,
+                    videoUploadName: null,
+                    videoUploadWorkerId: null,
+                    videoName: file.fileName,
+                    videoSeconds: typeof file.tech?.durationMs === 'number' ? file.tech.durationMs / 1000 : null,
+                  })
+                }
+                onUpload={(file) => void upload('video', file, index)}
+              />
+              {clip.videoFileId || clip.videoUploadName ? (
+                <H3VideoTrim clip={clip} workerId={form.workerId} onChange={(patch) => updateClip(index, patch)} />
+              ) : null}
               <FilePick
                 kind="AUDIO"
                 label="Audio"

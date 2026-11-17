@@ -634,6 +634,13 @@ export async function listWorkerLoras(ctx: Ctx, workerId: string) {
 const UPLOAD_EXT = {
   image: /\.(png|jpe?g|webp)$/i,
   audio: /\.(mp3|wav|flac|m4a|aac|ogg)$/i,
+  video: /\.(mp4|mov|webm)$/i,
+} as const;
+
+const UPLOAD_HINT = {
+  image: 'Upload a png, jpg, or webp image.',
+  audio: 'Upload an mp3, wav, flac, m4a, aac, or ogg file.',
+  video: 'Upload an mp4, mov, or webm video.',
 } as const;
 
 /** Relative path of the copy kept here, so Generate can send it to a different PC. */
@@ -690,20 +697,18 @@ export async function fileForWorker(
   throw badRequest('That file was uploaded to the other PC before a copy was kept. Upload it once more, then generate on the PC you picked.');
 }
 
-/** Puts one image or audio file into that PC’s ComfyUI input folder and keeps a copy here. The original on any other machine is not touched. */
+/** Puts one image, audio, or video file into that PC’s ComfyUI input folder and keeps a copy here. The original on any other machine is not touched. */
 export async function uploadLtxInput(
   ctx: Ctx,
   workerId: string,
-  kind: 'image' | 'audio',
+  kind: 'image' | 'audio' | 'video',
   file: { bytes: Buffer; name: string; mime: string },
 ) {
   const worker = await workerOrNull(ctx, workerId);
   if (!worker) throw notFound('PC');
   if (file.bytes.byteLength > 250 * 1024 * 1024) throw badRequest('That file is over 250 MB, so it was not sent.');
   const base = (file.name.split(/[/\\]/).pop() || 'file').replace(/[^A-Za-z0-9._-]+/g, '_');
-  if (!UPLOAD_EXT[kind].test(base)) {
-    throw badRequest(kind === 'image' ? 'Upload a png, jpg, or webp image.' : 'Upload an mp3, wav, flac, m4a, aac, or ogg file.');
-  }
+  if (!UPLOAD_EXT[kind].test(base)) throw badRequest(UPLOAD_HINT[kind]);
   const name = await uploadToComfy(worker.baseUrl, { bytes: file.bytes, name: `cos_up_${base}`, mime: file.mime || 'application/octet-stream' });
   await keepComfyInputCopy(ctx.env.attachmentsDir, ctx.orgId, worker.id, name, file.bytes);
   return { name, workerId: worker.id, label: worker.label };

@@ -49,6 +49,8 @@ export interface H3Form {
   megapixels: number;
   audioLocked: boolean;
   shareAudio: boolean;
+  videoLocked: boolean;
+  shareVideo: boolean;
   segments: H3SegmentDraft[];
 }
 
@@ -64,6 +66,9 @@ interface BuiltSegment {
   durationSec: number;
   /** Trimmed audio length. Null means the whole file, spanning this segment. */
   audioSpanSec?: number | null;
+  videoName?: string | null;
+  /** Trimmed reference-video length. Null means the whole file, spanning this segment. */
+  videoSpanSec?: number | null;
 }
 
 let cached: { path: string; mtimeMs: number; sha256: string; graph: Graph; prompt: string } | null = null;
@@ -105,7 +110,15 @@ function defaultPrompt(graph: Graph): string {
 /** Clones the API graph, drops the unused song-trim branch, and writes a fresh project. */
 export function buildH3Prompt(
   graph: Graph,
-  input: { projectName: string; segments: BuiltSegment[]; seed: number; aspectRatio: string; megapixels: number; audioLocked: boolean },
+  input: {
+    projectName: string;
+    segments: BuiltSegment[];
+    seed: number;
+    aspectRatio: string;
+    megapixels: number;
+    audioLocked: boolean;
+    videoLocked?: boolean;
+  },
 ) {
   const copy = structuredClone(graph) as Graph;
   delete copy['37'];
@@ -165,7 +178,28 @@ export function buildH3Prompt(
       },
     }];
   });
+  const videoSegments = input.segments.flatMap((segment, i) => {
+    if (!segment.videoName) return [];
+    const span = h3AudioFrames(frames[i]!, segment.videoSpanSec ?? null);
+    return [{
+      id: randomUUID(),
+      start_frame: ranges[i]!.start,
+      end_frame: ranges[i]!.start + span,
+      color: 'var(--primary)',
+      content: {
+        media_type: 'video',
+        source_type: 'input',
+        file_path: segment.videoName,
+        file_name: segment.videoName,
+        muted: false,
+        volume_db: 0,
+        duration: span / FPS,
+        shared_reference: false,
+      },
+    }];
+  });
   const audioLocked = input.audioLocked && input.segments.every((segment) => !!segment.audioName);
+  const videoLocked = input.videoLocked === true && input.segments.every((segment) => !!segment.videoName);
   const editor = copy['29'];
   const previous = JSON.parse(String(editor?.inputs?.track_data ?? '{}')) as {
     tracks?: { id?: string; name?: string; type?: string; color?: string; muted?: boolean; solo?: boolean; volume_db?: number; locked?: boolean; audio_locked?: boolean }[];
@@ -173,7 +207,7 @@ export function buildH3Prompt(
   const tracks = (previous.tracks ?? []).map((track) => {
     if (track.type === 'task') return { ...track, segments: taskSegments };
     if (track.type === 'audio') return { ...track, segments: audioSegments, audio_locked: audioLocked };
-    if (track.type === 'video') return { ...track, segments: [] };
+    if (track.type === 'video') return { ...track, segments: videoSegments, audio_locked: videoLocked };
     return track;
   });
   if (editor?.inputs) {
@@ -243,7 +277,7 @@ export async function getH3Studio(ctx: Ctx) {
 }
 
 async function labelSegments(ctx: Ctx, segments: H3SegmentDraft[]) {
-  const ids = [...new Set(segments.flatMap((s) => [s.audioFileId, ...s.images.map((image) => image.fileId)]).filter((id): id is string => !!id))];
+  const ids = [...new Set(segments.flatMap((s) => [s.audioFileId, s.videoFileId, ...s.images.map((image) => image.fileId)]).filter((id): id is string => !!id))];
   const rows = ids.length
     ? rowsOf<{ id: string; fileName: string }>(
         await ctx.db.execute(sql`
@@ -255,6 +289,7 @@ async function labelSegments(ctx: Ctx, segments: H3SegmentDraft[]) {
   return segments.map((segment) => ({
     ...segment,
     audioName: (segment.audioFileId && byId.get(segment.audioFileId)) || segment.audioUploadName,
+    videoName: (segment.videoFileId && byId.get(segment.videoFileId)) || segment.videoUploadName,
     images: segment.images.map((image) => ({
       ...image,
       name: (image.fileId && byId.get(image.fileId)) || image.uploadName,
@@ -309,6 +344,8 @@ export async function saveH3Draft(ctx: Ctx, form: H3Form) {
     megapixels: form.megapixels,
     audioLocked: form.audioLocked,
     shareAudio: form.shareAudio,
+    videoLocked: form.videoLocked,
+    shareVideo: form.shareVideo,
     segments: form.segments.slice(0, MAX_SEGMENTS),
     updatedBy: ctx.userId,
     updatedAt: now,
@@ -345,6 +382,12 @@ function normalizeSegments(raw: unknown, fallbackPrompt: string, fallbackImage: 
       audioTrim: row.audioTrim === true,
       audioStartSec: typeof row.audioStartSec === 'number' ? row.audioStartSec : null,
       audioUseSec: typeof row.audioUseSec === 'number' ? row.audioUseSec : null,
+      videoFileId: row.videoFileId ?? null,
+      videoUploadName: row.videoUploadName ?? null,
+      videoUploadWorkerId: row.videoUploadWorkerId ?? null,
+      videoTrim: row.videoTrim === true,
+      videoStartSec: typeof row.videoStartSec === 'number' ? row.videoStartSec : null,
+      videoUseSec: typeof row.videoUseSec === 'number' ? row.videoUseSec : null,
       durationSec: typeof row.durationSec === 'number' ? row.durationSec : null,
       images,
     };
@@ -377,6 +420,13 @@ function checkForm(form: H3Form) {
       const use = segment.audioUseSec ?? 0;
       if (start < 0 || start > 3600) throw badRequest(`Segment ${i + 1} trim must start at zero or later.`);
       if (use <= 0 || use > MAX_SECONDS) throw badRequest(`Segment ${i + 1} trim must be between 0 and ${MAX_SECONDS} seconds.`);
+    }
+    if (segment.videoTrim) {
+      if (!segment.videoFileId && !segment.videoUploadName) throw badRequest(`Choose a video before trimming segment ${i + 1}.`);
+      const start = segment.videoStartSec ?? -1;
+      const use = segment.videoUseSec ?? 0;
+      if (start < 0 || start > 3600) throw badRequest(`Segment ${i + 1} video trim must start at zero or later.`);
+      if (use <= 0 || use > MAX_SECONDS) throw badRequest(`Segment ${i + 1} video trim must be between 0 and ${MAX_SECONDS} seconds.`);
     }
   });
 }
@@ -413,6 +463,7 @@ export async function generateH3(ctx: Ctx, form: H3Form) {
         aspectRatio: form.aspectRatio,
         megapixels: form.megapixels,
         audioLocked: form.audioLocked,
+        videoLocked: form.videoLocked,
         segments: form.segments,
       },
       workflow: { format: 'api', source: WORKFLOW, sha256: h3Workflow()!.sha256 },
@@ -434,7 +485,7 @@ async function uploadBytes(origin: string, file: { bytes: Buffer; name: string; 
   return body.subfolder ? `${body.subfolder}/${body.name}` : body.name;
 }
 
-async function readStream(body: ReadableStream<Uint8Array>, name: string, mime: string, jobId: string, label: string) {
+async function readStream(body: ReadableStream<Uint8Array>, name: string, mime: string, jobId: string, label: string, maxBytes = 80 * 1024 * 1024) {
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -442,29 +493,30 @@ async function readStream(body: ReadableStream<Uint8Array>, name: string, mime: 
     const next = await reader.read();
     if (next.done) break;
     total += next.value.byteLength;
-    if (total > 80 * 1024 * 1024) throw badRequest(`${label} is over 80 MB, so it was not sent.`);
+    if (total > maxBytes) throw badRequest(`${label} is over ${Math.round(maxBytes / (1024 * 1024))} MB, so it was not sent.`);
     chunks.push(next.value);
   }
   const base = (name.split(/[/\\]/).pop() || 'file').replace(/[^A-Za-z0-9._-]+/g, '_');
   return { bytes: Buffer.concat(chunks), name: `cos_${jobId.slice(0, 8)}_${base}`, mime: mime || 'application/octet-stream' };
 }
 
-async function loadAudioBytes(
+async function loadMediaBytes(
   db: Db,
   env: ServiceEnv,
   orgId: string,
   baseUrl: string,
-  segment: H3SegmentDraft,
+  file: { fileId: string | null; uploadName: string | null; uploadWorkerId: string | null },
   label: string,
+  maxBytes = 80 * 1024 * 1024,
 ) {
-  if (segment.audioFileId) {
-    const opened = await openAgentFile(db, env, orgId, segment.audioFileId);
-    return readStream(opened.body, opened.name, opened.mime, `${orgId}-${segment.audioFileId}`, label);
+  if (file.fileId) {
+    const opened = await openAgentFile(db, env, orgId, file.fileId);
+    return readStream(opened.body, opened.name, opened.mime, `${orgId}-${file.fileId}`, label, maxBytes);
   }
-  const name = segment.audioUploadName;
+  const name = file.uploadName;
   if (!name || name.includes('..') || name.includes('\\') || name.startsWith('/')) throw badRequest(`${label} is not on the PC.`);
-  if (segment.audioUploadWorkerId) {
-    const copy = await readComfyInputCopy(env.attachmentsDir, orgId, segment.audioUploadWorkerId, name);
+  if (file.uploadWorkerId) {
+    const copy = await readComfyInputCopy(env.attachmentsDir, orgId, file.uploadWorkerId, name);
     if (copy) {
       const slash = name.lastIndexOf('/');
       return { bytes: copy, name: slash >= 0 ? name.slice(slash + 1) : name, mime: 'application/octet-stream' };
@@ -479,7 +531,25 @@ async function loadAudioBytes(
   if (subfolder) url.searchParams.set('subfolder', subfolder);
   const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
   if (!res.ok || !res.body) throw badRequest(`${label} could not be read back from the PC.`);
-  return readStream(res.body, filename, res.headers.get('content-type') || 'application/octet-stream', name, label);
+  return readStream(res.body, filename, res.headers.get('content-type') || 'application/octet-stream', name, label, maxBytes);
+}
+
+async function loadAudioBytes(
+  db: Db,
+  env: ServiceEnv,
+  orgId: string,
+  baseUrl: string,
+  segment: H3SegmentDraft,
+  label: string,
+) {
+  return loadMediaBytes(
+    db,
+    env,
+    orgId,
+    baseUrl,
+    { fileId: segment.audioFileId, uploadName: segment.audioUploadName, uploadWorkerId: segment.audioUploadWorkerId },
+    label,
+  );
 }
 
 /** Writes a new file that contains only [start, start+use). The upload on the PC is not changed. */
@@ -517,6 +587,43 @@ async function cutAudio(bytes: Buffer, name: string, start: number, use: number)
   }
 }
 
+/** Writes a new mp4 that contains only [start, start+use). The upload on the PC is not changed. */
+async function cutVideo(bytes: Buffer, name: string, start: number, use: number) {
+  const dir = await mkdtemp(join(tmpdir(), 'h3-video-'));
+  const src = join(dir, 'in');
+  const out = join(dir, 'clip.mp4');
+  try {
+    await writeFile(src, bytes);
+    const err = await new Promise<string>((resolve) => {
+      const child = spawn(
+        'ffmpeg',
+        ['-y', '-v', 'error', '-i', src, '-ss', String(start), '-t', String(use), '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', out],
+        { stdio: ['ignore', 'ignore', 'pipe'] },
+      );
+      let text = '';
+      let settled = false;
+      const finish = (value: string) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      child.stderr.on('data', (chunk: Buffer) => {
+        text += chunk.toString();
+      });
+      child.on('error', (e: NodeJS.ErrnoException) =>
+        finish(e.code === 'ENOENT' ? 'ffmpeg is not installed, so the video was not cut.' : e.message),
+      );
+      child.on('close', (code) => finish(code === 0 ? '' : text.trim().split('\n').pop() || 'ffmpeg failed'));
+    });
+    if (err) throw badRequest(`The video trim failed. The original file was not changed. ${err.trim().split('\n').pop() ?? ''}`.slice(0, 300));
+    const cut = await readFile(out);
+    const base = (name.split(/[/\\]/).pop() || 'video').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9._-]+/g, '_');
+    return { bytes: cut, name: `${base}_${start.toFixed(1)}s.mp4`, mime: 'video/mp4' };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function durationOf(db: Db, orgId: string, fileId: string | null, given: number | null) {
   if (given != null && given > 0) return given;
   if (!fileId) return null;
@@ -541,6 +648,7 @@ interface H3Job {
     aspectRatio?: string;
     megapixels?: number;
     audioLocked?: boolean;
+    videoLocked?: boolean;
     segments?: H3SegmentDraft[];
     filenamePrefix?: string;
     projectName?: string;
@@ -619,6 +727,26 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       } else {
         audioName = await place(segment.audioFileId, segment.audioUploadName, segment.audioUploadWorkerId, `Segment ${i + 1} audio`);
       }
+      let videoName: string | null = null;
+      let videoSpanSec: number | null = null;
+      if (segment.videoTrim && (segment.videoFileId || segment.videoUploadName)) {
+        const start = segment.videoStartSec ?? 0;
+        const use = segment.videoUseSec ?? 0;
+        const raw = await loadMediaBytes(
+          db,
+          env,
+          claimed.orgId,
+          worker.baseUrl,
+          { fileId: segment.videoFileId, uploadName: segment.videoUploadName, uploadWorkerId: segment.videoUploadWorkerId },
+          `Segment ${i + 1} video`,
+          200 * 1024 * 1024,
+        );
+        const cut = await cutVideo(raw.bytes, raw.name, start, use);
+        videoName = await uploadBytes(worker.baseUrl, cut);
+        videoSpanSec = use;
+      } else {
+        videoName = await place(segment.videoFileId, segment.videoUploadName, segment.videoUploadWorkerId, `Segment ${i + 1} video`);
+      }
       const durationSec = await durationOf(db, claimed.orgId, segment.audioFileId, segment.durationSec);
       if (durationSec == null) throw badRequest(`Enter how many seconds segment ${i + 1} is. Its length was not scanned.`);
       if (durationSec > MAX_SECONDS) throw badRequest(`Segment ${i + 1} is longer than ${MAX_SECONDS} seconds.`);
@@ -631,6 +759,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         audioName,
         durationSec,
         audioSpanSec,
+        videoName,
+        videoSpanSec,
       });
     }
     const named = typeof settings.projectName === 'string' ? settings.projectName.trim() : '';
@@ -643,6 +773,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       aspectRatio: settings.aspectRatio || '9:16 (Portrait Widescreen)',
       megapixels: settings.megapixels || 1,
       audioLocked: settings.audioLocked !== false,
+      videoLocked: settings.videoLocked === true,
     });
     const live = rowsOf<{ status: string }>(await db.execute(sql`select status from generation_jobs where id = ${claimed.id}`))[0];
     if (live?.status !== 'RUNNING') return { skipped: true };

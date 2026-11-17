@@ -28,6 +28,8 @@ import {
   unauthorized,
   updateLongVideo,
   updateLongVideoScene,
+  undoLongVideoResize,
+  addLongVideoMotion,
 } from '@creatoros/services';
 import { attachmentHeaders } from '../attachment';
 import { ctxFor, type AppDeps } from '../http';
@@ -179,8 +181,9 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
     if (!req.session) throw unauthorized();
     const params = z.object({ id: z.string().uuid(), refId: z.string().uuid() }).parse(req.params);
     const file = await openLongVideoFile(ctxFor(deps, req), params.id, 'ref', params.refId);
-    const ext = file.abs.split('.').pop();
-    reply.header('content-type', ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
+    const ext = file.abs.split('.').pop()?.toLowerCase();
+    const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'mp4' ? 'video/mp4' : ext === 'webm' ? 'video/webm' : ext === 'mov' ? 'video/quicktime' : 'image/jpeg';
+    reply.header('content-type', type);
     reply.header('cache-control', 'private, max-age=3600');
     return reply.send(createReadStream(file.abs));
   });
@@ -232,6 +235,21 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
     if (!jsonText.trim()) throw badRequest('Choose the clip JSON file.');
     const saved = await importLongVideoPlan(ctxFor(deps, req), id, jsonText, files);
     return { data: saved, meta: { requestId: req.correlationId }, error: null };
+  });
+
+  app.post('/long-videos/:id/motion', { bodyLimit: 260 * 1024 * 1024 }, async (req) => {
+    editor(req);
+    const { id } = idParam.parse(req.params);
+    const incoming = await req.file();
+    if (!incoming) throw badRequest('Choose a video.');
+    const saved = await addLongVideoMotion(ctxFor(deps, req), id, { bytes: await incoming.toBuffer(), name: incoming.filename });
+    return { data: saved, meta: { requestId: req.correlationId }, error: null };
+  });
+
+  app.post('/long-videos/:id/undo', async (req) => {
+    editor(req);
+    const { id } = idParam.parse(req.params);
+    return { data: await undoLongVideoResize(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });
 
   app.post('/long-videos/:id/refs', { bodyLimit: 25 * 1024 * 1024 }, async (req) => {

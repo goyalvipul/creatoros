@@ -3321,11 +3321,7 @@ function H3AudioTrim({
   segmentSec: number;
   onChange: (patch: Partial<H3Clip>) => void;
 }) {
-  const src = clip.audioFileId
-    ? `/api/v1/files/${clip.audioFileId}/stream`
-    : clip.audioUploadName && (clip.audioUploadWorkerId || workerId)
-      ? `/api/v1/comfy/workers/${clip.audioUploadWorkerId || workerId}/input?name=${encodeURIComponent(clip.audioUploadName)}`
-      : null;
+  const src = h3PreviewSrc(clip.audioFileId, clip.audioUploadName, clip.audioUploadWorkerId, workerId);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const total = clip.audioSeconds;
@@ -3443,6 +3439,16 @@ function H3AudioTrim({
   );
 }
 
+const MEDIA_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A same-origin preview URL. Ids must be UUIDs. The file name is encoded, so it cannot change the path or the query. */
+function h3PreviewSrc(fileId: string | null, uploadName: string | null, uploadWorkerId: string | null, workerId: string | null) {
+  if (fileId && MEDIA_ID.test(fileId)) return `/api/v1/files/${encodeURIComponent(fileId)}/stream`;
+  const worker = uploadWorkerId || workerId;
+  if (!uploadName || !worker || !MEDIA_ID.test(worker)) return null;
+  return `/api/v1/comfy/workers/${encodeURIComponent(worker)}/input?name=${encodeURIComponent(uploadName)}`;
+}
+
 function H3VideoTrim({
   clip,
   workerId,
@@ -3452,11 +3458,7 @@ function H3VideoTrim({
   workerId: string | null;
   onChange: (patch: Partial<H3Clip>) => void;
 }) {
-  const src = clip.videoFileId
-    ? `/api/v1/files/${clip.videoFileId}/stream`
-    : clip.videoUploadName && (clip.videoUploadWorkerId || workerId)
-      ? `/api/v1/comfy/workers/${clip.videoUploadWorkerId || workerId}/input?name=${encodeURIComponent(clip.videoUploadName)}`
-      : null;
+  const src = h3PreviewSrc(clip.videoFileId, clip.videoUploadName, clip.videoUploadWorkerId, workerId);
   const total = clip.videoSeconds;
   const cap = Math.min(H3_MAX_SECONDS, total != null && total > 0 ? total : H3_MAX_SECONDS);
   function setTrim(start: number, length: number) {

@@ -63,15 +63,23 @@ function alreadyDone(scene: GenerationScene) {
   return DONE.has(scene.status) || scene.hasVideo === true;
 }
 
-/** Groups scenes into MiniMax jobs. Context continues the current group. A finished or already linked scene is left out. A group holds at most 8 scenes. */
+/** Groups scenes into MiniMax jobs. Context continues the current group. A finished or already linked scene is left out of Generate all. Generate on one context section walks back to the shot that starts that chain. A group holds at most 8 scenes. */
 export function planGenerationGroups(scenes: GenerationScene[], mode: 'one' | 'all', selectedId?: string): string[][] {
   if (mode === 'one') {
     const index = scenes.findIndex((scene) => scene.id === selectedId);
     const scene = index >= 0 ? scenes[index] : undefined;
     if (!scene || BUSY.has(scene.status)) return [];
-    const previous = index > 0 ? scenes[index - 1] : undefined;
-    if (scene.continuity === 'context' && previous && !BUSY.has(previous.status)) return [[previous.id, scene.id]];
-    return [[scene.id]];
+    if (scene.continuity !== 'context') return [[scene.id]];
+    let start = index;
+    while (start > 0 && scenes[start]?.continuity === 'context') {
+      const earlier = scenes[start - 1];
+      if (!earlier || BUSY.has(earlier.status)) return [];
+      start -= 1;
+      if (earlier.continuity !== 'context') break;
+    }
+    const chain = scenes.slice(start, index + 1);
+    const fitted = chain.length > 8 ? chain.slice(chain.length - 8) : chain;
+    return [fitted.map((item) => item.id)];
   }
   const groups: string[][] = [];
   let current: string[] = [];
@@ -202,6 +210,31 @@ export function imageFileKey(name: string) {
   return base.trim().toLowerCase();
 }
 
+/** File names that differ only by a browser copy suffix, such as "clip (1).mp4". */
+function looseMotionKey(name: string) {
+  return imageFileKey(name).replace(/\s*\(\d+\)(?=\.[a-z0-9]+$)/, '');
+}
+
+/** The dance video for a clip. An exact name wins, then a name without a copy suffix, then the only uploaded video. */
+export function matchMotionFile<T extends { name: string }>(files: T[], wanted: string | null): T | undefined {
+  if (wanted) {
+    const exact = files.find((item) => imageFileKey(item.name) === imageFileKey(wanted));
+    if (exact) return exact;
+    const loose = files.filter((item) => looseMotionKey(item.name) === looseMotionKey(wanted));
+    if (loose.length === 1) return loose[0];
+  }
+  return files.length === 1 ? files[0] : undefined;
+}
+
+export function clipVideoFit(startMs: number, endMs: number, file: { durationMs?: number | null } | undefined) {
+  if (!file) return 'missing' as const;
+  if (file.durationMs != null && endMs > file.durationMs + 50) return 'outside' as const;
+  const length = endMs - startMs;
+  if (length < 2_000) return 'short' as const;
+  if (length > 15_000) return 'long' as const;
+  return 'ready' as const;
+}
+
 export interface ParsedClip {
   name: string;
   images: string[];
@@ -216,6 +249,11 @@ export interface ParsedClip {
   /** Exact song range, in milliseconds. Null when the plan has no song time. */
   songStartMs: number | null;
   songEndMs: number | null;
+  /** File name of the dance video. Null when this clip has no reference video. */
+  videoName: string | null;
+  /** Trim of that file, in milliseconds. Null means this clip has no reference video. */
+  videoStartMs: number | null;
+  videoEndMs: number | null;
   clipId: string | null;
   motionTrackId: string | null;
 }
@@ -303,6 +341,20 @@ function songRange(item: Record<string, unknown>, details: string, index: number
   const match = found[0];
   if (!match) return { start: null, end: null };
   return { start: Number(match[1]) * 1000, end: Number(match[2]) * 1000 };
+}
+
+function videoTrim(item: Record<string, unknown>, index: number): { name: string | null; start: number | null; end: number | null } | { error: string } {
+  const label = `Clip ${String(index + 1).padStart(2, '0')}`;
+  if (item.video_start_ms == null) return { name: null, start: null, end: null };
+  if (typeof item.video_start_ms !== 'number' || !Number.isFinite(item.video_start_ms) || item.video_start_ms < 0) {
+    return { error: `${label} video_start_ms must be a number of milliseconds, or null when this clip has no reference video.` };
+  }
+  if (typeof item.video_end_ms !== 'number' || !Number.isFinite(item.video_end_ms) || item.video_end_ms <= item.video_start_ms) {
+    return { error: `${label} video_end_ms must be after video_start_ms.` };
+  }
+  const name = typeof item.video_attached === 'string' ? item.video_attached.trim() : '';
+  if (!name) return { error: `${label} needs video_attached, the file name of the reference video.` };
+  return { name, start: Math.round(item.video_start_ms), end: Math.round(item.video_end_ms) };
 }
 
 function motionRef(item: Record<string, unknown>, index: number, tracks: MotionTrackPlan[]): string | null | { error: string } {
@@ -404,6 +456,8 @@ export function parseClipPlan(value: unknown): { plan: ParsedClipPlan } | { erro
     if ('error' in range) return range;
     const trackId = motionRef(item, i, motion.tracks);
     if (typeof trackId !== 'string' && trackId !== null) return trackId;
+    const attached = videoTrim(item, i);
+    if ('error' in attached) return attached;
     const clipId = typeof item.clip_id === 'string' && item.clip_id.trim() ? item.clip_id.trim().slice(0, 80) : null;
     clips.push({
       name,
@@ -416,6 +470,9 @@ export function parseClipPlan(value: unknown): { plan: ParsedClipPlan } | { erro
       imageDetails,
       songStartMs: range.start,
       songEndMs: range.end,
+      videoName: attached.name,
+      videoStartMs: attached.start,
+      videoEndMs: attached.end,
       clipId,
       motionTrackId: trackId,
     });

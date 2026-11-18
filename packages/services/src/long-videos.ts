@@ -17,7 +17,7 @@ import {
   longVideoScenes,
   sql,
 } from '@creatoros/db';
-import { clipPlanCard, clipTitle, h3AspectRatio, h3RequestSeconds, imageFileKey, isDefaultClipTitle, longVideoOutputFolder, motionVideoRange, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, songSpansForClips, type MotionTrackPlan, type SceneSpan } from '@creatoros/domain';
+import { clipPlanCard, clipTitle, clipVideoFit, h3AspectRatio, h3RequestSeconds, imageFileKey, isDefaultClipTitle, longVideoOutputFolder, matchMotionFile, motionVideoRange, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, songSpansForClips, type MotionTrackPlan, type SceneSpan } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { notify } from './notifications';
 import { badRequest, notFound, type Ctx, type ServiceEnv } from './types';
@@ -465,6 +465,11 @@ function motionReviewFor(
   return motionVideoRange(track, startMs, endMs, sourceDurationMs).status === 'ready' ? null : motionVideoRange(track, startMs, endMs, sourceDurationMs).status;
 }
 
+function clipVideoReview(startMs: number, endMs: number, file: { durationMs: number | null } | undefined) {
+  const fit = clipVideoFit(startMs, endMs, file);
+  return fit === 'ready' ? null : fit;
+}
+
 /** A shorter scene gives the spare song to the next one. A longer scene takes that song from the following scenes and removes one that is fully used. The last scene trades with the scenes before it. */
 async function resizeLongVideoScene(ctx: Ctx, projectId: string, sceneId: string, durationSec: number) {
   const project = await owned(ctx, projectId);
@@ -514,6 +519,9 @@ async function resizeLongVideoScene(ctx: Ctx, projectId: string, sceneId: string
             priorTakePath: scene.priorTakePath,
             renderMs: scene.renderMs,
             motionTrackId: scene.motionTrackId,
+            videoName: scene.videoName,
+            videoStartMs: scene.videoStartMs,
+            videoEndMs: scene.videoEndMs,
             outdated: scene.outdated,
           })),
           refs: refRows
@@ -537,7 +545,7 @@ async function resizeLongVideoScene(ctx: Ctx, projectId: string, sceneId: string
         endMs: span.endMs,
         label: clipLabel(row.label, keptIndex + 1),
         outdated: same ? row.outdated : Boolean(row.takePath) || row.outdated,
-        motionReview: motionReviewFor(plan, row.motionTrackId, span.startMs, span.endMs, durationOf(row.motionTrackId)),
+        motionReview: row.videoStartMs != null ? row.motionReview : motionReviewFor(plan, row.motionTrackId, span.startMs, span.endMs, durationOf(row.motionTrackId)),
         updatedAt: new Date(),
       })
       .where(eq(longVideoScenes.id, row.id));
@@ -577,6 +585,9 @@ export async function undoLongVideoResize(ctx: Ctx, projectId: string) {
       priorTakePath: typeof raw.priorTakePath === 'string' ? raw.priorTakePath : null,
       renderMs: typeof raw.renderMs === 'number' ? raw.renderMs : null,
       motionTrackId: typeof raw.motionTrackId === 'string' ? raw.motionTrackId : null,
+      videoName: typeof raw.videoName === 'string' ? raw.videoName : null,
+      videoStartMs: typeof raw.videoStartMs === 'number' ? raw.videoStartMs : null,
+      videoEndMs: typeof raw.videoEndMs === 'number' ? raw.videoEndMs : null,
       motionReview: null,
       outdated: raw.outdated === true || (typeof raw.takePath === 'string' && raw.takePath.length > 0),
       status: typeof raw.takePath === 'string' && raw.takePath ? 'READY' : 'DRAFT',
@@ -706,12 +717,17 @@ export async function addLongVideoFromLibrary(ctx: Ctx, projectId: string, fileI
   const opened = await openAgentFile(ctx.db, ctx.env, ctx.orgId, fileId);
   const ext = extOf(opened.name);
   const audio = AUDIO.has(ext) || opened.mime.startsWith('audio');
-  const bytes = await bytesOf(opened.body, audio ? 80 * 1024 * 1024 : 20 * 1024 * 1024);
+  const video = VIDEO.has(ext) || opened.mime.startsWith('video');
+  const bytes = await bytesOf(opened.body, audio ? 80 * 1024 * 1024 : video ? 250 * 1024 * 1024 : 20 * 1024 * 1024);
   if (audio) {
     if (sceneId) throw badRequest('A song from the library replaces the project song. Pick it from the song row.');
     return saveLongVideoAudio(ctx, projectId, { bytes, name: opened.name });
   }
-  if (!IMAGE.has(ext) && !opened.mime.startsWith('image')) throw badRequest('Choose an image or a song from the library.');
+  if (video) {
+    if (sceneId) throw badRequest('A dance video is stored on the project, not on one section.');
+    return addLongVideoMotion(ctx, projectId, { bytes, name: opened.name });
+  }
+  if (!IMAGE.has(ext) && !opened.mime.startsWith('image')) throw badRequest('Choose an image, a song, or a video from the library.');
   return addLongVideoRef(ctx, projectId, sceneId, { bytes, name: opened.name });
 }
 
@@ -812,6 +828,8 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
     if (short) shortSceneCount += 1;
     const track = parsed.plan.motion.tracks.find((item) => item.id === clip.motionTrackId);
     const review = clip.motionTrackId ? motionReviewFor(parsed.plan.motion, clip.motionTrackId, span.startMs, span.endMs, track ? sourceDuration(track.sourceId) : null) : null;
+    const file = clip.videoName ? matchMotionFile(motions, clip.videoName) : undefined;
+    const explicit = clip.videoStartMs != null && clip.videoEndMs != null && clip.videoName;
     const values = {
       position: i + 1,
       startMs: span.startMs,
@@ -824,9 +842,12 @@ export async function importLongVideoPlan(ctx: Ctx, projectId: string, jsonText:
       imageOrder: clip.images,
       continuity: i === 0 || !clip.context ? 'shot' : 'context',
       workerId: short ? gpu3060 : null,
-      renderMs: Math.round(clip.durationSec * 1000),
+      renderMs: laid.fromSongTime ? span.endMs - span.startMs : Math.round(clip.durationSec * 1000),
       motionTrackId: clip.motionTrackId,
-      motionReview: review,
+      videoName: explicit ? clip.videoName : null,
+      videoStartMs: explicit ? clip.videoStartMs : null,
+      videoEndMs: explicit ? clip.videoEndMs : null,
+      motionReview: explicit ? clipVideoReview(clip.videoStartMs!, clip.videoEndMs!, file) : review,
       outdated: Boolean(row?.takePath),
       error: null as string | null,
       updatedAt: new Date(),
@@ -1028,26 +1049,37 @@ async function cutSilentVideo(source: string, startSec: number, useSec: number, 
 async function motionClipFor(
   ctx: Ctx,
   project: { id: string; motionPlan: { sources: { id: string; filename: string }[]; tracks: MotionTrackPlan[] } | null },
-  scene: { position: number; startMs: number; endMs: number; motionTrackId: string | null },
+  scene: { position: number; startMs: number; endMs: number; motionTrackId: string | null; videoName: string | null; videoStartMs: number | null; videoEndMs: number | null },
   refs: { id: string; kind: string; name: string; path: string; durationMs: number | null }[],
   workerUrl: string,
 ) {
+  const direct = scene.videoStartMs != null && scene.videoEndMs != null && scene.videoName
+    ? { name: scene.videoName, videoStartMs: scene.videoStartMs, videoEndMs: scene.videoEndMs }
+    : null;
   const track = project.motionPlan?.tracks.find((item) => item.id === scene.motionTrackId);
   const source = project.motionPlan?.sources.find((item) => item.id === track?.sourceId);
-  if (!track || !source) throw badRequest(`Scene ${scene.position} points at a motion track that is not on this project.`);
-  const ref = refs.find((item) => item.kind === 'motion' && imageFileKey(item.name) === imageFileKey(source.filename));
-  if (!ref) throw badRequest(`Upload ${source.filename} before generating scene ${scene.position}.`);
-  const range = motionVideoRange(track, scene.startMs, scene.endMs, ref.durationMs);
-  if (range.status !== 'ready') throw badRequest(`Scene ${scene.position} motion reference is ${range.status}. Fix the dance video or the song range before generating.`);
-  const cache = `long-videos/${project.id}/motion-cache/${ref.id}_${range.videoStartMs}_${range.videoEndMs}.mp4`;
+  const wanted = direct?.name ?? source?.filename;
+  if (!wanted) throw badRequest(`Scene ${scene.position} points at a motion track that is not on this project.`);
+  const ref = matchMotionFile(refs.filter((item) => item.kind === 'motion'), wanted);
+  if (!ref) throw badRequest(`Upload ${wanted} before generating scene ${scene.position}.`);
+  let videoStartMs = direct?.videoStartMs ?? 0;
+  let videoEndMs = direct?.videoEndMs ?? 0;
+  if (!direct) {
+    if (!track) throw badRequest(`Scene ${scene.position} points at a motion track that is not on this project.`);
+    const fitted = motionVideoRange(track, scene.startMs, scene.endMs, ref.durationMs);
+    if (fitted.status !== 'ready') throw badRequest(`Scene ${scene.position} motion reference is ${fitted.status}. Fix the dance video or the song range before generating.`);
+    videoStartMs = fitted.videoStartMs;
+    videoEndMs = fitted.videoEndMs;
+  }
+  const cache = `long-videos/${project.id}/motion-cache/${ref.id}_${videoStartMs}_${videoEndMs}.mp4`;
   const abs = safeFile(ctx.env.attachmentsDir, cache);
   try {
     await readFile(abs);
   } catch {
     await mkdir(path.dirname(abs), { recursive: true });
-    await cutSilentVideo(safeFile(ctx.env.attachmentsDir, ref.path), range.videoStartMs / 1000, (range.videoEndMs - range.videoStartMs) / 1000, abs);
+    await cutSilentVideo(safeFile(ctx.env.attachmentsDir, ref.path), videoStartMs / 1000, (videoEndMs - videoStartMs) / 1000, abs);
   }
-  return uploadToWorker(workerUrl, { bytes: await readFile(abs), name: `lv_motion_${ref.id.slice(0, 8)}_${range.videoStartMs}.mp4`, mime: 'video/mp4' });
+  return uploadToWorker(workerUrl, { bytes: await readFile(abs), name: `lv_motion_${ref.id.slice(0, 8)}_${videoStartMs}.mp4`, mime: 'video/mp4' });
 }
 
 export async function addLongVideoMotion(ctx: Ctx, projectId: string, file: { bytes: Buffer; name: string }) {
@@ -1135,7 +1167,10 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
     const slice = scene.endMs - scene.startMs;
     const asked = h3RequestSeconds(slice, scene.renderMs);
     if (asked.note && (slice > 15_000 || (scene.renderMs ?? 0) > 15_000)) throw badRequest(`Scene ${scene.position}: ${asked.note}`);
-    if (scene.motionReview) throw badRequest(`Scene ${scene.position} motion reference is ${scene.motionReview}. Upload the dance video or fix the song range before generating.`);
+    if (scene.videoStartMs != null && scene.videoEndMs != null) {
+      const fit = clipVideoFit(scene.videoStartMs, scene.videoEndMs, matchMotionFile(refs.filter((ref) => ref.kind === 'motion'), scene.videoName));
+      if (fit !== 'ready') throw badRequest(`Scene ${scene.position} motion reference is ${fit}. Upload the dance video or fix the trim before generating.`);
+    } else if (scene.motionReview) throw badRequest(`Scene ${scene.position} motion reference is ${scene.motionReview}. Upload the dance video or fix the song range before generating.`);
     const pool = refs.filter((ref) => ref.kind !== 'motion' && (ref.sceneId === scene.id || ref.sceneId == null));
     const pictures = orderByPlanName(pool, scene.imageOrder ?? []).slice(0, 8);
     if (!pictures.length) throw badRequest(`Add a reference picture to scene ${scene.position}, or one shared picture for the project.`);
@@ -1148,7 +1183,7 @@ async function queueLongVideoGroup(ctx: Ctx, projectId: string, sceneIds: string
       });
       images.push({ fileId: null, uploadName: imageName, uploadWorkerId: worker.id, shared: picture.sceneId == null });
     }
-    const videoName = scene.motionTrackId ? await motionClipFor(ctx, project, scene, refs, worker.baseUrl) : null;
+    const videoName = scene.videoStartMs != null || scene.motionTrackId ? await motionClipFor(ctx, project, scene, refs, worker.baseUrl) : null;
     segmentSeconds.push(asked.renderSec);
     segments.push({
       continuity: index === 0 ? 'shot' : 'context',

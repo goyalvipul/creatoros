@@ -239,7 +239,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos/:id/motion', { bodyLimit: 260 * 1024 * 1024 }, async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     const incoming = await req.file();
     if (!incoming) throw badRequest('Choose a video.');
@@ -248,7 +248,7 @@ export function longVideoRoutes(app: FastifyInstance, deps: AppDeps) {
   });
 
   app.post('/long-videos/:id/undo', async (req) => {
-    editor(req);
+    editor(req, deps);
     const { id } = idParam.parse(req.params);
     return { data: await undoLongVideoResize(ctxFor(deps, req), id), meta: { requestId: req.correlationId }, error: null };
   });

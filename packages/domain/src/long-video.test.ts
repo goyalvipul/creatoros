@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipPlanCard, clipTitle, generationSeconds, h3RequestSeconds, isDefaultClipTitle, longVideoOutputFolder, motionVideoRange, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, songSpansForClips, spansCover, spansFromClipSeconds, type GenerationScene, type MotionTrackPlan } from './long-video';
+import { clipPlanCard, clipTitle, clipVideoFit, generationSeconds, h3RequestSeconds, isDefaultClipTitle, longVideoOutputFolder, matchMotionFile, motionVideoRange, orderByPlanName, parseClipPlan, planGenerationGroups, planScenes, resizeSceneSpan, songSpansForClips, spansCover, spansFromClipSeconds, type GenerationScene, type MotionTrackPlan } from './long-video';
 
 describe('long video scenes', () => {
   it('reads a clip plan and shares only pictures used on every clip', () => {
@@ -84,6 +84,8 @@ describe('long video scenes', () => {
     expect(planGenerationGroups(scenes, 'all')).toEqual([['s1', 's2', 's3'], ['s4', 's5']]);
     expect(planGenerationGroups(scenes, 'one', 's4')).toEqual([['s4']]);
     expect(planGenerationGroups(scenes, 'one', 's5')).toEqual([['s4', 's5']]);
+    expect(planGenerationGroups(scenes, 'one', 's3')).toEqual([['s1', 's2', 's3']]);
+    expect(planGenerationGroups(scenes, 'one', 's2')).toEqual([['s1', 's2']]);
   });
 
   it('leaves a finished scene out and caps a group at 8', () => {
@@ -234,6 +236,54 @@ describe('long video scenes', () => {
     expect(motionVideoRange(track, 0, 12_000, 50_000)).toEqual(grown);
     expect(motionVideoRange(track, 20_000, 32_000, 50_000).status).toBe('outside');
     expect(motionVideoRange(track, 0, 1_000, 50_000).status).toBe('short');
+  });
+
+  it('uses song_start_ms for the section and skips a clip whose video_start_ms is null', () => {
+    const parsed = parseClipPlan({
+      clips: [
+        {
+          clip_name: 'CLIP 01',
+          images_attached: ['face.jpeg'],
+          clip_duration: 14,
+          vocal: 'no',
+          context: false,
+          prompt: 'No video.',
+          song_details: 'Song time: 0.000-9.000 seconds',
+          image_details: '',
+          song_start_ms: 0,
+          song_end_ms: 9000,
+          video_attached: null,
+          video_start_ms: null,
+          video_end_ms: null,
+        },
+        {
+          clip_name: 'CLIP 02',
+          images_attached: ['face.jpeg'],
+          clip_duration: 20,
+          vocal: 'yes',
+          context: true,
+          prompt: 'With video.',
+          song_details: 'Song time: 9.000-18.000 seconds',
+          image_details: '',
+          song_start_ms: 9000,
+          song_end_ms: 18000,
+          video_attached: 'dance_full.mp4',
+          video_start_ms: 12000,
+          video_end_ms: 21000,
+        },
+      ],
+    });
+    if ('error' in parsed) throw new Error(parsed.error);
+    const laid = songSpansForClips(18_000, parsed.plan.clips);
+    if ('error' in laid) throw new Error(laid.error);
+    expect(laid.spans).toEqual([
+      { startMs: 0, endMs: 9_000 },
+      { startMs: 9_000, endMs: 18_000 },
+    ]);
+    expect(parsed.plan.clips[0]?.videoStartMs).toBeNull();
+    expect(parsed.plan.clips[1]).toMatchObject({ videoName: 'dance_full.mp4', videoStartMs: 12_000, videoEndMs: 21_000 });
+    expect(matchMotionFile([{ name: 'reference videi.mp4', durationMs: 138_000 }], 'reference videi(1).mp4')?.name).toBe('reference videi.mp4');
+    expect(clipVideoFit(52_100, 55_100, { durationMs: 138_000 })).toBe('ready');
   });
 
   it('names the PC folder from the project, with _longvideo on the end', () => {

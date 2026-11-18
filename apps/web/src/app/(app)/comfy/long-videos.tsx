@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { H3_ASPECTS, clipTitle, h3AspectRatio, h3RequestSeconds, imageFileKey, longVideoOutputFolder, motionVideoRange, orderByPlanName } from '@creatoros/domain';
+import { H3_ASPECTS, clipTitle, clipVideoFit, h3AspectRatio, h3RequestSeconds, imageFileKey, longVideoOutputFolder, matchMotionFile, motionVideoRange, orderByPlanName } from '@creatoros/domain';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { Button, Card, CardTitle, EmptyState, Field, Input, Notice, Select } from '@/components/ui';
 import { AiImageTools, AiPromptTools } from '@/components/ai-tools';
@@ -55,6 +55,9 @@ type Scene = {
   renderMs: number | null;
   motionTrackId: string | null;
   motionReview: string | null;
+  videoName: string | null;
+  videoStartMs: number | null;
+  videoEndMs: number | null;
   error: string | null;
 };
 type RefImage = { id: string; sceneId: string | null; kind?: string; name: string; durationMs?: number | null; createdAt?: string };
@@ -81,6 +84,14 @@ function planSummary(data: PlanResult) {
 async function readUploadError(res: Response, fallback: string) {
   const json = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
   return json?.error?.message ?? fallback;
+}
+
+function uploadMotionFile(projectId: string, file: File) {
+  const body = new FormData();
+  body.append('file', file);
+  return fetch(`/api/v1/long-videos/${projectId}/motion`, { method: 'POST', credentials: 'same-origin', headers: { 'x-requested-with': 'creatoros' }, body }).then(async (res) => {
+    if (!res.ok) throw new ApiError(res.status, 'ERROR', await readUploadError(res, 'The video did not upload.'));
+  });
 }
 
 function uploadSong(projectId: string, file: File) {
@@ -120,9 +131,12 @@ export function LongVideos({ active = true }: { active?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [song, setSong] = useState<File | null>(null);
   const [librarySong, setLibrarySong] = useState<{ id: string; fileName: string } | null>(null);
+  const [motion, setMotion] = useState<File | null>(null);
+  const [libraryMotion, setLibraryMotion] = useState<{ id: string; fileName: string } | null>(null);
   const [planFile, setPlanFile] = useState<File | null>(null);
   const [images, setImages] = useState<File[]>([]);
   const songInput = useRef<HTMLInputElement>(null);
+  const motionInput = useRef<HTMLInputElement>(null);
   const planInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const create = () => {
@@ -146,6 +160,8 @@ export function LongVideos({ active = true }: { active?: boolean }) {
         try {
           if (song) await uploadSong(row.id, song);
           else if (librarySong) await post(`/long-videos/${row.id}/library`, { fileId: librarySong.id });
+          if (motion) await uploadMotionFile(row.id, motion);
+          else if (libraryMotion) await post(`/long-videos/${row.id}/library`, { fileId: libraryMotion.id });
           if (planFile) sessionStorage.setItem('cos-long-plan-note', await applyClipPlan(row.id, planFile, images));
         } catch (err) {
           await del(`/long-videos/${row.id}`).catch(() => undefined);
@@ -162,7 +178,7 @@ export function LongVideos({ active = true }: { active?: boolean }) {
     <div className="space-y-4 p-4">
       <Card>
         <CardTitle>New long video</CardTitle>
-        <p className="mt-1 text-sm text-muted">Name the project, then add the song from the library or an upload, the clip JSON, and the pictures. Create builds every section from that file.</p>
+        <p className="mt-1 text-sm text-muted">Name the project, then add the song from the library or an upload, the dance video, the clip JSON, and the pictures. Create builds every section from that file.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_240px]">
           <Field label="Project name">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -179,12 +195,15 @@ export function LongVideos({ active = true }: { active?: boolean }) {
           <Button size="sm" type="button" disabled={busy} onClick={() => songInput.current?.click()}>Song</Button>
           <input ref={songInput} className="sr-only" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac" onChange={(e) => { setSong(e.target.files?.[0] ?? null); setLibrarySong(null); e.target.value = ''; }} />
           <LibraryPick kind="AUDIO" label="Library song" onPick={(file) => { setLibrarySong(file); setSong(null); }} />
+          <Button size="sm" type="button" disabled={busy} onClick={() => motionInput.current?.click()}>Video</Button>
+          <input ref={motionInput} className="sr-only" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" onChange={(e) => { setMotion(e.target.files?.[0] ?? null); setLibraryMotion(null); e.target.value = ''; }} />
+          <LibraryPick kind="VIDEO" label="Library video" onPick={(file) => { setLibraryMotion(file); setMotion(null); }} />
           <Button size="sm" type="button" disabled={busy} onClick={() => planInput.current?.click()}>Clip plan</Button>
           <input ref={planInput} className="sr-only" type="file" accept="application/json,.json" onChange={(e) => { setPlanFile(e.target.files?.[0] ?? null); e.target.value = ''; }} />
           <Button size="sm" type="button" disabled={busy} onClick={() => imageInput.current?.click()}>Pictures</Button>
           <input ref={imageInput} className="sr-only" type="file" accept="image/*,.png,.jpg,.jpeg,.webp" multiple onChange={(e) => { setImages([...(e.target.files ?? [])]); e.target.value = ''; }} />
           <Button type="button" disabled={busy} onClick={create}>{busy ? 'Creating' : 'Create project'}</Button>
-          <span className="text-xs text-muted">{librarySong ? librarySong.fileName : song ? song.name : 'No song'} · {planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
+          <span className="text-xs text-muted">{librarySong ? librarySong.fileName : song ? song.name : 'No song'} · {libraryMotion ? libraryMotion.fileName : motion ? motion.name : 'No video'} · {planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
         </div>
         {error ? <Notice tone="bad">{error}</Notice> : null}
       </Card>
@@ -476,6 +495,7 @@ function Editor({ id, active, onBack }: { id: string; active: boolean; onBack: (
             own={refs.filter((r) => r.sceneId === scene.id)}
             shared={refs.filter((r) => r.sceneId == null && r.kind !== 'motion')}
             motion={motionLine(project.motionPlan, refs, scene)}
+            referenceSrc={referenceSrc(id, refs, scene)}
             onPlay={(offset) => playScene(scene, offset)}
             onStop={stopAudio}
             onError={setError}
@@ -596,6 +616,7 @@ function SceneCard({
   own,
   shared,
   motion,
+  referenceSrc,
   onPlay,
   onStop,
   onError,
@@ -615,6 +636,7 @@ function SceneCard({
   own: RefImage[];
   shared: RefImage[];
   motion: string | null;
+  referenceSrc: string | null;
   onPlay: (offsetSec?: number) => void;
   onStop: () => void;
   onError: (message: string | null) => void;
@@ -751,9 +773,11 @@ function SceneCard({
             if (event.currentTarget.currentTime >= limit - 0.05) event.currentTarget.pause();
           }}
         />
+      ) : referenceSrc && scene.videoStartMs != null && scene.videoEndMs != null ? (
+        <TrimPlayer src={referenceSrc} startMs={scene.videoStartMs} endMs={scene.videoEndMs} portrait={portrait} />
       ) : (
         <div className={`mt-2 flex items-center justify-center rounded-lg bg-black/5 text-xs text-muted ${portrait ? 'mx-auto aspect-[9/16] max-h-72' : 'aspect-video'}`}>
-          {scene.status === 'QUEUED' || scene.status === 'RUNNING' ? 'Generating' : 'Preview'}
+          {scene.status === 'QUEUED' || scene.status === 'RUNNING' ? 'Generating' : scene.videoName ? `Upload ${scene.videoName}` : 'Preview'}
         </div>
       )}
       <div className="mt-2 flex gap-2">
@@ -794,7 +818,7 @@ function SceneCard({
           size="sm"
           variant={continuity === 'context' ? 'primary' : 'ghost'}
           disabled={first}
-          title={first ? 'The first scene is always a new shot.' : 'Render this scene in the same MiniMax job as the one before it.'}
+          title={first ? 'The first scene is always a new shot.' : 'Generate includes this section and walks back through Context to the shot that starts the chain.'}
           onClick={() => {
             const next = continuity === 'context' ? 'shot' : 'context';
             setContinuity(next);
@@ -815,7 +839,7 @@ function SceneCard({
       </div>
       {scene.error ? <p className="mt-2 text-sm text-red-500">{scene.error}</p> : null}
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button onClick={() => run(post(`/long-videos/${projectId}/scenes/${scene.id}/generate`))} disabled={scene.status === 'QUEUED' || scene.status === 'RUNNING'}>
+        <Button onClick={() => run(post(`/long-videos/${projectId}/scenes/${scene.id}/generate`))} disabled={scene.status === 'QUEUED' || scene.status === 'RUNNING'} title={first || continuity !== 'context' ? 'Generate this section.' : 'Generate this section with the Context chain back to the shot.'}>
           {scene.takePath ? 'Regenerate' : 'Generate'}
         </Button>
         {scene.status === 'QUEUED' || scene.status === 'RUNNING' ? (
@@ -853,7 +877,7 @@ function SceneCard({
   );
 }
 
-function LibraryPick({ kind, label = 'Library', onPick }: { kind: 'AUDIO' | 'IMAGE'; label?: string; onPick: (file: { id: string; fileName: string }) => void }) {
+function LibraryPick({ kind, label = 'Library', onPick }: { kind: 'AUDIO' | 'IMAGE' | 'VIDEO'; label?: string; onPick: (file: { id: string; fileName: string }) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const list = useApi<{ items: { id: string; fileName: string }[] }>(open ? '/library' : null, {
@@ -864,7 +888,7 @@ function LibraryPick({ kind, label = 'Library', onPick }: { kind: 'AUDIO' | 'IMA
       <Button size="sm" type="button" variant="ghost" onClick={() => setOpen((value) => !value)}>{label}</Button>
       {open ? (
         <div className="mt-1 w-64 max-w-full rounded-lg border border-border bg-panel p-2">
-          <Input value={q} placeholder={kind === 'AUDIO' ? 'Search songs' : 'Search images'} onChange={(e) => setQ(e.target.value)} />
+          <Input value={q} placeholder={kind === 'AUDIO' ? 'Search songs' : kind === 'VIDEO' ? 'Search videos' : 'Search images'} onChange={(e) => setQ(e.target.value)} />
           <ul className="mt-1 max-h-40 overflow-auto">
             {(list.data?.items ?? []).map((file) => (
               <li key={file.id}>
@@ -1019,7 +1043,7 @@ function PlanImport({
       />
       <Button size="sm" type="button" disabled={busy} onClick={apply}>{busy ? 'Applying' : 'Apply plan'}</Button>
       <span className="text-xs text-muted">{planFile ? planFile.name : 'No JSON'} · {images.length ? `${images.length} pictures` : 'no pictures yet'}</span>
-      <p className="w-full text-xs text-muted">JSON list of clips: clip_name, images_attached, clip_duration (the MiniMax render length, in seconds), vocal (yes or no), context (true to continue the previous shot), prompt, song_details, image_details. Song time in song_details, or song_start_ms and song_end_ms, is the audio that is sent. A dance video is uploaded once on the project. A v2 plan can name it in motion_sources and map it with motion_tracks.</p>
+      <p className="w-full text-xs text-muted">JSON list of clips. song_start_ms and song_end_ms set each section. clip_duration is not used for those boundaries. video_start_ms null means that section has no reference video. When video_start_ms is set, the file named in video_attached is trimmed from video_start_ms to video_end_ms and attached to that section.</p>
     </div>
   );
 }
@@ -1036,12 +1060,68 @@ function uploadMotion(projectId: string, file: File, setError: (m: string | null
     .catch((err: ApiError) => setError(err.message));
 }
 
+function referenceSrc(projectId: string, refs: RefImage[], scene: Scene) {
+  if (scene.videoStartMs == null) return null;
+  const ref = matchMotionFile(refs.filter((item) => item.kind === 'motion'), scene.videoName);
+  return ref ? `/api/v1/long-videos/${projectId}/refs/${ref.id}` : null;
+}
+
+function TrimPlayer({ src, startMs, endMs, portrait }: { src: string; startMs: number; endMs: number; portrait: boolean }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const start = startMs / 1000;
+  const end = endMs / 1000;
+  return (
+    <div className="mt-2">
+      <video
+        ref={video}
+        className={`w-full rounded-lg bg-black ${portrait ? 'mx-auto aspect-[9/16] max-h-72' : 'aspect-video'}`}
+        src={src}
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={(event) => {
+          event.currentTarget.currentTime = start;
+        }}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onTimeUpdate={(event) => {
+          if (event.currentTarget.currentTime >= end - 0.03) {
+            event.currentTarget.pause();
+            event.currentTarget.currentTime = start;
+          }
+        }}
+      />
+      <Button
+        className="mt-2"
+        variant="ghost"
+        onClick={() => {
+          const el = video.current;
+          if (!el) return;
+          if (!el.paused) {
+            el.pause();
+            return;
+          }
+          if (el.currentTime < start || el.currentTime >= end - 0.05) el.currentTime = start;
+          void el.play();
+        }}
+      >
+        {playing ? 'Pause trim' : 'Play trim'}
+      </Button>
+    </div>
+  );
+}
+
 function audioLine(scene: Scene) {
   const asked = h3RequestSeconds(scene.endMs - scene.startMs, scene.renderMs);
   return `H3 audio ${asked.audioSec.toFixed(1)}s from ${(scene.startMs / 1000).toFixed(1)}s · render ${asked.renderSec.toFixed(1)}s`;
 }
 
 function motionLine(plan: Project['motionPlan'], refs: RefImage[], scene: Scene) {
+  if (scene.videoStartMs != null && scene.videoEndMs != null) {
+    const file = matchMotionFile(refs.filter((item) => item.kind === 'motion'), scene.videoName);
+    const status = clipVideoFit(scene.videoStartMs, scene.videoEndMs, file);
+    return `${file?.name ?? scene.videoName ?? 'Video'} ${(scene.videoStartMs / 1000).toFixed(1)}s–${(scene.videoEndMs / 1000).toFixed(1)}s · ${status}`;
+  }
   if (!scene.motionTrackId || !plan) return scene.motionReview ? `Motion: ${scene.motionReview}` : null;
   const track = plan.tracks.find((item) => item.id === scene.motionTrackId);
   const source = plan.sources.find((item) => item.id === track?.sourceId);

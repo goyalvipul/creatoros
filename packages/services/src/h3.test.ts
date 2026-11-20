@@ -185,7 +185,9 @@ describe('MiniMax H3 graph', () => {
     expect(video.segments[0]?.content.file_name).toBe('move.mp4');
     expect(video.segments[0]?.end_frame).toBe(Math.round(4 * 24));
     expect(video.audio_locked).toBe(false);
-    expect(audio.audio_locked).toBe(false);
+    // The first audio clip is locked even though the second task has no audio.
+    // Easy-Media checks overlapping frames and lets task two generate sound.
+    expect(audio.audio_locked).toBe(true);
   });
 
   it('sends a different song slice and a different motion clip on two segments', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { h3AudioFields, removeH3Audio, shareH3Audio } from './h3-audio-reference';
+import { h3AudioFields, removeH3Audio, shareH3Audio, unshareH3Audio } from './h3-audio-reference';
 
 const first = {
   audioFileId: 'song-one',
@@ -29,6 +29,16 @@ describe('H3 audio per-segment operations', () => {
     expect(h3AudioFields(result[1]!)).toEqual(h3AudioFields(first));
     expect(result[1]?.audioLocked).toBe(false);
     expect(result[1]?.durationSec).toBe('00:06:00');
+  });
+
+  it('turning sharing off removes copies and allows separate files on each segment', () => {
+    const shared = shareH3Audio([first, second], 0);
+    const separate = unshareH3Audio(shared, 0);
+    expect(separate[0]?.audioName).toBe('first.wav');
+    expect(separate[1]?.audioName).toBeNull();
+    const added = separate.map((clip, index) => index === 1 ? { ...clip, audioName: 'new-segment.mp3', audioFileId: 'new-file' } : clip);
+    expect(added[0]?.audioFileId).toBe('song-one');
+    expect(added[1]?.audioFileId).toBe('new-file');
   });
 
   it('removes only the selected segment when sharing is disabled', () => {

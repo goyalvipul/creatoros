@@ -51,3 +51,24 @@ export function removeH3Audio<T extends H3AudioReference>(clips: T[], index: num
       : clip,
   );
 }
+
+/** Turn sharing off: retain audio only on the selected segment and remove duplicated copies. */
+export function unshareH3Audio<T extends H3AudioReference>(clips: T[], index: number): T[] {
+  if (!clips[index]) return clips;
+  return clips.map((clip, i) =>
+    i === index
+      ? clip
+      : {
+          ...clip,
+          audioFileId: null,
+          audioUploadName: null,
+          audioUploadWorkerId: null,
+          audioName: null,
+          audioTrim: false,
+          audioStartSec: 0,
+          audioUseSec: 0,
+          audioSeconds: null,
+          audioLocked: false,
+        },
+  );
+}

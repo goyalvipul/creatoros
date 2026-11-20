@@ -9,6 +9,7 @@ import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
 import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, ltxUpscaleSize, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
 import { clipBounds, clipPlayback } from '@/lib/audio-clip';
+import { removeH3ReferenceVideo } from '@/lib/h3-reference-video';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
@@ -3706,6 +3707,18 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
     });
   }
 
+  /** Only clear the chosen segment; disabling sharing prevents later edits from restoring it elsewhere. */
+  function clearReferenceVideo(index: number) {
+    setForm((current) => {
+      if (!current || !current.clips[index]) return current;
+      return {
+        ...current,
+        shareVideo: false,
+        clips: removeH3ReferenceVideo(current.clips, index),
+      };
+    });
+  }
+
   async function upload(kind: 'image' | 'audio' | 'video', file: File, index: number) {
     if (!form?.workerId) {
       setError('Choose the PC first. The file is saved on that PC.');
@@ -4145,9 +4158,9 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                   const span = h3Seconds(item);
                   const slice = item.videoTrim && item.videoUseSec > 0 ? Math.min(span, item.videoUseSec) : span;
                   return (
-                    <div key={`${item.key}-video`} className="min-w-[5.5rem]" style={{ flex: span }}>
+                    <div key={`${item.key}-video`} className="group relative min-w-[5.5rem]" style={{ flex: span }}>
                       <div
-                        className={`flex max-w-full items-center rounded text-white ${i === index ? 'bg-orange-500' : 'bg-orange-800'}`}
+                        className={`flex max-w-full items-center rounded text-white ${item.videoFileId || item.videoUploadName ? 'pr-6' : ''} ${i === index ? 'bg-orange-500' : 'bg-orange-800'}`}
                         style={{ width: `${Math.max(18, (slice / span) * 100)}%` }}
                       >
                         <button
@@ -4181,6 +4194,20 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                           }}
                         />
                       </div>
+                      {item.videoFileId || item.videoUploadName ? (
+                        <button
+                          type="button"
+                          title={`Remove reference video from segment ${i + 1}`}
+                          aria-label={`Remove reference video from segment ${i + 1}`}
+                          className="absolute right-0.5 top-0.5 z-10 grid h-5 w-5 place-items-center rounded bg-black/80 text-sm font-semibold text-white opacity-100 transition-colors hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+                          onClick={() => {
+                            setSelected(i);
+                            clearReferenceVideo(i);
+                          }}
+                        >
+                          ×
+                        </button>
+                      ) : null}
                     </div>
                   );
                 })}

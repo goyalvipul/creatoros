@@ -235,4 +235,67 @@ describe('MiniMax H3 graph', () => {
     expect(video.audio_locked).toBe(true);
     expect(video.segments[0]?.content.media_type).toBe('video');
   });
+  it('locks only the task with locked source audio while an empty task generates sound', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'cos-partial-lock',
+      seed: 8,
+      segments: [
+        { continuity: 'shot', taskMode: 'ref', prompt: 'Sing.', images: [{ name: 'mehak.png', shared: false }], audioName: 'vocal.wav', audioLocked: true, durationSec: 8 },
+        { continuity: 'context', taskMode: 'ref', prompt: 'Listen.', images: [{ name: 'mehak.png', shared: false }], audioName: null, audioLocked: false, durationSec: 8 },
+      ],
+      aspectRatio: '9:16 (Portrait Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+    });
+    const track = JSON.parse(String(prompt['29']?.inputs?.track_data)) as {
+      tracks: { type: string; audio_locked?: boolean; segments: { start_frame: number; end_frame: number; content: { file_name?: string } }[] }[];
+    };
+    const audio = track.tracks.find((t) => t.type === 'audio')!;
+    expect(audio.audio_locked).toBe(true);
+    expect(audio.segments).toHaveLength(1);
+    expect(audio.segments[0]?.start_frame).toBe(0);
+    expect(audio.segments[0]?.end_frame).toBe(8 * 24);
+    expect(audio.segments[0]?.content.file_name).toBe('vocal.wav');
+  });
+
+  it('keeps an unlocked audio reference separate from exact locked audio', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'cos-mixed',
+      seed: 9,
+      segments: [
+        { continuity: 'shot', taskMode: 'ref', prompt: 'Perform verse.', images: [{ name: 'mehak.png', shared: false }], audioName: 'verse.wav', audioLocked: true, durationSec: 8 },
+        { continuity: 'context', taskMode: 'ref', prompt: 'React with new sound.', images: [{ name: 'mehak.png', shared: false }], audioName: 'ambient.wav', audioLocked: false, durationSec: 8 },
+      ],
+      aspectRatio: '9:16 (Portrait Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+    });
+    const data = JSON.parse(String(prompt['29']?.inputs?.track_data)) as {
+      tracks: { type: string; audio_locked?: boolean; segments: { start_frame: number; content: { file_name?: string } }[] }[];
+    };
+    const audio = data.tracks.filter((t) => t.type === 'audio');
+    expect(audio).toHaveLength(2);
+    expect(audio[0]?.audio_locked).toBe(true);
+    expect(audio[0]?.segments.map((s) => s.content.file_name)).toEqual(['verse.wav']);
+    expect(audio[1]?.audio_locked).toBe(false);
+    expect(audio[1]?.segments.map((s) => s.content.file_name)).toEqual(['ambient.wav']);
+    expect(audio[1]?.segments[0]?.start_frame).toBe(8 * 24);
+  });
+
+  it('unlocked audio stays a reference track and is not copied as exact output', () => {
+    const prompt = buildH3Prompt(graph, {
+      projectName: 'cos-unlocked',
+      seed: 1,
+      segments: [{ continuity: 'shot', taskMode: 'ref', prompt: 'Speak.', images: [{ name: 'mehak.png', shared: false }], audioName: 'guide.wav', audioLocked: false, durationSec: 8 }],
+      aspectRatio: '9:16 (Portrait Widescreen)',
+      megapixels: 1,
+      audioLocked: true,
+    });
+    const data = JSON.parse(String(prompt['29']?.inputs?.track_data)) as { tracks: { type: string; audio_locked?: boolean; segments: unknown[] }[] };
+    const audio = data.tracks.filter((t) => t.type === 'audio');
+    expect(audio).toHaveLength(1);
+    expect(audio[0]?.audio_locked).toBe(false);
+    expect(audio[0]?.segments).toHaveLength(1);
+  });
+
 });

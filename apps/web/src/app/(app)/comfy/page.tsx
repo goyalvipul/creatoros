@@ -10,7 +10,7 @@ import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState
 import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, ltxUpscaleSize, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
 import { clipBounds, clipPlayback } from '@/lib/audio-clip';
 import { removeH3ReferenceVideo } from '@/lib/h3-reference-video';
-import { h3AudioFields, removeH3Audio, shareH3Audio } from '@/lib/h3-audio-reference';
+import { h3AudioFields, removeH3Audio, shareH3Audio, unshareH3Audio } from '@/lib/h3-audio-reference';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
@@ -4239,7 +4239,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                         <TrackMarks
                           share={form.shareAudio}
                           locked={item.audioLocked && !!(item.audioFileId || item.audioUploadName)}
-                          shareLabel={form.shareAudio ? 'Stop syncing audio across segments (existing copies remain)' : 'Share this audio across all segments'}
+                          shareLabel={form.shareAudio ? 'Stop sharing and remove the copied audio from other segments' : 'Share this audio across all segments'}
                           lockLabel={item.audioLocked && (item.audioFileId || item.audioUploadName) ? 'Keep this source audio in segment ' + (i + 1) : 'Let MiniMax generate audio for segment ' + (i + 1)}
                           onShare={() => {
                             setSelected(i);
@@ -4249,7 +4249,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                               return {
                                 ...current,
                                 shareAudio,
-                                clips: shareAudio ? shareH3Audio(current.clips, i) : current.clips,
+                                clips: shareAudio ? shareH3Audio(current.clips, i) : unshareH3Audio(current.clips, i),
                               };
                             });
                           }}

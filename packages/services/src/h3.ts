@@ -63,6 +63,8 @@ interface BuiltSegment {
   prompt: string;
   images: { name: string; shared: boolean }[];
   audioName: string | null;
+  /** Only a segment whose source is locked should constrain its generated audio. */
+  audioLocked?: boolean;
   durationSec: number;
   /** Trimmed audio length. Null means the whole file, spanning this segment. */
   audioSpanSec?: number | null;
@@ -158,26 +160,35 @@ export function buildH3Prompt(
       user_prompt: segment.prompt,
     },
   }));
-  const audioSegments = input.segments.flatMap((segment, i) => {
+  // Easy Media's audio_locked switch belongs to a track, but each H3 task checks
+  // whether that locked track overlaps its own frames. Keep unlocked references
+  // on a separate track: they can guide sound without locking their task audio.
+  const audioItems = input.segments.flatMap((segment, i) => {
     if (!segment.audioName) return [];
     const span = h3AudioFrames(frames[i]!, segment.audioSpanSec ?? null);
     return [{
-      id: randomUUID(),
-      start_frame: ranges[i]!.start,
-      end_frame: ranges[i]!.start + span,
-      color: 'var(--highlight)',
-      content: {
-        media_type: 'audio',
-        source_type: 'input',
-        file_path: segment.audioName,
-        file_name: segment.audioName,
-        muted: false,
-        volume_db: 0,
-        duration: span / FPS,
-        shared_reference: false,
+      locked: segment.audioLocked ?? input.audioLocked,
+      clip: {
+        id: randomUUID(),
+        start_frame: ranges[i]!.start,
+        end_frame: ranges[i]!.start + span,
+        color: 'var(--highlight)',
+        content: {
+          media_type: 'audio',
+          source_type: 'input',
+          file_path: segment.audioName,
+          file_name: segment.audioName,
+          muted: false,
+          volume_db: 0,
+          duration: span / FPS,
+          shared_reference: false,
+        },
       },
     }];
   });
+  const lockedAudioSegments = audioItems.filter((item) => item.locked).map((item) => item.clip);
+  const referenceAudioSegments = audioItems.filter((item) => !item.locked).map((item) => item.clip);
+  const audioLocked = lockedAudioSegments.length > 0;
   const videoSegments = input.segments.flatMap((segment, i) => {
     if (!segment.videoName) return [];
     const span = h3AudioFrames(frames[i]!, segment.videoSpanSec ?? null);
@@ -198,18 +209,33 @@ export function buildH3Prompt(
       },
     }];
   });
-  const audioLocked = input.audioLocked && input.segments.every((segment) => !!segment.audioName);
   const videoLocked = input.videoLocked === true && input.segments.every((segment) => !!segment.videoName);
   const editor = copy['29'];
   const previous = JSON.parse(String(editor?.inputs?.track_data ?? '{}')) as {
     tracks?: { id?: string; name?: string; type?: string; color?: string; muted?: boolean; solo?: boolean; volume_db?: number; locked?: boolean; audio_locked?: boolean }[];
   };
+  const audioTemplate = (previous.tracks ?? []).find((track) => track.type === 'audio');
   const tracks = (previous.tracks ?? []).map((track) => {
     if (track.type === 'task') return { ...track, segments: taskSegments };
-    if (track.type === 'audio') return { ...track, segments: audioSegments, audio_locked: audioLocked };
+    if (track.type === 'audio') {
+      return {
+        ...track,
+        segments: audioLocked ? lockedAudioSegments : referenceAudioSegments,
+        audio_locked: audioLocked,
+      };
+    }
     if (track.type === 'video') return { ...track, segments: videoSegments, audio_locked: videoLocked };
     return track;
   });
+  if (audioTemplate && audioLocked && referenceAudioSegments.length) {
+    tracks.push({
+      ...audioTemplate,
+      id: randomUUID(),
+      name: 'Audio references (unlocked)',
+      segments: referenceAudioSegments,
+      audio_locked: false,
+    });
+  }
   if (editor?.inputs) {
     editor.inputs.resolution = 'width x height (megapixels)';
     editor.inputs['resolution.aspect_ratio'] = h3AspectRatio(input.aspectRatio) ?? input.aspectRatio;
@@ -379,6 +405,7 @@ function normalizeSegments(raw: unknown, fallbackPrompt: string, fallbackImage: 
       audioFileId: row.audioFileId ?? null,
       audioUploadName: row.audioUploadName ?? null,
       audioUploadWorkerId: row.audioUploadWorkerId ?? null,
+      audioLocked: typeof row.audioLocked === 'boolean' ? row.audioLocked : undefined,
       audioTrim: row.audioTrim === true,
       audioStartSec: typeof row.audioStartSec === 'number' ? row.audioStartSec : null,
       audioUseSec: typeof row.audioUseSec === 'number' ? row.audioUseSec : null,
@@ -757,6 +784,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
         prompt: segment.prompt,
         images: imageNames,
         audioName,
+        audioLocked: segment.audioLocked ?? (settings.audioLocked !== false),
         durationSec,
         audioSpanSec,
         videoName,

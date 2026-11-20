@@ -98,6 +98,7 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
     audioFileId: uuid.nullable(),
     audioUploadName: z.string().max(300).nullable(),
     audioUploadWorkerId: uuid.nullable(),
+    audioLocked: z.boolean().optional(),
     audioTrim: z.boolean().optional().default(false),
     audioStartSec: z.number().min(0).max(3600).nullable().optional(),
     audioUseSec: z.number().positive().max(30).nullable().optional(),

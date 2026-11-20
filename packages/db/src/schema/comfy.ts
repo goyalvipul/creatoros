@@ -103,6 +103,8 @@ export interface H3SegmentDraft {
   audioFileId: string | null;
   audioUploadName: string | null;
   audioUploadWorkerId: string | null;
+  /** Preserve supplied audio only for this segment; false lets MiniMax generate its audio. */
+  audioLocked?: boolean;
   /** When true, only audioStartSec for audioUseSec seconds is sent. Off sends the whole file. */
   audioTrim?: boolean;
   audioStartSec?: number | null;

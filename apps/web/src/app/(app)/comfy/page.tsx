@@ -9,6 +9,8 @@ import { VideoThumb, SizedFrame } from '@/components/video-thumb';
 import { ActionButton, Async, Badge, Button, Card, CardTitle, Dialog, EmptyState, Field, Input, Notice, PageHeader, Select, Spinner, Tabs, Textarea } from '@/components/ui';
 import { H3_ASPECTS, LTX_UPSCALE_QUALITIES, h3AspectRatio, ltxUpscaleSize, type LtxResizeType, type LtxUpscaleQuality } from '@creatoros/domain';
 import { clipBounds, clipPlayback } from '@/lib/audio-clip';
+import { removeH3ReferenceVideo } from '@/lib/h3-reference-video';
+import { h3AudioFields, removeH3Audio, shareH3Audio, unshareH3Audio } from '@/lib/h3-audio-reference';
 import { ago } from '@/lib/format';
 import { uxV5 } from '@/components/ux-v5-flag';
 import { useWorkspace } from '@/lib/workspace';
@@ -3143,6 +3145,7 @@ type H3Clip = {
   audioUploadName: string | null;
   audioUploadWorkerId: string | null;
   audioName: string | null;
+  audioLocked: boolean;
   audioTrim: boolean;
   audioStartSec: number;
   audioUseSec: number;
@@ -3225,6 +3228,7 @@ function blankH3Clip(prompt: string, continuity: H3Join): H3Clip {
     audioUploadName: null,
     audioUploadWorkerId: null,
     audioName: null,
+    audioLocked: false,
     audioTrim: false,
     audioStartSec: 0,
     audioUseSec: 0,
@@ -3239,19 +3243,6 @@ function blankH3Clip(prompt: string, continuity: H3Join): H3Clip {
     videoSeconds: null,
     durationSec: '00:08:00',
     images: [],
-  };
-}
-
-function h3AudioFields(clip: H3Clip) {
-  return {
-    audioFileId: clip.audioFileId,
-    audioUploadName: clip.audioUploadName,
-    audioUploadWorkerId: clip.audioUploadWorkerId,
-    audioName: clip.audioName,
-    audioTrim: clip.audioTrim,
-    audioStartSec: clip.audioStartSec,
-    audioUseSec: clip.audioUseSec,
-    audioSeconds: clip.audioSeconds,
   };
 }
 
@@ -3539,13 +3530,14 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       shareAudio?: boolean;
       videoLocked?: boolean;
       shareVideo?: boolean;
-      segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName'> & {
+      segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName' | 'audioLocked'> & {
         durationSec: number | null;
         audioName?: string | null;
         videoName?: string | null;
         audioTrim?: boolean;
         audioStartSec?: number | null;
         audioUseSec?: number | null;
+        audioLocked?: boolean;
         images: Omit<H3Image, 'key'>[];
       })[];
     } | null;
@@ -3597,6 +3589,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       audioUploadName: segment.audioUploadName,
       audioUploadWorkerId: segment.audioUploadWorkerId,
       audioName: segment.audioName ?? segment.audioUploadName,
+      audioLocked: typeof segment.audioLocked === 'boolean' ? segment.audioLocked : (data.draft?.audioLocked !== false && !!(segment.audioFileId || segment.audioUploadName)),
       audioTrim: segment.audioTrim === true,
       audioStartSec: typeof segment.audioStartSec === 'number' ? segment.audioStartSec : 0,
       audioUseSec: typeof segment.audioUseSec === 'number' ? segment.audioUseSec : 0,
@@ -3649,6 +3642,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       const audioChange =
         patch.audioFileId !== undefined ||
         patch.audioUploadName !== undefined ||
+        patch.audioUploadWorkerId !== undefined ||
         patch.audioName !== undefined ||
         patch.audioTrim !== undefined ||
         patch.audioStartSec !== undefined ||
@@ -3706,6 +3700,27 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
     });
   }
 
+  /** Only clear the chosen segment; disabling sharing prevents later edits from restoring it elsewhere. */
+  function clearReferenceVideo(index: number) {
+    setForm((current) => {
+      if (!current || !current.clips[index]) return current;
+      return {
+        ...current,
+        shareVideo: false,
+        clips: removeH3ReferenceVideo(current.clips, index),
+      };
+    });
+  }
+
+  /** Audio is independent unless the share icon is on; shared removal clears every segment. */
+  function clearAudio(index: number) {
+    setForm((current) =>
+      current && current.clips[index]
+        ? { ...current, clips: removeH3Audio(current.clips, index, current.shareAudio) }
+        : current,
+    );
+  }
+
   async function upload(kind: 'image' | 'audio' | 'video', file: File, index: number) {
     if (!form?.workerId) {
       setError('Choose the PC first. The file is saved on that PC.');
@@ -3732,6 +3747,9 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
           audioUploadName: json.data.name,
           audioUploadWorkerId: form.workerId,
           audioName: file.name,
+          audioTrim: false,
+          audioStartSec: 0,
+          audioUseSec: 0,
           audioSeconds: null,
         });
       } else if (kind === 'video') {
@@ -3788,7 +3806,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
           prompt: form.clips[0]?.prompt ?? '',
           aspectRatio: form.aspectRatio,
           megapixels: form.megapixels,
-          audioLocked: form.audioLocked,
+          audioLocked: form.clips.some((item) => item.audioLocked && !!(item.audioFileId || item.audioUploadName)),
           shareAudio: form.shareAudio,
           videoLocked: form.videoLocked,
           shareVideo: form.shareVideo,
@@ -3800,6 +3818,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
             audioFileId: item.audioFileId,
             audioUploadName: item.audioUploadName,
             audioUploadWorkerId: item.audioUploadWorkerId,
+            audioLocked: item.audioLocked,
             audioTrim: item.audioTrim,
             audioStartSec: item.audioTrim ? item.audioStartSec : null,
             audioUseSec: item.audioTrim ? item.audioUseSec : null,
@@ -4145,9 +4164,9 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                   const span = h3Seconds(item);
                   const slice = item.videoTrim && item.videoUseSec > 0 ? Math.min(span, item.videoUseSec) : span;
                   return (
-                    <div key={`${item.key}-video`} className="min-w-[5.5rem]" style={{ flex: span }}>
+                    <div key={`${item.key}-video`} className="group relative min-w-[5.5rem]" style={{ flex: span }}>
                       <div
-                        className={`flex max-w-full items-center rounded text-white ${i === index ? 'bg-orange-500' : 'bg-orange-800'}`}
+                        className={`flex max-w-full items-center rounded text-white ${item.videoFileId || item.videoUploadName ? 'pr-6' : ''} ${i === index ? 'bg-orange-500' : 'bg-orange-800'}`}
                         style={{ width: `${Math.max(18, (slice / span) * 100)}%` }}
                       >
                         <button
@@ -4181,6 +4200,20 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                           }}
                         />
                       </div>
+                      {item.videoFileId || item.videoUploadName ? (
+                        <button
+                          type="button"
+                          title={`Remove reference video from segment ${i + 1}`}
+                          aria-label={`Remove reference video from segment ${i + 1}`}
+                          className="absolute right-0.5 top-0.5 z-10 grid h-5 w-5 place-items-center rounded bg-black/80 text-sm font-semibold text-white opacity-100 transition-colors hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+                          onClick={() => {
+                            setSelected(i);
+                            clearReferenceVideo(i);
+                          }}
+                        >
+                          ×
+                        </button>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -4190,9 +4223,9 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                   const span = h3Seconds(item);
                   const slice = item.audioTrim && item.audioUseSec > 0 ? Math.min(span, item.audioUseSec) : span;
                   return (
-                    <div key={`${item.key}-audio`} className="min-w-[5.5rem]" style={{ flex: span }}>
+                    <div key={`${item.key}-audio`} className="group relative min-w-[5.5rem]" style={{ flex: span }}>
                       <div
-                        className={`flex max-w-full items-center rounded text-white ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
+                        className={`flex max-w-full items-center rounded text-white ${item.audioFileId || item.audioUploadName ? 'pr-6' : ''} ${i === index ? 'bg-sky-500' : 'bg-sky-900'}`}
                         style={{ width: `${Math.max(18, (slice / span) * 100)}%` }}
                       >
                         <button
@@ -4205,9 +4238,9 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                         </button>
                         <TrackMarks
                           share={form.shareAudio}
-                          locked={form.audioLocked}
-                          shareLabel="Use this audio on every segment"
-                          lockLabel={form.audioLocked ? 'Audio is locked when every segment has a file' : 'A segment with no file lets MiniMax make the sound'}
+                          locked={item.audioLocked && !!(item.audioFileId || item.audioUploadName)}
+                          shareLabel={form.shareAudio ? 'Stop sharing and remove the copied audio from other segments' : 'Share this audio across all segments'}
+                          lockLabel={item.audioLocked && (item.audioFileId || item.audioUploadName) ? 'Keep this source audio in segment ' + (i + 1) : 'Let MiniMax generate audio for segment ' + (i + 1)}
                           onShare={() => {
                             setSelected(i);
                             setForm((current) => {
@@ -4216,16 +4249,33 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                               return {
                                 ...current,
                                 shareAudio,
-                                clips: shareAudio ? current.clips.map((row) => ({ ...row, ...h3AudioFields(item) })) : current.clips,
+                                clips: shareAudio ? shareH3Audio(current.clips, i) : unshareH3Audio(current.clips, i),
                               };
                             });
                           }}
                           onLock={() => {
                             setSelected(i);
-                            setForm((current) => (current ? { ...current, audioLocked: !current.audioLocked } : current));
+                            setForm((current) => !current ? current : {
+                              ...current,
+                              clips: current.clips.map((row, j) => j === i ? { ...row, audioLocked: !!(row.audioFileId || row.audioUploadName) && !row.audioLocked } : row),
+                            });
                           }}
                         />
                       </div>
+                      {item.audioFileId || item.audioUploadName ? (
+                        <button
+                          type="button"
+                          title={form.shareAudio ? 'Remove shared audio from every segment' : `Remove audio from segment ${i + 1}`}
+                          aria-label={form.shareAudio ? 'Remove shared audio from every segment' : `Remove audio from segment ${i + 1}`}
+                          className="absolute right-0.5 top-0.5 z-10 grid h-5 w-5 place-items-center rounded bg-black/80 text-sm font-semibold text-white opacity-100 transition-colors hover:bg-red-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+                          onClick={() => {
+                            setSelected(i);
+                            clearAudio(i);
+                          }}
+                        >
+                          ×
+                        </button>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -4303,12 +4353,20 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
                     audioUploadName: null,
                     audioUploadWorkerId: null,
                     audioName: file.fileName,
+                    audioTrim: false,
+                    audioStartSec: 0,
+                    audioUseSec: 0,
                     audioSeconds: typeof file.tech?.durationMs === 'number' ? file.tech.durationMs / 1000 : null,
                     durationSec: clip.durationSec || (file.tech?.durationMs ? String(Math.round((file.tech.durationMs / 1000) * 100) / 100) : ''),
                   })
                 }
                 onUpload={(file) => void upload('audio', file, index)}
               />
+              {clip.audioFileId || clip.audioUploadName ? (
+                <p className="text-xs text-muted">{clip.audioLocked ? 'Source audio will be locked for this segment.' : 'Audio is a reference only; MiniMax generates this segment’s sound. Click its lock icon to preserve the audio.'}</p>
+              ) : (
+                <p className="text-xs text-muted">No audio here: MiniMax generates this segment’s sound. Click Share to copy an attached clip across segments.</p>
+              )}
               {clip.audioFileId || clip.audioUploadName ? (
                 <H3AudioTrim
                   clip={clip}

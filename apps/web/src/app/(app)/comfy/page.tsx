@@ -3530,7 +3530,7 @@ function H3Tab({ onHistory = () => {}, active = true }: { onHistory?: () => void
       shareAudio?: boolean;
       videoLocked?: boolean;
       shareVideo?: boolean;
-      segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName'> & {
+      segments: (Omit<H3Clip, 'key' | 'durationSec' | 'images' | 'audioName' | 'audioLocked'> & {
         durationSec: number | null;
         audioName?: string | null;
         videoName?: string | null;

@@ -20,7 +20,7 @@ describe('reference image staging across GPU workers', () => {
 
   it('verifies identical reference bytes on both GPUs and uses the input filename', async () => {
     const image = Buffer.from('the exact reference used for both models');
-    const fetchMock = vi.fn(async () => new Response(image, { status: 200 }));
+    const fetchMock = vi.fn(async (_url: URL) => new Response(Uint8Array.from(image), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const expectedHash = createHash('sha256').update(image).digest('hex');
     const first = await assertComfyImageMatches('http://100.85.189.23:8188', 'folder/portrait.png', image);
@@ -39,7 +39,7 @@ describe('reference image staging across GPU workers', () => {
   });
 
   it('refuses to render when the target GPU has a different image', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(Buffer.from('wrong image'), { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(Uint8Array.from(Buffer.from('wrong image')), { status: 200 })));
     await expect(assertComfyImageMatches('http://127.0.0.1:8188', 'ref.png', Buffer.from('reference'))).rejects.toThrow(/different reference image/);
   });
 

@@ -643,6 +643,48 @@ const UPLOAD_HINT = {
   video: 'Upload an mp4, mov, or webm video.',
 } as const;
 
+/** Uploaded assets must be content-addressed: reusing a filename must not overwrite a queued run's reference. */
+export function comfyInputName(bytes: Buffer, filename: string): string {
+  const base = (filename.split(/[/\\]/).pop() || 'file').replace(/[^A-Za-z0-9._-]+/g, '_').slice(-140);
+  return `cos_up_${createHash('sha256').update(bytes).digest('hex').slice(0, 20)}_${base}`;
+}
+
+/**
+ * Read back the exact input on the render worker before submitting a prompt.
+ * ComfyUI can accept an upload while a stale or conflicting filename still points at different pixels.
+ * Do not generate a misleading video if the reference cannot be verified.
+ */
+export async function assertComfyImageMatches(origin: string, name: string, expected: Buffer): Promise<string> {
+  const parts = name.replace(/\\/g, '/').split('/');
+  const filename = parts.pop();
+  if (!filename || parts.some((part) => !part || part === '.' || part === '..')) {
+    throw badRequest('The reference image has an invalid ComfyUI input filename.');
+  }
+  const uri = new URL('/view', origin);
+  uri.searchParams.set('filename', filename);
+  uri.searchParams.set('type', 'input');
+  if (parts.length) uri.searchParams.set('subfolder', parts.join('/'));
+  const expectedSha256 = createHash('sha256').update(expected).digest('hex');
+  let response: Response;
+  try {
+    response = await fetch(uri, { signal: AbortSignal.timeout(30_000) });
+  } catch {
+    throw badRequest('The GPU could not confirm its reference image. The video was not started.');
+  }
+  if (!response.ok) throw badRequest(`The GPU could not read its reference image (HTTP ${response.status}). The video was not started.`);
+  let actual: ArrayBuffer;
+  try {
+    actual = await response.arrayBuffer();
+  } catch {
+    throw badRequest('The GPU reference image could not be read back. The video was not started.');
+  }
+  const actualSha256 = createHash('sha256').update(Buffer.from(actual)).digest('hex');
+  if (actualSha256 !== expectedSha256) {
+    throw badRequest('The rendering GPU has a different reference image than the uploaded one. The video was not started.');
+  }
+  return expectedSha256;
+}
+
 /** Relative path of the copy kept here, so Generate can send it to a different PC. */
 export function comfyInputCopyRel(orgId: string, workerId: string, comfyName: string): string | null {
   if (!/^[0-9a-f-]{36}$/i.test(orgId) || !/^[0-9a-f-]{36}$/i.test(workerId)) return null;
@@ -709,7 +751,7 @@ export async function uploadLtxInput(
   if (file.bytes.byteLength > 250 * 1024 * 1024) throw badRequest('That file is over 250 MB, so it was not sent.');
   const base = (file.name.split(/[/\\]/).pop() || 'file').replace(/[^A-Za-z0-9._-]+/g, '_');
   if (!UPLOAD_EXT[kind].test(base)) throw badRequest(UPLOAD_HINT[kind]);
-  const name = await uploadToComfy(worker.baseUrl, { bytes: file.bytes, name: `cos_up_${base}`, mime: file.mime || 'application/octet-stream' });
+  const name = await uploadToComfy(worker.baseUrl, { bytes: file.bytes, name: comfyInputName(file.bytes, base), mime: file.mime || 'application/octet-stream' });
   await keepComfyInputCopy(ctx.env.attachmentsDir, ctx.orgId, worker.id, name, file.bytes);
   return { name, workerId: worker.id, label: worker.label };
 }
@@ -767,9 +809,24 @@ export async function submitLtxJob(db: Db, env: ServiceEnv, jobId: string) {
       .where(sql`${gpuWorkers.id} = ${settings.workerId ?? null} and ${gpuWorkers.orgId} = ${claimed.orgId}`)
       .limit(1);
     if (!worker?.enabled) throw badRequest('The PC for this job is no longer in the list.');
-    const imageName = settings.imageFileId
-      ? await uploadToComfy(worker.baseUrl, await readUpload(await openAgentFile(db, env, claimed.orgId, String(settings.imageFileId)), claimed.id))
-      : await fileForWorker(env.attachmentsDir, claimed.orgId, worker, { name: settings.imageUploadName, workerId: settings.imageUploadWorkerId });
+    // Stage the same authoritative image bytes on *each* GPU, even when AutoGen originally
+    // uploaded them to the other PC. Do not trust an existing filename or an upload response.
+    const originalImage = settings.imageFileId
+      ? await readUpload(await openAgentFile(db, env, claimed.orgId, String(settings.imageFileId)), claimed.id)
+      : null;
+    const copiedImage = !originalImage && settings.imageUploadName && settings.imageUploadWorkerId
+      ? await readComfyInputCopy(env.attachmentsDir, claimed.orgId, settings.imageUploadWorkerId, settings.imageUploadName)
+      : null;
+    if (!originalImage && !copiedImage) {
+      throw badRequest('The uploaded reference image has no saved server copy. Upload it again so both GPUs can use the same image.');
+    }
+    const imageUpload = originalImage ?? {
+      bytes: copiedImage!,
+      name: (settings.imageUploadName?.split(/[/\\]/).pop() || 'reference.png'),
+      mime: 'application/octet-stream',
+    };
+    const imageName = await uploadToComfy(worker.baseUrl, imageUpload);
+    const imageSha256 = await assertComfyImageMatches(worker.baseUrl, imageName, imageUpload.bytes);
     const audioName = settings.audioFileId
       ? await uploadToComfy(worker.baseUrl, await readUpload(await openAgentFile(db, env, claimed.orgId, String(settings.audioFileId)), claimed.id))
       : await fileForWorker(env.attachmentsDir, claimed.orgId, worker, { name: settings.audioUploadName, workerId: settings.audioUploadWorkerId });
@@ -822,7 +879,7 @@ export async function submitLtxJob(db: Db, env: ServiceEnv, jobId: string) {
     await db.execute(sql`
       update generation_jobs
       set prompt_id = ${body.prompt_id}, external_job_id = ${body.prompt_id},
-          settings = settings || ${JSON.stringify({ filenamePrefix: prefix, seed })}::jsonb,
+          settings = settings || ${JSON.stringify({ filenamePrefix: prefix, seed, imageSha256, stagedImageName: imageName })}::jsonb,
           updated_at = now()
       where id = ${claimed.id}`);
     return { promptId: body.prompt_id };

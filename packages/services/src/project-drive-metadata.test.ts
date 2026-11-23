@@ -12,6 +12,13 @@ describe('project social metadata contract', () => {
   it('generates stable per-video per-account names', () => {
     expect(metadataFileName(itemId, accountId)).toBe(`meta__${itemId}__${accountId}.json`);
   });
+  it('defaults YouTube Shorts metadata to 9:16 and accepts platform aspect hints', () => {
+    expect(raw.contentForm).toBe('SHORT');
+    expect(raw.thumbnail.aspect).toBe('9:16');
+    expect(metadataTemplate(projectId, { ...expected, platform: 'instagram' }).thumbnail.aspect).toBe('9:16');
+    expect(metadataTemplate(projectId, { ...expected, platform: 'facebook' }).thumbnail.aspect).toBe('1.91:1');
+    expect(parseSocialMetadata({ ...raw, thumbnail: { ...raw.thumbnail, aspect: '9:16' } }, expected).thumbnail?.aspect).toBe('9:16');
+  });
   it('begins as an inactive placeholder and uses private YouTube defaults', () => {
     expect(raw.ready).toBe(false);
     expect(raw.privacy).toBe('PRIVATE');

@@ -2,6 +2,7 @@ import { and, desc, eq, projectDriveSyncs, providerConnections, sql, type Db } f
 import { ensureFreshToken, refreshGoogleToken, GOOGLE_SCOPES } from '@creatoros/connectors';
 import { connectorContext, loadCredentials } from './integrations';
 import { openAgentFile } from './agent-file';
+import { uploadDriveStream } from './drive-resumable';
 import { audit } from './audit';
 import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 import { parseSocialMetadata, metadataFileName, metadataTemplate, type SocialMetadata } from './project-drive-metadata';
@@ -176,34 +177,53 @@ async function uploadVideo(
     throw badRequest('Google Drive did not issue a valid resumable upload URL.');
   }
   const token = await driveToken(db, env, orgId);
-  const response = await fetch(location, {
-    method: 'PUT',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': mime,
-      'content-length': String(source.size),
-      'content-range': `bytes 0-${source.size - 1}/${source.size}`,
-    },
-    body: source.body,
-    duplex: 'half',
-    signal: AbortSignal.timeout(30 * 60_000),
-  } as RequestInit & { duplex: 'half' });
-  if (!response.ok) {
-    throw badRequest(`Google Drive upload failed for ${video.fileName} (HTTP ${response.status}): ${(await response.text()).slice(0, 200)}`);
+  // Bounded 8-MiB requests: never reuse/forward the scanner agent's original Response.body.
+  // A transfer only counts as successful after Google confirms the exact upload size.
+  const item = await uploadDriveStream(location, token, source.body, source.size, mime);
+  const metadata = await jsonDrive<{ id: string; size?: string; appProperties?: Record<string, string> }>(
+    db, env, orgId,
+    `${DRIVE}/${encodeURIComponent(item.id)}?fields=id,size,appProperties`,
+  );
+  if (metadata.id !== item.id || Number(metadata.size) !== source.size ||
+    metadata.appProperties?.kemokemFileInstanceId !== video.fileInstanceId) {
+    throw badRequest(`Drive upload verification failed for ${video.fileName}; the file will be retried.`);
   }
-  const item = await response.json() as DriveItem;
   known.push(item);
 }
 
+/**
+ * A project's assets include publishing videos, linked logical-asset files, the
+ * project's song, and files attached to roots explicitly assigned to this project.
+ * Publishing item IDs are preserved where available so social drafts still match.
+ */
 async function projectVideos(db: Db, orgId: string, projectId: string): Promise<SyncVideo[]> {
   return rowsOf<SyncVideo>(await db.execute(sql`
-    select i.id as "itemId", i.file_instance_id as "fileInstanceId", f.file_name as "fileName",
-           f.size::float8 as size, f.mime
-    from publish_items i
-    join distribution_variants v on v.id = i.variant_id
-    join file_instances f on f.id = i.file_instance_id
-    where v.org_id = ${orgId} and v.project_id = ${projectId}
-    order by i.created_at, i.id
+    with candidates as (
+      select i.id as "itemId", i.file_instance_id as "fileInstanceId", 0 as priority
+      from publish_items i join distribution_variants v on v.id = i.variant_id
+      where i.org_id=${orgId} and v.org_id=${orgId} and v.project_id=${projectId}
+      union all
+      select f.id, f.id, 1
+      from file_instances f
+      join asset_file_links l on l.file_instance_id=f.id
+      join asset_versions av on av.id=l.asset_version_id
+      join logical_assets a on a.id=av.asset_id
+      where f.org_id=${orgId} and a.org_id=${orgId} and a.project_id=${projectId}
+      union all
+      select f.id, f.id, 2
+      from file_instances f join storage_roots r on r.id=f.root_id
+      where f.org_id=${orgId} and r.org_id=${orgId} and r.project_id=${projectId}
+      union all
+      select f.id, f.id, 3
+      from file_instances f join creative_projects p on p.song_file_id=f.id
+      where f.org_id=${orgId} and p.org_id=${orgId} and p.id=${projectId}
+    )
+    select distinct on (c."fileInstanceId")
+      c."itemId", c."fileInstanceId", f.file_name as "fileName",
+      f.size::float8 as size, f.mime
+    from candidates c join file_instances f on f.id=c."fileInstanceId"
+    where f.org_id=${orgId} and f.archived_at is null
+    order by c."fileInstanceId", c.priority, c."itemId"
   `));
 }
 
@@ -236,7 +256,7 @@ export async function startProjectDriveSync(ctx: Ctx, projectId: string, selecte
   if (!project) throw notFound('Project');
   await driveToken(ctx.db, ctx.env, ctx.orgId);
   const videos = await projectVideos(ctx.db, ctx.orgId, projectId);
-  if (!videos.length) throw badRequest('Link at least one video in the project Assets tab before Drive Sync.');
+  if (!videos.length) throw badRequest('No linked project files found. Link project assets or assign a project media folder before Drive Sync.');
   const unique = [...new Set(selectedItemIds)];
   if (unique.some((id) => !videos.some((item) => item.itemId === id))) throw badRequest('One selected video does not belong to this project.');
   const chosen = unique.length ? videos.filter((item) => unique.includes(item.itemId)) : videos;
@@ -291,8 +311,9 @@ export async function processProjectDriveSync(db: Db, env: ServiceEnv) {
     }
     await updateManifest(db, env, job.orgId, folder.id, known, {
       schemaVersion: 1, projectId: job.projectId, projectName: job.folderName,
-      instructions: 'Edit each meta__*.json placeholder with ready=true and platform-specific metadata. Preserve IDs. Kemokem imports only ready=true.',
-      videos: videos.map((v) => ({ publishItemId: v.itemId, fileInstanceId: v.fileInstanceId, fileName: v.fileName })),
+      instructions: 'Media include video, audio, image and other project files. Edit each meta__*.json with ready=true only after analysis. Preserve all IDs.',
+      assets: videos.map((v) => ({ publishItemId: v.itemId === v.fileInstanceId ? null : v.itemId, fileInstanceId: v.fileInstanceId, fileName: v.fileName })),
+      videos: videos.filter((v) => v.itemId !== v.fileInstanceId).map((v) => ({ publishItemId: v.itemId, fileInstanceId: v.fileInstanceId, fileName: v.fileName })),
       metadataFiles: targets.map((t) => ({ name: metadataFileName(t.itemId, t.accountId), publishItemId: t.itemId, socialAccountId: t.accountId, platform: t.platform })),
     });
     for (const target of targets) {

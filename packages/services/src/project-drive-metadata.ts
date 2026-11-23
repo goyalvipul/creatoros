@@ -25,6 +25,13 @@ export const socialMetadataSchema = z.object({
   contentForm: z.string().max(80).nullable().optional(),
   playlistIds: z.array(z.string().max(80)).max(20).default([]),
   aiUse: z.enum(['YES', 'NO']).nullable().optional(),
+  /** ChatGPT's proposed cover copy; used by the per-social thumbnail designer. */
+  thumbnail: z.object({
+    headline: z.string().max(90),
+    subheadline: z.string().max(55),
+    style: z.enum(['cinematic', 'bold', 'minimal']),
+    focalX: z.number().min(0).max(1).default(0.5),
+  }).optional(),
 }).strict();
 
 export function metadataTemplate(projectId: string, target: {
@@ -46,6 +53,7 @@ export function metadataTemplate(projectId: string, target: {
     contentForm: target.platform === 'youtube' ? 'SHORT' : target.platform === 'instagram' ? 'REEL' : null,
     playlistIds: [],
     aiUse: 'YES',
+    thumbnail: { headline: '', subheadline: 'MEHAK THAKUR · NEW MUSIC', style: 'cinematic', focalX: 0.5 },
   };
 }
 

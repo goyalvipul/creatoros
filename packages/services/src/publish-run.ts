@@ -39,6 +39,7 @@ import { notify } from './notifications';
 import { audit } from './audit';
 import { signMediaToken } from './crypto';
 import { readPublishCover, signCoverToken } from './publish-cover';
+import { readSocialCover, signSocialCoverToken } from './social-cover';
 import { openAgentFile } from './agent-file';
 import { placeVideoOnPlaylists } from './youtube-playlists';
 import { connectorContext, loadCredentials } from './integrations';
@@ -733,7 +734,8 @@ export async function executePublish(
       await ctx.db.execute(sql`
         select cover_source as source, cover_offset_ms as "atMs" from publish_items where id = ${item.id}`),
     )[0];
-    const coverFile = coverRow?.source ? await readPublishCover(ctx, item.id, ctx.orgId) : null;
+    const socialCover = await readSocialCover(ctx, ctx.orgId, item.id, account.id);
+    const coverFile = socialCover ?? (coverRow?.source ? await readPublishCover(ctx, item.id, ctx.orgId) : null);
     const coverBytes = coverFile ? new Uint8Array(coverFile.bytes) : null;
     const youtube =
       account.platform === 'youtube'
@@ -759,8 +761,9 @@ export async function executePublish(
       const videoUrl = `${base}/api/v1/files/${item.fileInstanceId}/stream?token=${encodeURIComponent(mediaToken)}`;
       if (typeof (file.body as ReadableStream).cancel === 'function')
         await (file.body as ReadableStream).cancel().catch(() => undefined);
-      const coverUrl =
-        coverRow?.source === 'upload' && coverFile
+      const coverUrl = socialCover
+        ? `${base}/api/v1/publish-items/${item.id}/social-covers/${account.id}?token=${encodeURIComponent(signSocialCoverToken(ctx.env.agentPairingSecret, ctx.orgId, item.id, account.id, exp))}`
+        : coverRow?.source === 'upload' && coverFile
           ? `${base}/api/v1/publish-items/${item.id}/cover?token=${encodeURIComponent(signCoverToken(ctx.env.agentPairingSecret, item.id, exp))}`
           : null;
       result = await uploadInstagramReel(fetchImpl, {

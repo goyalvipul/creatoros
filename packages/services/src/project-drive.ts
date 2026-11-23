@@ -331,7 +331,7 @@ export async function uploadProjectSocialMetadata(
   for (const { driveId, meta } of checked) {
     await driveFetch(ctx.db, ctx.env, ctx.orgId, `${DRIVE_UPLOAD}/${encodeURIComponent(driveId)}?uploadType=media`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(meta, null, 2) + '\\n',
+      body: JSON.stringify(meta, null, 2) + '\n',
     });
   }
   await audit(ctx, 'project.drive.metadata.uploaded', { type: 'project', id: projectId }, undefined, { count: checked.length });

@@ -457,7 +457,7 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     params: idParam, bodyLimit: 2 * 1024 * 1024,
     body: z.object({
       files: z.array(z.object({
-        name: z.string().regex(/^meta__[0-9a-f-]{36}__[0-9a-f-]{36}\\.json$/),
+        name: z.string().regex(/^meta__[0-9a-f-]{36}__[0-9a-f-]{36}\.json$/),
         data: z.unknown(),
       })).min(1).max(40),
     }),

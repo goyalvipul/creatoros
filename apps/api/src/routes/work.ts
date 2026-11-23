@@ -1360,7 +1360,7 @@ export function workRoutes(app: FastifyInstance, deps: AppDeps) {
       tag: 'Integrations',
       summary: 'Begin OAuth (PKCE). Returns the consent URL; nothing is connected until you approve.',
       role: 'OWNER',
-      params: z.object({ provider: z.enum(['gmail', 'youtube', 'instagram', 'facebook', 'tiktok', 'threads', 'snapchat']) }),
+      params: z.object({ provider: z.enum(['google', 'gmail', 'youtube', 'instagram', 'facebook', 'tiktok', 'threads', 'snapchat']) }),
       body: z.object({
         publish: z.boolean().optional(),
         comments: z.boolean().optional(),

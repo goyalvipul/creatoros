@@ -31,6 +31,7 @@ export const socialMetadataSchema = z.object({
     subheadline: z.string().max(55),
     style: z.enum(['cinematic', 'bold', 'minimal']),
     focalX: z.number().min(0).max(1).default(0.5),
+    aspect: z.enum(['9:16', '16:9', '4:5', '1.91:1']).optional(),
   }).optional(),
 }).strict();
 
@@ -53,7 +54,15 @@ export function metadataTemplate(projectId: string, target: {
     contentForm: target.platform === 'youtube' ? 'SHORT' : target.platform === 'instagram' ? 'REEL' : null,
     playlistIds: [],
     aiUse: 'YES',
-    thumbnail: { headline: '', subheadline: 'MEHAK THAKUR · NEW MUSIC', style: 'cinematic', focalX: 0.5 },
+    thumbnail: {
+      headline: '',
+      subheadline: 'MEHAK THAKUR · NEW MUSIC',
+      style: 'cinematic',
+      focalX: 0.5,
+      aspect: target.platform === 'youtube' || target.platform === 'instagram' || target.platform === 'tiktok'
+        ? '9:16'
+        : target.platform === 'threads' ? '4:5' : '1.91:1',
+    },
   };
 }
 

@@ -51,6 +51,9 @@ import {
   savePublishCover,
   clearPublishCover,
   readPublishCover,
+  saveSocialCover,
+  readSocialCover,
+  verifySocialCoverToken,
   verifyCoverToken,
   linkPublishFile,
   detectNearDuplicates,
@@ -1059,6 +1062,12 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, params }) => unlinkPublishFile(ctx, params.id, params.itemId),
   );
+  route({
+    method: 'POST', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
+    summary: 'Save an independent custom cover for one video on one social account',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }), bodyLimit: 4 * 1024 * 1024,
+    body: z.object({ data: z.string().min(16).max(3_000_000) }),
+  }, ({ ctx, params, body }) => saveSocialCover(ctx, params.id, params.itemId, params.accountId, body.data));
   route(
     {
       method: 'POST',
@@ -1311,6 +1320,19 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, query }) => calendar(ctx, query.from, query.to, query.tz, query.brandId),
   );
+
+  app.get('/publish-items/:id/social-covers/:accountId', async (req, reply) => {
+    const { id, accountId } = z.object({ id: uuid, accountId: uuid }).parse(req.params);
+    const token = (req.query as { token?: string }).token;
+    const signed = token ? verifySocialCoverToken(deps.config.env.agentPairingSecret, token) : null;
+    if (!req.session && (!signed || signed.itemId !== id || signed.accountId !== accountId)) throw unauthorized();
+    const orgId = req.session?.orgId ?? signed!.orgId;
+    const file = await readSocialCover({ db, env: deps.config.env }, orgId, id, accountId);
+    if (!file) return reply.status(404).send();
+    reply.header('content-type', file.mime);
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.send(file.bytes);
+  });
 
   app.get('/publish-items/:id/cover', async (req, reply) => {
     const { id } = idParam.parse(req.params);

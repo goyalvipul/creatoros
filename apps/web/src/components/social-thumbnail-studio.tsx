@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Dialog, Input } from '@/components/ui';
-import { post, refresh } from '@/lib/api';
+import { api, post, refresh } from '@/lib/api';
 
 type CoverStyle = 'cinematic' | 'bold' | 'minimal';
 const FORMATS: Record<string, { w: number; h: number; label: string }> = {
@@ -55,6 +55,20 @@ export function SocialThumbnailStudio({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const format = FORMATS[platform] ?? FORMATS.youtube!;
+
+  useEffect(() => {
+    let cancelled = false;
+    void api<{ headline: string; subheadline: string; style: CoverStyle; focalX: number } | null>(
+      `/projects/${projectId}/social-covers/${itemId}/${accountId}/brief`,
+    ).then((brief) => {
+      if (!brief || cancelled) return;
+      if (brief.headline.trim()) setHeadline(brief.headline);
+      setSubhead(brief.subheadline);
+      setStyle(brief.style);
+      setFocalX(brief.focalX);
+    }).catch(() => undefined); // Missing analysis falls back to editable video title.
+    return () => { cancelled = true; };
+  }, [projectId, itemId, accountId]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;

@@ -62,3 +62,4 @@ export * from './live-studio';
 export * from './live-server';
 export * from './project-drive';
 export * from './project-drive-metadata';
+export * from './social-cover';

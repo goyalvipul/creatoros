@@ -207,6 +207,15 @@ async function projectVideos(db: Db, orgId: string, projectId: string): Promise<
   `));
 }
 
+/** Video selection does not depend on a connected social account. */
+export async function getProjectDriveAssets(ctx: Ctx, projectId: string) {
+  const [project] = rowsOf<{ id: string }>(await ctx.db.execute(sql`
+    select id from creative_projects where id=${projectId} and org_id=${ctx.orgId} and deleted_at is null
+  `));
+  if (!project) throw notFound('Project');
+  return projectVideos(ctx.db, ctx.orgId, projectId);
+}
+
 async function socialTargets(db: Db, orgId: string, projectId: string): Promise<SocialTarget[]> {
   return rowsOf<SocialTarget>(await db.execute(sql`
     select i.id as "itemId", i.file_instance_id as "fileInstanceId", f.file_name as "fileName",

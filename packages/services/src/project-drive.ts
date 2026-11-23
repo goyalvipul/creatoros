@@ -35,10 +35,10 @@ type SocialTarget = {
   platform: string;
 };
 
-/** A dedicated Drive grant is opt-in and stored encrypted in the existing Google (Gmail) connection. */
+/** A dedicated Drive grant is opt-in and stored encrypted in its own Google Drive connection. */
 async function driveToken(db: Db, env: ServiceEnv, orgId: string) {
   const [conn] = await db.select().from(providerConnections)
-    .where(and(eq(providerConnections.orgId, orgId), eq(providerConnections.provider, 'gmail')))
+    .where(and(eq(providerConnections.orgId, orgId), eq(providerConnections.provider, 'google')))
     .orderBy(desc(providerConnections.updatedAt)).limit(1);
   if (!conn) throw badRequest('Connect Google Drive from the Drive Sync panel before syncing.');
   const credentials = loadCredentials(env, conn);

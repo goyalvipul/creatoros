@@ -368,6 +368,26 @@ export async function uploadProjectSocialMetadata(
   return { uploaded: checked.length };
 }
 
+/** Fetch only a validated cover design brief from an app-owned Drive metadata placeholder. */
+export async function getProjectThumbnailBrief(ctx: Ctx, projectId: string, itemId: string, accountId: string) {
+  const status = await projectDriveStatus(ctx, projectId);
+  if (!status.job?.folderId) throw notFound('Drive project folder');
+  const target = (await socialTargets(ctx.db, ctx.orgId, projectId))
+    .find((t) => t.itemId === itemId && t.accountId === accountId);
+  if (!target) throw notFound('Video and social account');
+  const name = metadataFileName(itemId, accountId);
+  const files = await listDriveFiles(ctx.db, ctx.env, ctx.orgId, `'${quoted(status.job.folderId)}' in parents and trashed=false`);
+  const file = files.find((f) => f.name === name && f.appProperties?.kemokemType === 'socialMetadata');
+  if (!file) throw notFound('Thumbnail brief');
+  const response = await driveFetch(ctx.db, ctx.env, ctx.orgId, `${DRIVE}/${encodeURIComponent(file.id)}?alt=media`);
+  const raw = await response.text();
+  if (raw.length > 100_000) throw badRequest('Thumbnail metadata is too large.');
+  const meta = parseSocialMetadata(JSON.parse(raw), {
+    projectId, itemId, accountId, fileInstanceId: target.fileInstanceId, fileName: target.fileName, platform: target.platform,
+  });
+  return meta.ready ? meta.thumbnail ?? null : null;
+}
+
 /** Import metadata only for the exact project + video + account. Never replace scheduled/published drafts. */
 export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
   const status = await projectDriveStatus(ctx, projectId);

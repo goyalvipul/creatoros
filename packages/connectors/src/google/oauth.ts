@@ -16,6 +16,8 @@ export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export const GOOGLE_SCOPES = {
   identity: ['openid', 'email'],
   gmailRead: ['https://www.googleapis.com/auth/gmail.readonly'],
+  /** Only files Kemokem creates or the user explicitly opens with Kemokem. */
+  driveFile: ['https://www.googleapis.com/auth/drive.file'],
   gmailDrafts: ['https://www.googleapis.com/auth/gmail.compose'],
   /** Send replies from inside Creator OS. Opt-in; needs a reconnect. */
   gmailSend: ['https://www.googleapis.com/auth/gmail.send'],

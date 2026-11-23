@@ -1,5 +1,6 @@
 import type { Provider } from '@creatoros/domain';
 import { GmailConnector } from './google/gmail';
+import { GoogleDriveConnector } from './google/drive';
 import { YouTubeConnector } from './google/youtube';
 import { TodoConnector } from './todo';
 import { InstagramLoginConnector } from './meta/instagram';
@@ -26,11 +27,7 @@ const facebook = new GatedConnector(
 );
 const threads = new ThreadsConnector();
 const snapchat = new SnapchatConnector();
-const google = new GatedConnector(
-  'google',
-  ['"google" is an umbrella OAuth client. Connect Gmail and YouTube individually.'],
-  ['Open Integrations and connect Gmail and/or YouTube.'],
-);
+const google = new GoogleDriveConnector();
 const manual = new GatedConnector(
   'manual',
   ['Manual intake is always available and needs no connector.'],

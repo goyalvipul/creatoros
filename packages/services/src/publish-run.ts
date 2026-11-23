@@ -772,7 +772,7 @@ export async function executePublish(
         accessToken: token,
         caption,
         videoUrl,
-        thumbOffsetMs: coverRow?.source === 'frame' ? coverRow.atMs : null,
+        thumbOffsetMs: socialCover ? null : coverRow?.source === 'frame' ? coverRow.atMs : null,
         coverUrl,
         trial: claimed.contentForm === 'TRIAL',
         aiGenerated: claimed.aiUse === 'YES',

@@ -12,20 +12,20 @@ The `drive.file` scope is intentionally narrow: Kemokem can access files it crea
 
 ## Drive Sync
 
-- Open Production → project → Assets, select zero or more linked videos. With nothing checked, all linked publishable videos in this project are synced.
+- Open Production → project → Assets, select zero or more project files. With nothing checked, all linked publishing videos, linked logical-asset files (including audio/images/documents), the project song file, and files in project-assigned storage roots are synced. This may be many large files: select specific files if you want only finished exports.
 - Click **Drive Sync**. The browser shows QUEUED/RUNNING and uploads completed, polled from a persistent database job.
 - The worker finds the project folder by its immutable Kemokem project ID (renaming the folder does not create a duplicate); creates a folder named after the project on first use.
-- It streams each linked video from the owning scanner-agent into Google Drive using a resumable upload session, avoiding memory buffering and preserving the original local video.
+- It reads each file from the owning scanner-agent, sends it in independent 8-MiB chunks through a resumable Drive upload session, and verifies the uploaded Drive file's size and source ID before counting the file complete. The original media stays on its PC. A failed job can be requeued; already verified files are skipped.
 - Subsequent syncs skip already-linked Drive files. `kemokem-manifest.json` is refreshed; existing `meta__*.json` analysis files are never overwritten.
 - If the worker reports FAILED, fix the cause and start a new sync. Project progress is saved in the database.
 
-Only published-linked video assets appear in this version. Raw audio, source images and arbitrary Library attachments are not synced by this first implementation.
+Only assets explicitly associated with this project (publishing files, logical-asset links, project song and project-assigned storage roots) are synced. Unlinked, unrelated Library files are intentionally excluded. Drive Sync may fail while an owning Windows machine is offline, and the UI will display the specific failure.
 
 ## Analysis contract
 
 Inside the Drive project folder:
 
-- `kemokem-manifest.json`: video filenames, stable `publishItemId` and `fileInstanceId`, and each supported social account's metadata filename.
+- `kemokem-manifest.json`: an `assets` list of all selected files; a `videos` list of files attached to publishing titles, their stable `publishItemId` and `fileInstanceId`; and each supported social account's metadata filename.
 - `meta__<publishItemId>__<socialAccountId>.json`: one editable JSON template for each video/social account.
 
 Every JSON template contains:
@@ -76,3 +76,16 @@ Scheduling is not publication: the existing worker publishes at the due time. Pl
 - This integration does **not** automatically invoke ChatGPT or analyze the videos in the background. The owner returns to ChatGPT and explicitly requests analysis.
 - Google Drive's `drive.file` grants access only to app-created files, which is why pre-created placeholders and stable IDs are important.
 - Do not put refresh tokens or Google secrets in project metadata.
+
+## Customized thumbnails for each social account
+
+After Prefill socials, open **Schedule videos**, and click **Design cover** beside any platform/account.
+- The designer extracts a real frame from that video, builds the platform-specific size, and lets you edit the big headline, supporting text, style (cinematic, bold, minimal), framing and frame timestamp. You may instead upload your own JPEG/PNG/WebP (under 2 MB).
+- Each design is saved **per publish item and social account**. A YouTube cover cannot overwrite the Instagram cover for that video.
+- ChatGPT can suggest different thumbnail headlines/subheadlines/styles for every video/social using the optional `thumbnail` object in each `meta__*.json`. The designer loads this when the metadata file is ready.
+- YouTube (including supported Shorts), Facebook and Instagram publishing use the account-specific cover if saved, falling back to the existing shared video cover. Platform APIs may not allow an arbitrary cover in TikTok and Threads; their customized design remains downloadable and is not falsely reported as published. Verify the actual cover on the destination platform.
+- For YouTube, optimize a 16:9 hook-first thumbnail with Mehak's authentic face clearly visible, concise high-contrast text and no false claims. Shorts custom thumbnail support and eligibility may differ from long-form videos, and YouTube may require video processing to complete before a custom cover is applied.
+
+### Validation
+
+Do not merge based solely on TypeScript/unit-test CI. For a project with media across both RTX 3090 and 3060, run an all-assets sync with both scanner agents online. Confirm every manifest asset has a matching Drive file and size, retry an interrupted transfer, import JSON, save two different social covers for the same video, and schedule a test post without publishing immediately.

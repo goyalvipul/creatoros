@@ -42,6 +42,7 @@ import {
   prefillProjectSocials,
   uploadProjectSocialMetadata,
   getProjectScheduleRows,
+  getProjectDriveAssets,
   createRecord,
   createSocialAccount,
   createVariant,
@@ -441,6 +442,10 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
 
   // ================================================================ projects
   // Project Drive Sync and social metadata import never publish anything.
+  route({
+    method: 'GET', url: '/projects/:id/drive/assets', tag: 'Production', role: 'OWNER',
+    summary: 'Linked video files eligible for Google Drive Sync', params: idParam,
+  }, ({ ctx, params }) => getProjectDriveAssets(ctx, params.id));
   route({
     method: 'GET', url: '/projects/:id/drive', tag: 'Production', role: 'OWNER',
     summary: 'Drive connection and latest project sync progress', params: idParam,

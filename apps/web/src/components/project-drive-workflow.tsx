@@ -59,6 +59,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [error, setError] = useState('');
   const [dates, setDates] = useState<Record<string, string>>({});
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [metadataBusy, setMetadataBusy] = useState(false);
   const items = useMemo(() => uniqueVideos(drafts.data ?? []), [drafts.data]);
   const scheduledRows = (drafts.data ?? []).filter(canPrepare);
   const running = drive.data?.job?.status === 'QUEUED' || drive.data?.job?.status === 'RUNNING';
@@ -86,6 +87,21 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
       setNotice('Drive Sync queued. Uploads continue on the server until finished.');
     } catch (e) { setError(e instanceof Error ? e.message : 'Drive Sync did not start.'); }
     finally { setBusy(null); }
+  }
+
+  async function uploadJsonFiles(input: FileList | null) {
+    if (!input?.length) return;
+    setMetadataBusy(true); setError(''); setNotice('');
+    try {
+      if (input.length > 40) throw new Error('Upload no more than 40 metadata JSON files at once.');
+      const files = await Promise.all(Array.from(input).map(async (file) => {
+        if (file.size > 100_000) throw new Error(`${file.name} is too large.`);
+        return { name: file.name, data: JSON.parse(await file.text()) };
+      }));
+      const result = await post<{ uploaded: number }>(`/projects/${projectId}/drive/metadata`, { files });
+      setNotice(`Saved ${result.uploaded} analyzed JSON files into the Drive project folder. Press Prefill socials to import.`);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Could not upload the JSON analysis.'); }
+    finally { setMetadataBusy(false); }
   }
 
   async function prefill() {
@@ -168,6 +184,17 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
         <Button variant="primary" busy={busy === 'sync' || Boolean(running)} disabled={!drive.data?.configured || items.length === 0 || Boolean(running)} onClick={() => void sync()}>
           {running ? `Processing ${drive.data?.job?.completed ?? 0}/${drive.data?.job?.total ?? 0}` : 'Drive Sync'}
         </Button>
+        <label className={`cursor-pointer rounded-md border border-border px-3 py-2 text-sm ${drive.data?.job?.status !== 'COMPLETE' || metadataBusy ? 'opacity-50' : ''}`}>
+          {metadataBusy ? 'Uploading JSON…' : 'Upload analysis JSON'}
+          <input type="file" multiple accept=".json,application/json" className="sr-only"
+            disabled={drive.data?.job?.status !== 'COMPLETE' || metadataBusy}
+            onChange={(e) => {
+              const files = e.target.files;
+              void uploadJsonFiles(files);
+              e.target.value = '';
+            }}
+          />
+        </label>
         <Button busy={busy === 'prefill'} disabled={drive.data?.job?.status !== 'COMPLETE' || Boolean(running)} onClick={() => void prefill()}>
           Prefill socials
         </Button>

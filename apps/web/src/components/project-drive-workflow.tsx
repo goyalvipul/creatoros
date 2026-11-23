@@ -261,6 +261,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
           fileName={coverFor.fileName}
           title={coverFor.title || ''}
           platform={coverFor.platform}
+          contentForm={coverFor.contentForm ?? undefined}
           onClose={() => setCoverFor(null)}
           onSaved={() => {
             setSavedCovers((items) => [...new Set([...items, keyOf(coverFor)])]);

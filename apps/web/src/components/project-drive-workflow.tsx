@@ -54,6 +54,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [metadataBusy, setMetadataBusy] = useState(false);
   const items = useMemo(() => assets.data ?? [], [assets.data]);
   const scheduledRows = (drafts.data ?? []).filter(canPrepare);
+  const readyVideos = items.filter((video) => scheduledRows.some((row) => row.itemId === video.itemId));
   const running = drive.data?.job?.status === 'QUEUED' || drive.data?.job?.status === 'RUNNING';
 
   useEffect(() => {
@@ -114,7 +115,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
     let count = 0;
     const problems: string[] = [];
     for (const row of chosen) {
-      const idx = items.findIndex((video) => video.itemId === row.itemId);
+      const idx = readyVideos.findIndex((video) => video.itemId === row.itemId);
       const plannedLocal = dates[row.itemId] ?? tomorrowByZone(zone, idx + 1);
       try {
         await post('/publishing/schedule', {
@@ -205,7 +206,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
             Every social account for the same video shares its date; uncheck any account you do not want to schedule.
             Scheduling is final only when you press Confirm schedule.
           </p>
-          {items.map((video, idx) => {
+          {readyVideos.map((video, idx) => {
             const options = scheduledRows.filter((row) => row.itemId === video.itemId);
             if (!options.length) return null;
             return (

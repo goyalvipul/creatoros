@@ -40,6 +40,7 @@ import {
   startProjectDriveSync,
   projectDriveStatus,
   prefillProjectSocials,
+  uploadProjectSocialMetadata,
   getProjectScheduleRows,
   createRecord,
   createSocialAccount,
@@ -450,6 +451,17 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     params: idParam, status: 202,
     body: z.object({ itemIds: z.array(uuid).max(200).default([]) }),
   }, ({ ctx, params, body }) => startProjectDriveSync(ctx, params.id, body.itemIds));
+  route({
+    method: 'POST', url: '/projects/:id/drive/metadata', tag: 'Production', role: 'OWNER',
+    summary: 'Write validated ChatGPT JSON into app-owned Drive metadata placeholders',
+    params: idParam, bodyLimit: 2 * 1024 * 1024,
+    body: z.object({
+      files: z.array(z.object({
+        name: z.string().regex(/^meta__[0-9a-f-]{36}__[0-9a-f-]{36}\\.json$/),
+        data: z.unknown(),
+      })).min(1).max(40),
+    }),
+  }, ({ ctx, params, body }) => uploadProjectSocialMetadata(ctx, params.id, body.files));
   route({
     method: 'POST', url: '/projects/:id/drive/prefill', tag: 'Production', role: 'OWNER',
     summary: 'Import validated Drive metadata into unsent per-account publishing drafts', params: idParam,

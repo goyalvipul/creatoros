@@ -11,6 +11,7 @@ type DriveItem = {
   id: string;
   name: string;
   mimeType?: string;
+  size?: string;
   appProperties?: Record<string, string>;
   webViewLink?: string;
 };
@@ -83,7 +84,7 @@ async function listDriveFiles(db: Db, env: ServiceEnv, orgId: string, query: str
   do {
     const url = new URL(DRIVE);
     url.searchParams.set('q', query);
-    url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,appProperties,webViewLink)');
+    url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,size,appProperties,webViewLink)');
     url.searchParams.set('pageSize', '1000');
     if (next) url.searchParams.set('pageToken', next);
     const response = await jsonDrive<{ files?: DriveItem[]; nextPageToken?: string }>(db, env, orgId, url.href);
@@ -125,8 +126,9 @@ async function jsonFile(
   const payload = JSON.stringify(data, null, 2) + '\n';
   const old = existing.find((file) => file.name === name);
   // Never overwrite a template that ChatGPT or the owner might have updated.
-  if (old) return old;
-  const item = await driveCreate(db, env, orgId, {
+  // A crash may leave a zero-byte placeholder: never treat that as completed analysis.
+  if (old && Number(old.size ?? 0) > 0) return old;
+  const item = old ?? await driveCreate(db, env, orgId, {
     name,
     mimeType: 'application/json',
     parents: [folderId],
@@ -135,7 +137,7 @@ async function jsonFile(
   const url = new URL(`${DRIVE_UPLOAD}/${encodeURIComponent(item.id)}`);
   url.searchParams.set('uploadType', 'media');
   await driveFetch(db, env, orgId, url.href, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: payload });
-  existing.push(item);
+  if (!old) existing.push(item);
   return item;
 }
 
@@ -158,7 +160,12 @@ async function uploadVideo(
   db: Db, env: ServiceEnv, orgId: string, folderId: string, video: SyncVideo,
   known: DriveItem[],
 ) {
-  if (known.some((f) => f.appProperties?.kemokemFileInstanceId === video.fileInstanceId)) return;
+  // Existing Drive metadata alone is not success: interrupted sessions may leave
+  // 0-byte placeholders. Only skip a file when Drive confirms its full source size.
+  if (known.some((f) =>
+    f.appProperties?.kemokemFileInstanceId === video.fileInstanceId &&
+    Number(f.size ?? -1) === video.size
+  )) return;
   const source = await openAgentFile(db, env, orgId, video.fileInstanceId);
   if (!Number.isFinite(source.size) || source.size <= 0) throw badRequest(`Video ${video.fileName} has an unknown size.`);
   const mime = source.mime || 'video/mp4';

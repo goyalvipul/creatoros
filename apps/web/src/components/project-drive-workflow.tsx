@@ -58,7 +58,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [dates, setDates] = useState<Record<string, string>>({});
-  const [excluded, setExcluded] = useState<string[]>([]);
+  const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
   const items = useMemo(() => uniqueVideos(drafts.data ?? []), [drafts.data]);
   const scheduledRows = (drafts.data ?? []).filter(canPrepare);
@@ -117,7 +117,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
 
   async function schedule() {
     setBusy('schedule'); setError(''); setNotice('');
-    const chosen = scheduledRows.filter((row) => !excluded.includes(keyOf(row)));
+    const chosen = scheduledRows.filter((row) => selectedTargets.includes(keyOf(row)));
     if (!chosen.length) { setError('Select at least one prepared social post.'); setBusy(null); return; }
     let count = 0;
     const problems: string[] = [];
@@ -231,9 +231,9 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
                   <div className="flex flex-wrap gap-3">
                     {options.map((row) => (
                       <label key={keyOf(row)} className="flex items-center gap-1 text-xs">
-                        <input type="checkbox" checked={!excluded.includes(keyOf(row))}
-                          onChange={(e) => setExcluded((old) => e.target.checked
-                            ? old.filter((key) => key !== keyOf(row)) : [...old, keyOf(row)])} />
+                        <input type="checkbox" checked={selectedTargets.includes(keyOf(row))}
+                          onChange={(e) => setSelectedTargets((old) => e.target.checked
+                            ? [...old, keyOf(row)] : old.filter((key) => key !== keyOf(row)))} />
                         {row.platform} · {row.handle}
                       </label>
                     ))}

@@ -65,6 +65,15 @@ async function main() {
     where upload_state = 'UPLOADING'
   `);
 
+  // The previous worker cannot still be uploading after a clean replacement.
+  // Requeue interrupted Drive Sync jobs; uploaded files are found by immutable video ID
+  // and skipped on retry, so a crash cannot strand the button in Processing forever.
+  await handle.db.execute(sql`
+    update project_drive_syncs
+    set status = 'QUEUED', completed = 0, started_at = null, updated_at = now()
+    where status = 'RUNNING'
+  `);
+
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
   connection.on('error', (e) => log('error', 'redis error', { err: String(e) }));
   const jobsQ = new Queue('jobs', { connection });

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, CardTitle, Dialog, Input, Notice } from '@/components/ui';
 import { VideoThumb } from '@/components/video-thumb';
+import { SocialThumbnailStudio } from '@/components/social-thumbnail-studio';
 import { post, refresh, useApi } from '@/lib/api';
 
 type SocialRow = {
@@ -52,6 +53,8 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [dates, setDates] = useState<Record<string, string>>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
+  const [coverFor, setCoverFor] = useState<SocialRow | null>(null);
+  const [savedCovers, setSavedCovers] = useState<string[]>([]);
   const items = useMemo(() => assets.data ?? [], [assets.data]);
   const scheduledRows = (drafts.data ?? []).filter(canPrepare);
   const readyVideos = items.filter((video) => scheduledRows.some((row) => row.itemId === video.itemId));
@@ -223,12 +226,17 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
                   </label>
                   <div className="flex flex-wrap gap-3">
                     {options.map((row) => (
-                      <label key={keyOf(row)} className="flex items-center gap-1 text-xs">
-                        <input type="checkbox" checked={selectedTargets.includes(keyOf(row))}
-                          onChange={(e) => setSelectedTargets((old) => e.target.checked
-                            ? [...old, keyOf(row)] : old.filter((key) => key !== keyOf(row)))} />
-                        {row.platform} · {row.handle}
-                      </label>
+                      <div key={keyOf(row)} className="flex items-center gap-2 rounded-md border border-border p-1.5">
+                        <label className="flex items-center gap-1 text-xs">
+                          <input type="checkbox" checked={selectedTargets.includes(keyOf(row))}
+                            onChange={(e) => setSelectedTargets((old) => e.target.checked
+                              ? [...old, keyOf(row)] : old.filter((key) => key !== keyOf(row)))} />
+                          {row.platform} · {row.handle}
+                        </label>
+                        <Button size="sm" type="button" onClick={() => setCoverFor(row)}>
+                          {savedCovers.includes(keyOf(row)) ? 'Edit cover ✓' : 'Design cover'}
+                        </Button>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -244,6 +252,23 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
           </div>
         </div>
       </Dialog>
+      {coverFor && (
+        <SocialThumbnailStudio
+          projectId={projectId}
+          itemId={coverFor.itemId}
+          accountId={coverFor.accountId}
+          fileId={coverFor.fileInstanceId}
+          fileName={coverFor.fileName}
+          title={coverFor.title || ''}
+          platform={coverFor.platform}
+          onClose={() => setCoverFor(null)}
+          onSaved={() => {
+            setSavedCovers((items) => [...new Set([...items, keyOf(coverFor)])]);
+            setCoverFor(null);
+            setNotice('Custom social thumbnail saved. It will be used where that platform supports an uploaded cover.');
+          }}
+        />
+      )}
     </Card>
   );
 }

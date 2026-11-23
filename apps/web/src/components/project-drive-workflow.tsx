@@ -52,6 +52,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const zone = tz || 'America/Vancouver';
   const drive = useApi<DriveStatus>(`/projects/${projectId}/drive`);
   const drafts = useApi<SocialRow[]>(`/projects/${projectId}/social-drafts`);
+  const assets = useApi<{ itemId: string; fileInstanceId: string; fileName: string }[]>(`/projects/${projectId}/drive/assets`);
   const [selection, setSelection] = useState<string[]>([]);
   const [busy, setBusy] = useState<'sync' | 'prefill' | 'connect' | 'schedule' | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -60,7 +61,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [dates, setDates] = useState<Record<string, string>>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
-  const items = useMemo(() => uniqueVideos(drafts.data ?? []), [drafts.data]);
+  const items = useMemo(() => assets.data ?? [], [assets.data]);
   const scheduledRows = (drafts.data ?? []).filter(canPrepare);
   const running = drive.data?.job?.status === 'QUEUED' || drive.data?.job?.status === 'RUNNING';
 

@@ -30,9 +30,9 @@ const NAMES: Record<string, string> = {
   threads: 'Threads',
   tiktok: 'TikTok',
   snapchat: 'Snapchat',
-  google: 'Google (umbrella)',
+  google: 'Google Drive · Drive Sync',
 };
-const OAUTH = ['gmail', 'youtube'];
+const OAUTH = ['google', 'gmail', 'youtube'];
 
 /** The card badge follows a real account. An empty later attempt does not make a connected provider look unconfigured. */
 function summaryState(row: { state?: string; connections?: { state?: string }[] }) {
@@ -138,7 +138,7 @@ export default function IntegrationsPage() {
           {(rows) => (
             <ul className="grid gap-3 md:grid-cols-2">
               {rows
-                .filter((p) => p.provider !== 'google' && p.provider !== 'postiz' && p.provider !== 'meta')
+                .filter((p) => p.provider !== 'postiz' && p.provider !== 'meta')
                 .sort(connectedFirst)
                 .map((p) => {
                   const caps = p.capabilities;
@@ -186,6 +186,12 @@ export default function IntegrationsPage() {
                           </h2>
                           <StateBadge state={summaryState(p)} />
                         </div>
+                        {p.provider === 'google' && (
+                          <p className="mt-1 text-sm text-muted">
+                            Dedicated Google Drive account for Production → Assets → Drive Sync.
+                            Uses DRIVE_GOOGLE_* credentials, separate from Gmail and YouTube.
+                          </p>
+                        )}
                         {conn?.principalHint && (
                           <p className="mt-1 text-sm text-muted">Account: {conn.principalHint}</p>
                         )}
@@ -329,6 +335,11 @@ export default function IntegrationsPage() {
                               Connect
                             </ActionButton>
                           )}
+                          {p.provider === 'google' && connected && (
+                            <ActionButton onAction={() => connect('google')}>
+                              Change Drive account
+                            </ActionButton>
+                          )}
                           {p.provider === 'gmail' && connected && (
                             <ActionButton onAction={() => connect('gmail')}>
                               Add another Gmail account
@@ -425,7 +436,7 @@ export default function IntegrationsPage() {
                                 Sync comments
                               </ActionButton>
                             )}
-                          {conn && connected && (
+                          {conn && connected && p.provider !== 'google' && (
                             <ActionButton
                               onAction={async () => {
                                 await post(`/connections/${conn.id}/sync`, {});

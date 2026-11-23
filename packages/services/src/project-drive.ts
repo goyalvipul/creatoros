@@ -300,6 +300,44 @@ export async function processProjectDriveSync(db: Db, env: ServiceEnv) {
   }
 }
 
+/**
+ * Fallback when ChatGPT's Google Drive connector can read files but cannot edit raw JSON:
+ * upload ChatGPT-generated JSON files via Kemokem into the exact app-owned placeholders.
+ * Each file is matched by two immutable UUIDs and validated before the Drive write.
+ */
+export async function uploadProjectSocialMetadata(
+  ctx: Ctx,
+  projectId: string,
+  inputs: { name: string; data: unknown }[],
+) {
+  const status = await projectDriveStatus(ctx, projectId);
+  if (!status.job?.folderId || status.job.status !== 'COMPLETE') {
+    throw badRequest('Finish Drive Sync before uploading analyzed JSON files.');
+  }
+  const targets = await socialTargets(ctx.db, ctx.orgId, projectId);
+  const lookup = new Map(targets.map((t) => [metadataFileName(t.itemId, t.accountId), t]));
+  const files = await listDriveFiles(ctx.db, ctx.env, ctx.orgId, `'${quoted(status.job.folderId)}' in parents and trashed=false`);
+  const checked: { driveId: string; meta: SocialMetadata }[] = [];
+  for (const input of inputs) {
+    const target = lookup.get(input.name);
+    const file = files.find((f) => f.name === input.name && f.appProperties?.kemokemType === 'socialMetadata');
+    if (!target || !file) throw badRequest(`No owned metadata placeholder for ${input.name}.`);
+    const meta = parseSocialMetadata(input.data, {
+      projectId, itemId: target.itemId, fileInstanceId: target.fileInstanceId, fileName: target.fileName,
+      accountId: target.accountId, platform: target.platform,
+    });
+    checked.push({ driveId: file.id, meta });
+  }
+  for (const { driveId, meta } of checked) {
+    await driveFetch(ctx.db, ctx.env, ctx.orgId, `${DRIVE_UPLOAD}/${encodeURIComponent(driveId)}?uploadType=media`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(meta, null, 2) + '\\n',
+    });
+  }
+  await audit(ctx, 'project.drive.metadata.uploaded', { type: 'project', id: projectId }, undefined, { count: checked.length });
+  return { uploaded: checked.length };
+}
+
 /** Import metadata only for the exact project + video + account. Never replace scheduled/published drafts. */
 export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
   const status = await projectDriveStatus(ctx, projectId);

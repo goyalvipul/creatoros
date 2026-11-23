@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, CardTitle, Dialog, Input, Notice } from '@/components/ui';
 import { VideoThumb } from '@/components/video-thumb';
-import { ApiError, post, refresh, useApi } from '@/lib/api';
+import { post, refresh, useApi } from '@/lib/api';
 
 type SocialRow = {
   itemId: string;
@@ -34,15 +34,6 @@ function tomorrowByZone(zone: string, afterDays: number) {
   const get = (key: string) => Number(parts.find((part) => part.type === key)?.value ?? 0);
   const date = new Date(Date.UTC(get('year'), get('month') - 1, get('day') + afterDays));
   return date.toISOString().slice(0, 10) + 'T10:00';
-}
-
-function uniqueVideos(rows: SocialRow[]) {
-  const seen = new Set<string>();
-  return rows.filter((row) => {
-    if (seen.has(row.itemId)) return false;
-    seen.add(row.itemId);
-    return true;
-  });
 }
 
 const keyOf = (r: SocialRow) => `${r.itemId}:${r.accountId}`;

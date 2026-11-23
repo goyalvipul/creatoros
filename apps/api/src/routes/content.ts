@@ -43,6 +43,7 @@ import {
   uploadProjectSocialMetadata,
   getProjectScheduleRows,
   getProjectDriveAssets,
+  getProjectThumbnailBrief,
   createRecord,
   createSocialAccount,
   createVariant,
@@ -1062,6 +1063,11 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, params }) => unlinkPublishFile(ctx, params.id, params.itemId),
   );
+  route({
+    method: 'GET', url: '/projects/:id/social-covers/:itemId/:accountId/brief', role: 'OWNER', tag: 'Publishing',
+    summary: 'Read the analyzed ChatGPT thumbnail brief for one social video',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }),
+  }, ({ ctx, params }) => getProjectThumbnailBrief(ctx, params.id, params.itemId, params.accountId));
   route({
     method: 'POST', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
     summary: 'Save an independent custom cover for one video on one social account',

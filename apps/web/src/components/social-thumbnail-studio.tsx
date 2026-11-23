@@ -6,7 +6,8 @@ import { api, post, refresh } from '@/lib/api';
 
 type CoverStyle = 'cinematic' | 'bold' | 'minimal';
 const FORMATS: Record<string, { w: number; h: number; label: string }> = {
-  youtube: { w: 1280, h: 720, label: 'YouTube · 16:9' },
+  youtubeShort: { w: 1080, h: 1920, label: 'YouTube Shorts · 9:16' },
+  youtubeLong: { w: 1280, h: 720, label: 'YouTube Long Video · 16:9' },
   instagram: { w: 1080, h: 1920, label: 'Instagram Reels · 9:16' },
   facebook: { w: 1200, h: 630, label: 'Facebook · 1.91:1' },
   tiktok: { w: 1080, h: 1920, label: 'TikTok · 9:16' },
@@ -37,10 +38,10 @@ function drawImageCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource,
 }
 
 export function SocialThumbnailStudio({
-  projectId, itemId, accountId, fileId, fileName, title, platform, onClose, onSaved,
+  projectId, itemId, accountId, fileId, fileName, title, platform, contentForm, onClose, onSaved,
 }: {
   projectId: string; itemId: string; accountId: string; fileId: string;
-  fileName: string; title: string; platform: string;
+  fileName: string; title: string; platform: string; contentForm?: string;
   onClose: () => void; onSaved: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -54,11 +55,15 @@ export function SocialThumbnailStudio({
   const [imageData, setImageData] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const format = FORMATS[platform] ?? FORMATS.youtube!;
+  // Shorts must always be rendered in portrait; regular YouTube videos stay landscape.
+  // The metadata aspect hint is descriptive and cannot override the publishing content form.
+  const format = platform === 'youtube'
+    ? (contentForm?.toUpperCase() === 'SHORT' ? FORMATS.youtubeShort! : FORMATS.youtubeLong!)
+    : FORMATS[platform] ?? FORMATS.youtubeShort!;
 
   useEffect(() => {
     let cancelled = false;
-    void api<{ headline: string; subheadline: string; style: CoverStyle; focalX: number } | null>(
+    void api<{ headline: string; subheadline: string; style: CoverStyle; focalX: number; aspect?: string } | null>(
       `/projects/${projectId}/social-covers/${itemId}/${accountId}/brief`,
     ).then((brief) => {
       if (!brief || cancelled) return;

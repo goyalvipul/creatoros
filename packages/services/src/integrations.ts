@@ -290,7 +290,7 @@ export async function startOAuth(
   const res = provider === 'google'
     ? (() => {
         const client = readGoogleClientConfig(ctx.env.processEnv, 'google');
-        if (!client) return { status: 'NOT_CONFIGURED' as const, steps: ['Configure GOOGLE_CLIENT_ID and GOOGLE_REDIRECT_URI.'] };
+        if (!client) return { status: 'NOT_CONFIGURED' as const, steps: ['Configure GOOGLE_CLIENT_ID and GOOGLE_REDIRECT_URI.'], oauth: null, authorizeUrl: null };
         const pkce = generatePkce();
         const state = randomState();
         const scopes = [...GOOGLE_SCOPES.identity, ...GOOGLE_SCOPES.driveFile];

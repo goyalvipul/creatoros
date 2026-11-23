@@ -27,6 +27,7 @@ import { VideoTrim } from '@/components/video-trim';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { PlatformLogo } from '@/components/platform-logo';
+import { ProjectDriveWorkflow } from '@/components/project-drive-workflow';
 import { PROJECT_STAGES, projectStageLabel, useBrands, useRoots } from '@/lib/options';
 
 const OLD_GENERAL = [
@@ -675,6 +676,7 @@ function ProjectPublish({
   const choices = (assets.data?.length ? assets.data : allAssets.data) ?? [];
   return (
     <div className="space-y-3">
+      {mode === 'assets' ? <ProjectDriveWorkflow projectId={projectId} tz={tz} /> : null}
       {variants.length === 0 && (
         <Card>
           <CardTitle>Link this project to a title</CardTitle>

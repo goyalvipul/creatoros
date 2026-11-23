@@ -64,7 +64,7 @@ The importer writes to Kemokem's existing `publish_drafts` table, so the ordinar
 
 ## Scheduling
 
-**Schedule videos** shows video thumbnails and each prepared social account. By default the first video is tomorrow at 10:00 AM in the workspace timezone, then one additional day per video. All accounts for one video share its initial date. You can edit individual dates/times and uncheck platforms. Click **Confirm schedule** to invoke Kemokem's existing `/publishing/schedule` endpoint for each checked account.
+**Schedule videos** shows video thumbnails and each prepared social account. By default the first video is tomorrow at 10:00 AM in the workspace timezone, then one additional day per video. All accounts for one video share its initial date. You can edit individual dates/times and **must explicitly check each destination account** (none is selected by default). Click **Confirm schedule** to invoke Kemokem's existing `/publishing/schedule` endpoint for each checked account.
 
 Scheduling is not publication: the existing worker publishes at the due time. Platform authentication, account capabilities and API validation can still reject a schedule, and the UI reports those per-target failures. Partial success is possible; already-scheduled entries will not be silently re-scheduled. Review drafts, policy claims, music rights and AI disclosure before confirming.
 

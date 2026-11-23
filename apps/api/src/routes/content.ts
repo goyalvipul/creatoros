@@ -37,6 +37,10 @@ import {
   deleteProject,
   getIdea,
   createProject,
+  startProjectDriveSync,
+  projectDriveStatus,
+  prefillProjectSocials,
+  getProjectScheduleRows,
   createRecord,
   createSocialAccount,
   createVariant,
@@ -435,6 +439,26 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   );
 
   // ================================================================ projects
+  // Project Drive Sync and social metadata import never publish anything.
+  route({
+    method: 'GET', url: '/projects/:id/drive', tag: 'Production', role: 'OWNER',
+    summary: 'Drive connection and latest project sync progress', params: idParam,
+  }, ({ ctx, params }) => projectDriveStatus(ctx, params.id));
+  route({
+    method: 'POST', url: '/projects/:id/drive/sync', tag: 'Production', role: 'OWNER',
+    summary: 'Queue selected linked project videos for Google Drive',
+    params: idParam, status: 202,
+    body: z.object({ itemIds: z.array(uuid).max(200).default([]) }),
+  }, ({ ctx, params, body }) => startProjectDriveSync(ctx, params.id, body.itemIds));
+  route({
+    method: 'POST', url: '/projects/:id/drive/prefill', tag: 'Production', role: 'OWNER',
+    summary: 'Import validated Drive metadata into unsent per-account publishing drafts', params: idParam,
+  }, ({ ctx, params }) => prefillProjectSocials(ctx, params.id));
+  route({
+    method: 'GET', url: '/projects/:id/social-drafts', tag: 'Publishing', role: 'OWNER',
+    summary: 'Preview per-video per-social publishing drafts for owner-controlled scheduling', params: idParam,
+  }, ({ ctx, params }) => getProjectScheduleRows(ctx, params.id));
+
   const projectFields = {
     title: z.string().trim().min(1).max(200),
     type: z.enum(PROJECT_TYPE),

@@ -1,6 +1,7 @@
 import { pgTable, text, uuid, integer, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { orgRef, pk, createdAt, updatedAt } from './columns';
+import { pk, createdAt, updatedAt } from './columns';
+import { orgRef } from './identity';
 import { creativeProjects } from './production';
 
 /** Persistent upload run. The worker owns execution; the browser only polls progress. */

@@ -23,6 +23,7 @@ import {
 } from '@/components/ui';
 import { ImageThumb, VideoThumb, cardWidth, isImageName } from '@/components/video-thumb';
 import { ThumbnailPicker } from '@/components/publish-cover';
+import { SocialThumbnailStudio } from '@/components/social-thumbnail-studio';
 import { VideoTrim } from '@/components/video-trim';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
@@ -851,6 +852,7 @@ function PublishDesk({
   const [trim, setTrim] = useState(false);
   const [previewAccountId, setPreviewAccountId] = useState<string | null>(null);
   const [coverVersion, setCoverVersion] = useState(0);
+  const [designAccountId, setDesignAccountId] = useState<string | null>(null);
   const coverStatus = useApi<{ itemId: string; covers: { accountId: string; platform: string; saved: boolean }[] }>(
     current?.id ? `/projects/${projectId}/social-covers/${current.id}/status` : null,
   );
@@ -910,6 +912,11 @@ function PublishDesk({
         ) : (
           <p className="mb-2 text-xs text-muted">No custom cover saved for this video yet. Showing the original video frame.</p>
         )}
+        {selectedCoverAccount ? (
+          <Button size="sm" onClick={() => setDesignAccountId(selectedCoverAccount)}>
+            Edit this social cover
+          </Button>
+        ) : null}
         <div className="overflow-hidden rounded-xl" style={{ width: cardWidth(ratio), maxWidth: '100%' }}>
           <FilePreview key={`${current.id}:${selectedCoverAccount ?? 'original'}`} item={current} poster={activeCoverUrl} playing={playing === current.fileInstanceId}
             onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
@@ -945,6 +952,20 @@ function PublishDesk({
         ) : null}
         {trim && isVideoFile(current.fileName) ? (
           <VideoTrim fileId={current.fileInstanceId} projectId={projectId} variantId={variantId} onClose={() => setTrim(false)} />
+        ) : null}
+        {designAccountId && accounts.find((account) => account.id === designAccountId) ? (
+          <SocialThumbnailStudio projectId={projectId} itemId={current.id} accountId={designAccountId}
+            fileId={current.fileInstanceId} fileName={current.fileName}
+            title={drafts.find((d) => d.itemId === current.id && d.accountId === designAccountId)?.title ?? ''}
+            platform={accounts.find((account) => account.id === designAccountId)?.platform ?? 'youtube'}
+            contentForm={drafts.find((d) => d.itemId === current.id && d.accountId === designAccountId)?.contentForm ?? undefined}
+            onClose={() => setDesignAccountId(null)}
+            onSaved={() => {
+              setPreviewAccountId(designAccountId);
+              setDesignAccountId(null);
+              void refreshCovers();
+            }}
+          />
         ) : null}
       </div>
       <ul className="space-y-2">

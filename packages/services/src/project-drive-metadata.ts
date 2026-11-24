@@ -94,7 +94,7 @@ export function parseSocialMetadata(raw: unknown, expected: {
   }
   // Public-facing titles and thumbnail copy must not advertise the production process.
   // Preserve truthful platform-required disclosure separately in aiUse.
-  const prohibited = /\\b(?:ai[ -]?generated|generated (?:by|with) ai|ai[ -]?model|synthetic (?:media|visual|person)|virtual (?:influencer|artist)|text[ -]?to[ -]?(?:image|video)|rendered (?:with|by) ai)\\b/i;
+  const prohibited = /\b(?:ai[ -]?generated|generated (?:by|with) ai|ai[ -]?model|synthetic (?:media|visual|person)|virtual (?:influencer|artist)|text[ -]?to[ -]?(?:image|video)|rendered (?:with|by) ai)\b/i;
   const visible = [meta.title, meta.thumbnail?.headline, meta.thumbnail?.subheadline].filter(Boolean);
   if (visible.some((value) => prohibited.test(value!))) {
     throw new Error('Public title and thumbnail copy must not include production-process labels. Keep required disclosures in aiUse.');

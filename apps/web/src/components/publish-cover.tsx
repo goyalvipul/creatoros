@@ -11,6 +11,10 @@ export function ThumbnailPicker({
   durationMs,
   online,
   hasCover,
+  accountCovers = [],
+  selectedCoverAccount,
+  coverVersion = 0,
+  onSelectAccount,
   onSaved,
 }: {
   variantId: string;
@@ -19,6 +23,10 @@ export function ThumbnailPicker({
   durationMs: number;
   online: boolean;
   hasCover: boolean;
+  accountCovers?: { accountId: string; platform: string; handle: string }[];
+  selectedCoverAccount?: string | null;
+  coverVersion?: number;
+  onSelectAccount?: (accountId: string) => void;
   onSaved: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -122,6 +130,17 @@ export function ThumbnailPicker({
         onLoadedMetadata={(e) => void grab(e.currentTarget.duration || durationMs / 1000)}
       />
       <div className="flex gap-2 overflow-x-auto pb-1">
+        {accountCovers.map((cover) => (
+          <button type="button" key={cover.accountId} className={`relative h-16 w-12 shrink-0 overflow-hidden rounded-md border ${selectedCoverAccount === cover.accountId ? 'border-[#1d5748] ring-2 ring-[#1d5748]' : 'border-border'}`}
+            aria-label={`Show saved ${cover.platform} cover for ${cover.handle}`}
+            aria-pressed={selectedCoverAccount === cover.accountId}
+            onClick={() => onSelectAccount?.(cover.accountId)}>
+            <img alt={`${cover.platform} custom thumbnail with text`}
+              src={`/api/v1/publish-items/${itemId}/social-covers/${cover.accountId}?v=${coverVersion}`}
+              className="size-full object-cover"/>
+            <span className="absolute bottom-0 inset-x-0 truncate bg-black/75 px-0.5 text-[8px] text-white">{cover.platform}</span>
+          </button>
+        ))}
         {hasCover ? (
           <img
             alt="Chosen thumbnail"
@@ -190,6 +209,9 @@ export function ThumbnailPicker({
           />
         </label>
       </div>
+      {accountCovers.length ? (
+        <p className="text-xs text-muted">The first thumbnails above are saved social-specific designs from Kemokem, including their headlines. Choose one to preview it above; the following images are unedited source frames.</p>
+      ) : null}
       {!online ? (
         <p className="text-xs text-muted">The PC that holds this video is off, so frames cannot be read. You can still upload a picture.</p>
       ) : null}

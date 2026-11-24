@@ -44,6 +44,7 @@ import {
   getProjectScheduleRows,
   getProjectDriveAssets,
   getProjectThumbnailBrief,
+  getProjectSocialCoverStatus,
   createRecord,
   createSocialAccount,
   createVariant,
@@ -1063,6 +1064,11 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, params }) => unlinkPublishFile(ctx, params.id, params.itemId),
   );
+  route({
+    method: 'GET', url: '/projects/:id/social-covers/:itemId/status', role: 'OWNER', tag: 'Publishing',
+    summary: 'List which custom per-account video thumbnails have been saved to Kemokem',
+    params: z.object({ id: uuid, itemId: uuid }),
+  }, ({ ctx, params }) => getProjectSocialCoverStatus(ctx, params.id, params.itemId));
   route({
     method: 'GET', url: '/projects/:id/social-covers/:itemId/:accountId/brief', role: 'OWNER', tag: 'Publishing',
     summary: 'Read the analyzed ChatGPT thumbnail brief for one social video',

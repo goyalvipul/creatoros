@@ -131,7 +131,7 @@ export function ThumbnailPicker({
       setTick((n) => n + 1);
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not clear this account's custom thumbnail.');
+      setError(e instanceof Error ? e.message : "Could not clear this account's custom thumbnail.");
     } finally {
       setBusy(false);
     }

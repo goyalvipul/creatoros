@@ -2,6 +2,7 @@ import { autogenClips, autogenRuns, gpuWorkers, sql, type Db } from '@creatoros/
 import { autogenClipSeconds, parseAutogenTimestamps } from '@creatoros/domain';
 import { generateLtx, ltxApiWorkflow, machineQueue } from './comfy';
 import { createProject } from './projects';
+import { audit } from './audit';
 import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
@@ -222,6 +223,10 @@ export async function cancelAutogenClip(ctx: Ctx, clipId: string) {
       and not exists (select 1 from autogen_clips c where c.run_id = ${clip.runId}
         and c.status in ('WAITING','CLAIMED','RUNNING'))
   `);
+  await audit(ctx, 'comfy.autogen.clip.cancel', { type: 'autogen_clip', id: clipId }, undefined, {
+    runId: clip.runId, workerId: clip.workerId, workerLabel: clip.workerLabel,
+    previousStatus: clip.status,
+  });
   return { cancelled: true, clipId, machine: clip.workerLabel ?? null };
 }
 

@@ -40,7 +40,7 @@ function tomorrowByZone(zone: string, afterDays: number) {
 const keyOf = (r: SocialRow) => `${r.itemId}:${r.accountId}`;
 const canPrepare = (r: SocialRow) => ['DRAFT', 'FAILED'].includes(r.uploadState) && !!(r.title?.trim() || r.caption?.trim());
 
-export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?: string }) {
+export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { projectId: string; tz?: string; variantIds?: string[] }) {
   const zone = tz || 'America/Vancouver';
   const drive = useApi<DriveStatus>(`/projects/${projectId}/drive`);
   const drafts = useApi<SocialRow[]>(`/projects/${projectId}/social-drafts`);
@@ -50,6 +50,7 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [prefillErrors, setPrefillErrors] = useState<string[]>([]);
   const [dates, setDates] = useState<Record<string, string>>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
@@ -101,12 +102,13 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
   }
 
   async function prefill() {
-    setBusy('prefill'); setError(''); setNotice('');
+    setBusy('prefill'); setError(''); setNotice(''); setPrefillErrors([]);
     try {
       const result = await post<{ imported: number; skipped: number; errors: string[] }>(`/projects/${projectId}/drive/prefill`, {});
-      await refresh(`/projects/${projectId}/social-drafts`, '/publishing/matrix');
-      setNotice(`Prefilled ${result.imported} social drafts; ${result.skipped} skipped. Review the Publishing tab before scheduling.`);
-      if (result.errors.length) setError(result.errors.slice(0, 6).join(' | '));
+      await refresh(`/projects/${projectId}/social-drafts`, '/publishing/matrix',
+        ...variantIds.map((id) => `/variants/${id}/publish`));
+      setNotice(`Prefilled ${result.imported} social drafts; ${result.skipped} skipped; ${result.errors.length} issues. Open this project's Publishing tab to review imported drafts.`);
+      setPrefillErrors(result.errors);
     } catch (e) { setError(e instanceof Error ? e.message : 'Social prefill failed.'); }
     finally { setBusy(null); }
   }
@@ -202,6 +204,16 @@ export function ProjectDriveWorkflow({ projectId, tz }: { projectId: string; tz?
       {drive.data?.job?.status === 'FAILED' ? <p className="mt-2 text-sm text-bad">{drive.data.job.error}</p> : null}
       {notice ? <p className="mt-2 text-sm text-muted">{notice}</p> : null}
       {error ? <p className="mt-2 text-sm text-bad">{error}</p> : null}
+      {prefillErrors.length ? (
+        <details className="mt-2 rounded-lg border border-border p-2">
+          <summary className="cursor-pointer text-sm font-semibold">
+            {prefillErrors.length} prefill details — already published items are protected
+          </summary>
+          <div className="mt-2 max-h-48 space-y-1 overflow-auto text-xs text-muted">
+            {prefillErrors.map((message, i) => <p key={i} className="break-all">{message}</p>)}
+          </div>
+        </details>
+      ) : null}
       <Dialog open={scheduleOpen} onClose={() => setScheduleOpen(false)} title="Review and schedule videos" wide>
         <div className="space-y-4 p-4">
           <p className="text-sm text-muted">

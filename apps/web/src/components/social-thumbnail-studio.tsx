@@ -5,6 +5,17 @@ import { Button, Dialog, Input } from '@/components/ui';
 import { api, post, refresh } from '@/lib/api';
 
 type CoverStyle = 'cinematic' | 'bold' | 'minimal';
+type TextPlacement = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+type FontStyle = 'impact' | 'geometric' | 'condensed';
+const FONT_STACKS: Record<FontStyle, string> = {
+  impact: 'Impact, Arial Black, sans-serif',
+  geometric: 'Arial Black, Montserrat, Arial, sans-serif',
+  condensed: 'Impact, Arial Narrow, sans-serif',
+};
+function cleanVisibleCopy(value: string): string {
+  // Public titles/thumbnail text should showcase the music, never production tooling.
+  return value.replace(/\b(?:AI[ -]?generated|AI[ -]?model|synthetic (?:media|visual)|virtual (?:artist|influencer))\b/gi, '').trim();
+}
 const FORMATS: Record<string, { w: number; h: number; label: string }> = {
   youtubeShort: { w: 1080, h: 1920, label: 'YouTube Shorts · 9:16' },
   youtubeLong: { w: 1280, h: 720, label: 'YouTube Long Video · 16:9' },
@@ -51,6 +62,10 @@ export function SocialThumbnailStudio({
   const [subhead, setSubhead] = useState('MEHAK THAKUR · NEW MUSIC');
   const [style, setStyle] = useState<CoverStyle>('cinematic');
   const [focalX, setFocalX] = useState(0.5);
+  const [placement, setPlacement] = useState<TextPlacement>('bottom-left');
+  const [fontStyle, setFontStyle] = useState<FontStyle>('geometric');
+  const [hookType, setHookType] = useState('');
+  const [creativeNotes, setCreativeNotes] = useState('');
   const [ready, setReady] = useState(false);
   const [imageData, setImageData] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -63,14 +78,21 @@ export function SocialThumbnailStudio({
 
   useEffect(() => {
     let cancelled = false;
-    void api<{ headline: string; subheadline: string; style: CoverStyle; focalX: number; aspect?: string } | null>(
+    void api<{
+      headline: string; subheadline: string; style: CoverStyle; focalX: number; aspect?: string;
+      placement?: TextPlacement; fontStyle?: FontStyle; hookType?: string; notes?: string;
+    } | null>(
       `/projects/${projectId}/social-covers/${itemId}/${accountId}/brief`,
     ).then((brief) => {
       if (!brief || cancelled) return;
-      if (brief.headline.trim()) setHeadline(brief.headline);
-      setSubhead(brief.subheadline);
+      if (brief.headline.trim()) setHeadline(cleanVisibleCopy(brief.headline));
+      setSubhead(cleanVisibleCopy(brief.subheadline));
       setStyle(brief.style);
       setFocalX(brief.focalX);
+      if (brief.placement) setPlacement(brief.placement);
+      if (brief.fontStyle) setFontStyle(brief.fontStyle);
+      setHookType(brief.hookType ?? '');
+      setCreativeNotes(brief.notes ?? '');
     }).catch(() => undefined); // Missing analysis falls back to editable video title.
     return () => { cancelled = true; };
   }, [projectId, itemId, accountId]);
@@ -86,37 +108,60 @@ export function SocialThumbnailStudio({
     drawImageCover(ctx, video, video.videoWidth, video.videoHeight, w, h, focalX);
 
     const landscape = w > h;
-    const overlay = ctx.createLinearGradient(landscape ? 0 : 0, landscape ? 0 : h * 0.36, landscape ? w * 0.82 : 0, h);
-    if (style === 'minimal') {
-      overlay.addColorStop(0, 'rgba(0,0,0,.18)');
-      overlay.addColorStop(1, 'rgba(0,0,0,.7)');
-    } else {
-      overlay.addColorStop(0, landscape ? 'rgba(0,0,0,.93)' : 'rgba(0,0,0,.04)');
-      overlay.addColorStop(1, landscape ? 'rgba(0,0,0,.04)' : 'rgba(0,0,0,.9)');
-    }
+    const top = placement.startsWith('top');
+    const right = placement.endsWith('right');
+    const overlay = ctx.createLinearGradient(0, top ? 0 : h, 0, top ? h * 0.65 : h * 0.32);
+    const dense = style === 'minimal' ? 0.68 : 0.9;
+    overlay.addColorStop(0, `rgba(0,0,0,${dense})`);
+    overlay.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = overlay;
     ctx.fillRect(0, 0, w, h);
 
-    const px = landscape ? w * 0.065 : w * 0.07;
-    const base = landscape ? h * 0.52 : h * 0.76;
-    const maxWidth = landscape ? w * 0.65 : w * 0.86;
-    const fontSize = landscape ? 85 : 100;
+    const margin = w * 0.07;
+    const maxWidth = landscape ? w * 0.62 : w * 0.84;
+    const anchorX = right ? w - margin : margin;
+    const fontSize = landscape ? 76 : 94;
+    const maxLines = 3;
+    const lineHeight = fontSize * 1.13;
+    const words = cleanVisibleCopy(headline).toUpperCase().trim().split(/\\s+/).filter(Boolean);
+    // Wrap before drawing so right-aligned text respects the same safe area.
+    ctx.font = `900 ${fontSize}px ${FONT_STACKS[fontStyle]}`;
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (current && ctx.measureText(candidate).width > maxWidth && lines.length < maxLines - 1) {
+        lines.push(current);
+        current = word;
+      } else current = candidate;
+    }
+    if (current) lines.push(current);
+    const subtitleSize = landscape ? 28 : 36;
+    const blockHeight = lines.length * lineHeight + subtitleSize * 2 + 28;
+    const baseY = top ? h * 0.1 + fontSize : h - h * 0.12 - blockHeight + fontSize;
     ctx.textBaseline = 'alphabetic';
-    ctx.textAlign = 'left';
-    ctx.shadowColor = 'rgba(0,0,0,.55)';
-    ctx.shadowBlur = 14;
-    ctx.font = `800 ${fontSize}px Arial, sans-serif`;
-    ctx.fillStyle = style === 'bold' ? '#ffe2c9' : '#ffffff';
-    const lines = drawWrapped(ctx, headline.toUpperCase(), px, base, maxWidth, fontSize * 1.12, 3);
+    ctx.textAlign = right ? 'right' : 'left';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,.65)';
+    ctx.shadowBlur = 8;
+    ctx.strokeStyle = 'rgba(0,0,0,.86)';
+    ctx.lineWidth = Math.max(5, Math.round(fontSize * 0.07));
+    ctx.fillStyle = style === 'bold' ? '#ffe3c8' : '#ffffff';
+    for (let i = 0; i < lines.length; i++) {
+      const lineY = baseY + i * lineHeight;
+      ctx.strokeText(lines[i]!, anchorX, lineY, maxWidth);
+      ctx.fillText(lines[i]!, anchorX, lineY, maxWidth);
+    }
     ctx.shadowBlur = 0;
-    const subtitleY = base + lines * fontSize * 1.12 + 10;
+    const subtitleY = baseY + lines.length * lineHeight + 10;
     ctx.fillStyle = '#e9ad92';
-    ctx.fillRect(px, subtitleY - 42, Math.min(maxWidth, 220), 8);
-    ctx.font = `700 ${landscape ? 28 : 38}px Arial, sans-serif`;
+    const ruleWidth = Math.min(maxWidth * 0.35, 200);
+    ctx.fillRect(right ? anchorX - ruleWidth : anchorX, subtitleY - 24, ruleWidth, 7);
+    ctx.font = `800 ${subtitleSize}px ${FONT_STACKS[fontStyle]}`;
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(subhead.toUpperCase().slice(0, 55), px, subtitleY + 8, maxWidth);
+    ctx.fillText(cleanVisibleCopy(subhead).toUpperCase().slice(0, 55), anchorX, subtitleY + 23, maxWidth);
     setReady(true);
-  }, [format, focalX, headline, style, subhead]);
+  }, [format, focalX, headline, style, subhead, placement, fontStyle]);
 
   useEffect(() => { if (ready) render(); }, [render, ready]);
 
@@ -158,10 +203,10 @@ export function SocialThumbnailStudio({
         </div>
         <div className="space-y-3">
           <label className="block text-sm font-semibold">Headline
-            <Input maxLength={90} value={headline} onChange={(e) => setHeadline(e.target.value)} />
+            <Input maxLength={90} value={headline} onChange={(e) => setHeadline(cleanVisibleCopy(e.target.value))} />
           </label>
           <label className="block text-sm font-semibold">Subtitle
-            <Input maxLength={55} value={subhead} onChange={(e) => setSubhead(e.target.value)} />
+            <Input maxLength={55} value={subhead} onChange={(e) => setSubhead(cleanVisibleCopy(e.target.value))} />
           </label>
           <label className="block text-sm font-semibold">Design style
             <select className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2" value={style} onChange={(e) => setStyle(e.target.value as CoverStyle)}>
@@ -170,6 +215,27 @@ export function SocialThumbnailStudio({
               <option value="minimal">Minimal · clean artist look</option>
             </select>
           </label>
+          <label className="block text-sm font-semibold">Headline position
+            <select className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2" value={placement} onChange={(e) => setPlacement(e.target.value as TextPlacement)}>
+              <option value="top-left">Top left</option>
+              <option value="top-right">Top right</option>
+              <option value="bottom-left">Bottom left</option>
+              <option value="bottom-right">Bottom right</option>
+            </select>
+          </label>
+          <label className="block text-sm font-semibold">Headline font
+            <select className="mt-1 w-full rounded-lg border border-border bg-panel px-3 py-2" value={fontStyle} onChange={(e) => setFontStyle(e.target.value as FontStyle)}>
+              <option value="geometric">Bold geometric</option>
+              <option value="impact">Impact / strong contrast</option>
+              <option value="condensed">Condensed / poster</option>
+            </select>
+          </label>
+          {hookType || creativeNotes ? (
+            <div className="rounded-lg border border-border p-2 text-xs text-muted">
+              {hookType ? <p><strong>Suggested hook:</strong> {hookType}</p> : null}
+              {creativeNotes ? <p><strong>Design guidance:</strong> {creativeNotes}</p> : null}
+            </div>
+          ) : null}
           <label className="block text-sm font-semibold">Video frame (seconds)
             <Input type="number" min={0} max={3600} step={0.5} value={frameTime}
               onChange={(e) => seek(Number(e.target.value))} />

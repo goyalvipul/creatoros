@@ -245,7 +245,7 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
     where status = 'CLAIMED' and updated_at < now() - interval '10 minutes'`);
   for (const clip of running) {
     if (clip.jobStatus === 'SUCCEEDED') {
-      await db.execute(sql`update autogen_clips set status = 'READY', error = null, updated_at = now() where id = ${clip.id}`);
+      await db.execute(sql`update autogen_clips set status = 'READY', error = null, updated_at = now() where id = ${clip.id} and status = 'RUNNING'`);
     } else if (clip.jobStatus === 'FAILED' || clip.jobStatus === 'CANCELLED' || clip.jobStatus == null) {
       const message = clip.jobError || (clip.jobStatus == null ? 'The render job is gone.' : 'The PC did not finish this clip.');
       if (clip.attempt < 1 && clip.workerId) {
@@ -254,10 +254,10 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
           set status = 'WAITING', attempt = attempt + 1, exclude_worker_id = ${clip.workerId},
               worker_id = null, worker_label = null, job_id = null, duration_sec = null,
               error = ${message.slice(0, 500)}, updated_at = now()
-          where id = ${clip.id}`);
+          where id = ${clip.id} and status = 'RUNNING'`);
       } else {
         await db.execute(sql`
-          update autogen_clips set status = 'FAILED', error = ${message.slice(0, 500)}, updated_at = now() where id = ${clip.id}`);
+          update autogen_clips set status = 'FAILED', error = ${message.slice(0, 500)}, updated_at = now() where id = ${clip.id} and status = 'RUNNING'`);
       }
     }
   }
@@ -375,10 +375,10 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
           update autogen_clips
           set status = 'RUNNING', duration_sec = ${duration}, worker_id = ${worker.id}, worker_label = ${worker.label},
               job_id = ${queued.job.id}, error = null, updated_at = now()
-          where id = ${clip.id}`);
+          where id = ${clip.id} and status = 'CLAIMED'`);
       } catch (e) {
         await db.execute(sql`
-          update autogen_clips set status = 'FAILED', error = ${clean(e)}, updated_at = now() where id = ${clip.id}`);
+          update autogen_clips set status = 'FAILED', error = ${clean(e)}, updated_at = now() where id = ${clip.id} and status = 'CLAIMED'`);
       }
     }
     await db.execute(sql`

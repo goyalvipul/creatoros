@@ -36,7 +36,7 @@ export async function uploadDriveStream(
     throw new Error('Untrusted Google Drive upload session URL.');
 
   const reader = stream.getReader();
-  let pending = new Uint8Array(0);
+  let pending: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   let pendingPosition = 0;
   let eof = false;
   let offset = 0;

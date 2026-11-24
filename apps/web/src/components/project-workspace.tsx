@@ -925,6 +925,8 @@ function PublishDesk({
           <div className="mt-3">
             <ThumbnailPicker
               variantId={variantId}
+              projectId={projectId}
+              accountId={previewAccountId ?? selectedCoverAccount ?? undefined}
               itemId={current.id}
               fileId={current.fileInstanceId}
               durationMs={Number(current.durationMs) || 0}

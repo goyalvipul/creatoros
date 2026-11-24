@@ -34,6 +34,25 @@ describe('project social metadata contract', () => {
     expect(() => parseSocialMetadata({ ...raw, ready: true, title: 'X', platform: 'tiktok' }, expected)).toThrow(/identity/);
     expect(() => parseSocialMetadata({ ...raw, ready: true, title: 'X', socialAccountId: fileInstanceId }, expected)).toThrow(/identity/);
   });
+  it('accepts a research-ready thumbnail brief without changing project or social IDs', () => {
+    const meta = parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra live performance',
+      thumbnail: { ...raw.thumbnail, headline: 'THE VOCAL MOMENT', placement: 'top-left',
+        fontStyle: 'impact', hookType: 'performance',
+        notes: 'Use the expressive close-up, place short text away from the eyes.' },
+    }, expected);
+    expect(meta.thumbnail?.placement).toBe('top-left');
+    expect(meta.thumbnail?.fontStyle).toBe('impact');
+    expect(meta.thumbnail?.notes).toContain('eyes');
+  });
+  it('blocks production-process references in visible titles and thumbnail copy', () => {
+    expect(() => parseSocialMetadata({ ...raw, ready: true, title: 'AI-generated Mehak video' }, expected))
+      .toThrow(/production-process/);
+    expect(() => parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra', thumbnail: { ...raw.thumbnail, headline: 'AI Model Sings' },
+    }, expected)).toThrow(/production-process/);
+    expect(parseSocialMetadata({ ...raw, ready: true, title: 'Eh Oh Ra', aiUse: 'YES' }, expected).aiUse).toBe('YES');
+  });
   it('rejects oversized fields and invented API fields', () => {
     expect(() => parseSocialMetadata({ ...raw, caption: 'x'.repeat(5001) }, expected)).toThrow();
     expect(() => parseSocialMetadata({ ...raw, autoPublish: true }, expected)).toThrow();

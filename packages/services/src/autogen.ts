@@ -176,6 +176,9 @@ export async function cancelAutogenClip(ctx: Ctx, clipId: string) {
     `));
     if (!changed.length) throw conflict('This clip was claimed while cancelling. Refresh and try again.');
   } else {
+    if (clip.jobStatus !== 'RUNNING' && clip.jobStatus !== 'QUEUED') {
+      throw conflict('The render has already finished or stopped. Refresh AutoGen to see its current state.');
+    }
     if (!clip.workerId || !clip.jobId || !clip.promptId) throw conflict('Cannot identify the exact ComfyUI render to stop.');
     const [worker] = rowsOf<{ baseUrl: string }>(await ctx.db.execute(sql`
       select base_url as "baseUrl" from gpu_workers where id = ${clip.workerId} and org_id = ${ctx.orgId}
@@ -326,7 +329,7 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
       const clip = still.splice(index, 1)[0]!;
       if (!preset) {
         await db.execute(sql`
-          update autogen_clips set error = 'The LTX workflow file is not on this server.', updated_at = now() where id = ${clip.id}`);
+          update autogen_clips set error = 'The LTX workflow file is not on this server.', updated_at = now() where id = ${clip.id} and status = 'WAITING'`);
         continue;
       }
       const duration = autogenClipSeconds(worker, clip.startSec, run.audioLengthSec);

@@ -82,10 +82,30 @@ Scheduling is not publication: the existing worker publishes at the due time. Pl
 After Prefill socials, open **Schedule videos**, and click **Design cover** beside any platform/account.
 - The designer extracts a real frame from that video, builds the platform-specific size, and lets you edit the big headline, supporting text, style (cinematic, bold, minimal), framing and frame timestamp. You may instead upload your own JPEG/PNG/WebP (under 2 MB).
 - Each design is saved **per publish item and social account**. A YouTube cover cannot overwrite the Instagram cover for that video.
-- ChatGPT can suggest different thumbnail headlines/subheadlines/styles for every video/social using the optional `thumbnail` object in each `meta__*.json`. The designer loads this when the metadata file is ready.
+- ChatGPT can suggest different thumbnail headlines, subheadlines, four placement options, three available fonts, hook type and creative framing notes using the optional `thumbnail` object in each `meta__*.json`. The designer loads these when the metadata file is ready. This is a design brief, not an automatic claim that a thumbnail has been researched or that it will outperform alternatives.
 - YouTube (including supported Shorts), Facebook and Instagram publishing use the account-specific cover if saved, falling back to the existing shared video cover. Platform APIs may not allow an arbitrary cover in TikTok and Threads; their customized design remains downloadable and is not falsely reported as published. Verify the actual cover on the destination platform.
-- For YouTube, optimize a 16:9 hook-first thumbnail with Mehak's authentic face clearly visible, concise high-contrast text and no false claims. Shorts custom thumbnail support and eligibility may differ from long-form videos, and YouTube may require video processing to complete before a custom cover is applied.
+- For YouTube Shorts, use a 9:16 (1080×1920) portrait cover; for standard YouTube videos, use 16:9 (1280×720). Keep Mehak's recognizable face clearly visible, use concise high-contrast copy, and avoid misleading claims. Shorts custom thumbnail support and eligibility can differ from long-form videos.
 
 ### Validation
 
 Do not merge based solely on TypeScript/unit-test CI. For a project with media across both RTX 3090 and 3060, run an all-assets sync with both scanner agents online. Confirm every manifest asset has a matching Drive file and size, retry an interrupted transfer, import JSON, save two different social covers for the same video, and schedule a test post without publishing immediately.
+
+## Folder analysis and thumbnail policy — reusable master rules
+
+When analyzing a Drive project folder for Kemokem:
+1. Read `kemokem-manifest.json` first and preserve every `projectId`, `publishItemId`, `fileInstanceId`, `socialAccountId`, `platform` and existing JSON filename exactly. Never fabricate missing media or identifiers.
+2. Inspect each accessible source video and any lyrics/transcripts/audio that are actually available. Clearly report anything that cannot be verified. Never invent lyrics, reactions, events or endorsements.
+3. Create distinct, truthful titles, captions, hashtags and content settings for every existing supported social-account template. Keep already-published items protected and set `ready=true` only on fully verified, schema-valid content.
+4. Produce a clip-specific thumbnail brief: `headline`, `subheadline`, `style`, `focalX`, `aspect`, `placement`, `fontStyle`, `hookType` and `notes`. Research current official platform constraints and successful comparable creator designs before choosing positioning; describe research vs inference separately.
+5. Keep public titles and thumbnail text about the MUSIC and PERFORMANCE. Never include production-process descriptors such as "AI-generated", "AI model", "virtual artist" or "synthetic media" in those fields. Maintain truthful platform-required synthetic-media disclosure independently in `aiUse`. Do not misrepresent an actual live event or singing performance as documented fact when the clip is staged.
+6. Prefer one face/emotion, one clear focal point and a 2–5 word bold high-contrast headline. Avoid covering eyes, mouth or the microphone; consider mobile UI overlays, safe margins and cropped surfaces. Use `impact`, `geometric`, or `condensed` fonts actually supported by the editor.
+7. Use YouTube Shorts 9:16 and standard YouTube 16:9. Consider the distinct framing of Instagram/TikTok 9:16, Threads 4:5, and Facebook 1.91:1. A saved cover does not guarantee that the platform will display it on every surface.
+8. Suggest at least two thumbnail hooks for user review when research is ambiguous; prefer a small, measurable A/B test to unsupported certainty of viral or click-through performance.
+9. Report actual successful updates, protected skips, incomplete assets, analysis limitations and import errors separately. Only red-label actual failures. Keep scheduled/publication actions behind owner review.
+10. Do not upload, schedule or publish immediately when the user only requested analysis. Update only the matching app-owned metadata JSON files and verify the imported results.
+
+Suggested design reading: vidIQ's 2026 500-breakout-thumbnail study (https://vidiq.com/research/youtube-thumbnail-study/) found that faces, short text and strong contrast are common among breakout thumbnails. This is descriptive evidence, **not** proof that a specific design will improve CTR. Verify current YouTube custom-thumbnail upload rules at https://support.google.com/youtube/answer/72431.
+
+## Prefill result display
+
+Show a concise green imported-count row, amber skipped/protected-count row and red error-count row **only when errors occur**. Provide expandable per-file detail. An already published item is a protected skip, not a failure. Opening project Publishing afterwards should show refreshed draft fields.

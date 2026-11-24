@@ -2,7 +2,7 @@ import { autogenClips, autogenRuns, gpuWorkers, sql, type Db } from '@creatoros/
 import { autogenClipSeconds, parseAutogenTimestamps } from '@creatoros/domain';
 import { generateLtx, ltxApiWorkflow, machineQueue } from './comfy';
 import { createProject } from './projects';
-import { badRequest, type Ctx, type ServiceEnv } from './types';
+import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 
@@ -138,6 +138,91 @@ export async function createAutogenRun(
     })),
   );
   return { id: run!.id, projectId: project.id, title, clips: starts.length };
+}
+
+/** Cancel one AutoGen clip, never the whole PC or another queued render.
+ * WAITING has no machine assignment. For ComfyUI jobs we require the exact prompt ID,
+ * verify it on that GPU, and only then call ComfyUI's targeted queue/interrupt endpoint.
+ */
+export async function cancelAutogenClip(ctx: Ctx, clipId: string) {
+  const [clip] = rowsOf<{
+    id: string; runId: string; status: string; workerId: string | null;
+    workerLabel: string | null; jobId: string | null; promptId: string | null;
+    jobStatus: string | null;
+  }>(await ctx.db.execute(sql`
+    select c.id, c.run_id as "runId", c.status, c.worker_id as "workerId",
+      c.worker_label as "workerLabel", c.job_id as "jobId",
+      j.prompt_id as "promptId", j.status as "jobStatus"
+    from autogen_clips c
+    join autogen_runs r on r.id = c.run_id
+    left join generation_jobs j on j.id = c.job_id
+    where c.id = ${clipId} and c.org_id = ${ctx.orgId} and r.org_id = ${ctx.orgId}
+  `));
+  if (!clip) throw notFound('AutoGen clip');
+  if (clip.status === 'CANCELLED') return { cancelled: true, clipId, alreadyCancelled: true };
+  if (clip.status === 'READY' || clip.status === 'FAILED') throw conflict('Only waiting or running clips can be cancelled.');
+  if (clip.status === 'CLAIMED' || (clip.status === 'RUNNING' && !clip.promptId)) {
+    throw conflict('This clip is being submitted to the PC. Retry in a few seconds once its ComfyUI prompt ID is available.');
+  }
+  if (clip.status === 'WAITING') {
+    const changed = rowsOf<{ id: string }>(await ctx.db.execute(sql`
+      update autogen_clips set status = 'CANCELLED', error = 'Cancelled by owner', updated_at = now()
+      where id = ${clipId} and org_id = ${ctx.orgId} and status = 'WAITING'
+      returning id
+    `));
+    if (!changed.length) throw conflict('This clip was claimed while cancelling. Refresh and try again.');
+  } else {
+    if (!clip.workerId || !clip.jobId || !clip.promptId) throw conflict('Cannot identify the exact ComfyUI render to stop.');
+    const [worker] = rowsOf<{ baseUrl: string }>(await ctx.db.execute(sql`
+      select base_url as "baseUrl" from gpu_workers where id = ${clip.workerId} and org_id = ${ctx.orgId}
+    `));
+    if (!worker) throw conflict('The assigned PC is no longer configured.');
+    let queue: { queue_running?: unknown[]; queue_pending?: unknown[] };
+    try {
+      const response = await fetch(new URL('/queue', worker.baseUrl), { signal: AbortSignal.timeout(8000) });
+      if (!response.ok) throw new Error('Queue unavailable');
+      queue = await response.json() as typeof queue;
+    } catch {
+      throw conflict('Cannot reach the assigned PC to confirm which render to stop. Nothing was cancelled.');
+    }
+    const containsId = (entries: unknown[] | undefined) =>
+      (entries ?? []).some((entry) => Array.isArray(entry) && entry[1] === clip.promptId);
+    const pending = containsId(queue.queue_pending);
+    const running = containsId(queue.queue_running);
+    // Do not send ComfyUI's machine-wide /interrupt unless this exact prompt is running.
+    if (pending || running) {
+      const endpoint = running ? '/interrupt' : '/queue';
+      const body = running ? { prompt_id: clip.promptId } : { delete: [clip.promptId] };
+      let stopped: Response;
+      try {
+        stopped = await fetch(new URL(endpoint, worker.baseUrl), {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(10000),
+        });
+      } catch {
+        throw conflict('The PC could not confirm the stop request. Check its queue and retry.');
+      }
+      if (!stopped.ok) throw conflict('ComfyUI rejected the stop request. The clip remains active.');
+    }
+    const changed = rowsOf<{ id: string }>(await ctx.db.execute(sql`
+      update autogen_clips set status = 'CANCELLED', error = 'Cancelled by owner', updated_at = now()
+      where id = ${clipId} and org_id = ${ctx.orgId} and status = 'RUNNING' and job_id = ${clip.jobId}
+      returning id
+    `));
+    if (!changed.length) throw conflict('The clip finished while cancelling. Refresh its status.');
+    await ctx.db.execute(sql`
+      update generation_jobs set status = 'CANCELLED',
+        error = 'Cancelled by owner in AutoGen', finished_at = now(), updated_at = now()
+      where id = ${clip.jobId} and org_id = ${ctx.orgId} and status in ('QUEUED','RUNNING')
+    `);
+  }
+  await ctx.db.execute(sql`
+    update autogen_runs set status = 'DONE', updated_at = now()
+    where id = ${clip.runId} and org_id = ${ctx.orgId}
+      and not exists (select 1 from autogen_clips c where c.run_id = ${clip.runId}
+        and c.status in ('WAITING','CLAIMED','RUNNING'))
+  `);
+  return { cancelled: true, clipId, machine: clip.workerLabel ?? null };
 }
 
 /** Move finished clips, send a failed clip to the other PC once, then fill each free PC with the next start. */

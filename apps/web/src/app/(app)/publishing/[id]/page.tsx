@@ -316,6 +316,8 @@ function LivePreview({
       {variantId ? (
         <ThumbnailPicker
           variantId={variantId}
+          projectId={projectId}
+          accountId={account?.id}
           itemId={item.id}
           fileId={item.fileInstanceId}
           durationMs={Number(item.durationMs) || 0}

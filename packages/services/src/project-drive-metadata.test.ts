@@ -53,6 +53,23 @@ describe('project social metadata contract', () => {
     }, expected)).toThrow(/production-process/);
     expect(parseSocialMetadata({ ...raw, ready: true, title: 'Eh Oh Ra', aiUse: 'YES' }, expected).aiUse).toBe('YES');
   });
+  it('accepts an account-bound embedded JPG and rejects a mismatched thumbnail filename', () => {
+    const imageFile = `thumb__${itemId}__${accountId}.jpg`;
+    const tinyJpg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+    const meta = parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra',
+      thumbnail: { ...raw.thumbnail, imageFile, imageBase64: tinyJpg },
+    }, expected);
+    expect(meta.thumbnail?.imageFile).toBe(imageFile);
+    expect(() => parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra',
+      thumbnail: { ...raw.thumbnail, imageFile: `thumb__${accountId}__${itemId}.jpg`, imageBase64: tinyJpg },
+    }, expected)).toThrow(/matching video\/account/);
+    expect(() => parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra',
+      thumbnail: { ...raw.thumbnail, imageFile, imageBase64: 'not-base64!' },
+    }, expected)).toThrow(/base64/);
+  });
   it('rejects oversized fields and invented API fields', () => {
     expect(() => parseSocialMetadata({ ...raw, caption: 'x'.repeat(5001) }, expected)).toThrow();
     expect(() => parseSocialMetadata({ ...raw, autoPublish: true }, expected)).toThrow();

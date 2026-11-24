@@ -13,7 +13,8 @@ const otherPrompt = '77777777-7777-4777-8777-777777777777';
 function context(rows: unknown[][]) {
   const execute = vi.fn();
   for (const next of rows) execute.mockResolvedValueOnce({ rows: next });
-  return { ctx: { orgId, db: { execute } } as unknown as Ctx, execute };
+  const insert = vi.fn(() => ({ values: vi.fn(async () => undefined) }));
+  return { ctx: { orgId, actor: { type: 'user' }, userId: orgId, db: { execute, insert } } as unknown as Ctx, execute };
 }
 
 afterEach(() => vi.unstubAllGlobals());

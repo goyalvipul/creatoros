@@ -36,6 +36,12 @@ export const socialMetadataSchema = z.object({
     fontStyle: z.enum(['impact', 'geometric', 'condensed']).optional(),
     hookType: z.enum(['curiosity', 'emotion', 'performance', 'dramatic', 'crowd', 'beauty']).optional(),
     notes: z.string().max(500).optional(),
+    /** Optional self-contained JPEG cover in the app-owned JSON placeholder.
+     * Avoids requesting broad Drive scopes merely to read files another app created.
+     * Generated cover JPG is also stored separately alongside the videos for review.
+     */
+    imageFile: z.string().max(130).optional(),
+    imageBase64: z.string().max(500_000).optional(),
   }).optional(),
 }).strict();
 
@@ -91,6 +97,15 @@ export function parseSocialMetadata(raw: unknown, expected: {
   }
   if (meta.ready && meta.platform === 'youtube' && !meta.title.trim()) {
     throw new Error('YouTube requires a non-empty title.');
+  }
+  if (meta.thumbnail?.imageBase64 || meta.thumbnail?.imageFile) {
+    const expectedName = `thumb__${meta.publishItemId}__${meta.socialAccountId}.jpg`;
+    if (meta.thumbnail.imageFile !== expectedName || !meta.thumbnail.imageBase64) {
+      throw new Error('Cover image must use the matching video/account JPG filename and contain valid image data.');
+    }
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(meta.thumbnail.imageBase64)) {
+      throw new Error('Thumbnail data must be base64-encoded JPEG bytes.');
+    }
   }
   // Public-facing titles and thumbnail copy must not advertise the production process.
   // Preserve truthful platform-required disclosure separately in aiUse.

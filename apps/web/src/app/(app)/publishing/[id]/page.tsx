@@ -429,6 +429,16 @@ function SocialFrame({
       className="w-full"
     />
   );
+  // The saved JPG already contains the designed headline. Do not overlay the post's
+  // title/description over it a second time in Kemokem's simulated social preview.
+  if (poster) {
+    return (
+      <div className="overflow-hidden rounded-xl">
+        {media}
+        <p className="px-2 py-2 text-xs text-muted">Saved ${platform ?? 'social'} cover · headline is part of this image. Press play to view the original video.</p>
+      </div>
+    );
+  }
   const onPicture = portrait && (platform === 'youtube' || platform === 'instagram' || platform === 'tiktok');
   if (onPicture) {
     return (

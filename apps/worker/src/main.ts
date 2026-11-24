@@ -12,6 +12,7 @@ import { JOB_TABLE, jobBackup, jobPublish, jobRestoreTest, jobSync, type JobName
  */
 const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }[] = [
   { name: 'heartbeat', every: 30_000 },
+  { name: 'drive-sync', every: 15_000 },
   { name: 'publish-due', every: 60_000 },
   { name: 'ltx', every: 15_000 },
   { name: 'live', every: 30_000 },
@@ -62,6 +63,15 @@ async function main() {
         error = 'The upload stopped before it finished. Press Try again.',
         updated_at = now()
     where upload_state = 'UPLOADING'
+  `);
+
+  // The previous worker cannot still be uploading after a clean replacement.
+  // Requeue interrupted Drive Sync jobs; uploaded files are found by immutable video ID
+  // and skipped on retry, so a crash cannot strand the button in Processing forever.
+  await handle.db.execute(sql`
+    update project_drive_syncs
+    set status = 'QUEUED', completed = 0, started_at = null, updated_at = now()
+    where status = 'RUNNING'
   `);
 
   const connection = new Redis(config.redisUrl, { maxRetriesPerRequest: null });

@@ -4,6 +4,7 @@ import {
   detectNearDuplicates,
   executePublish,
   dispatchAutogen,
+  processProjectDriveSync,
   pollRunningLtx,
   submitQueuedLtx,
   evictPreviews,
@@ -108,6 +109,10 @@ export async function jobLtx(d: WorkerDeps) {
     log(d, 'warn', 'trim skipped', { err: String(e) });
   }
   return { queued: queued.length, ...running, qwenQueued: qwenQueued.length, qwen, h3Queued: h3Queued.length, h3, trimsExpired, trims };
+}
+
+export async function jobDriveSync(d: WorkerDeps) {
+  return processProjectDriveSync(d.db, d.env);
 }
 
 export async function jobHeartbeat(d: WorkerDeps) {
@@ -324,6 +329,7 @@ export async function jobLive(d: WorkerDeps) {
 
 export const JOB_TABLE = {
   heartbeat: jobHeartbeat,
+  'drive-sync': jobDriveSync,
   'publish-due': jobDuePublishes,
   ltx: jobLtx,
   live: jobLive,

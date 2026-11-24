@@ -23,10 +23,12 @@ import {
 } from '@/components/ui';
 import { ImageThumb, VideoThumb, cardWidth, isImageName } from '@/components/video-thumb';
 import { ThumbnailPicker } from '@/components/publish-cover';
+import { SocialThumbnailStudio } from '@/components/social-thumbnail-studio';
 import { VideoTrim } from '@/components/video-trim';
 import { ApiError, del, patch, post, refresh, useApi } from '@/lib/api';
 import { dateInput, title as titleCase, when } from '@/lib/format';
 import { PlatformLogo } from '@/components/platform-logo';
+import { ProjectDriveWorkflow } from '@/components/project-drive-workflow';
 import { PROJECT_STAGES, projectStageLabel, useBrands, useRoots } from '@/lib/options';
 
 const OLD_GENERAL = [
@@ -675,6 +677,7 @@ function ProjectPublish({
   const choices = (assets.data?.length ? assets.data : allAssets.data) ?? [];
   return (
     <div className="space-y-3">
+      {mode === 'assets' ? <ProjectDriveWorkflow projectId={projectId} tz={tz} variantIds={variants.map((v) => v.id)} /> : null}
       {variants.length === 0 && (
         <Card>
           <CardTitle>Link this project to a title</CardTitle>
@@ -847,7 +850,29 @@ function PublishDesk({
   const current = items.find((item) => item.id === selected) ?? items[0];
   const [ratio, setRatio] = useState<number | null>(null);
   const [trim, setTrim] = useState(false);
-  useEffect(() => setRatio(null), [current?.fileInstanceId]);
+  const [previewAccountId, setPreviewAccountId] = useState<string | null>(null);
+  const [coverVersion, setCoverVersion] = useState(0);
+  const [designAccountId, setDesignAccountId] = useState<string | null>(null);
+  const coverStatus = useApi<{ itemId: string; covers: { accountId: string; platform: string; saved: boolean }[] }>(
+    current?.id ? `/projects/${projectId}/social-covers/${current.id}/status` : null,
+  );
+  const savedAccounts = new Set((coverStatus.data?.covers ?? []).filter((cover) => cover.saved).map((cover) => cover.accountId));
+  const selectedCoverAccount = previewAccountId && savedAccounts.has(previewAccountId)
+    ? previewAccountId
+    : accounts.find((account) => account.platform === 'youtube' && savedAccounts.has(account.id))?.id
+      ?? accounts.find((account) => savedAccounts.has(account.id))?.id
+      ?? null;
+  const activeCoverUrl = selectedCoverAccount
+    ? `/api/v1/publish-items/${current.id}/social-covers/${selectedCoverAccount}?v=${coverVersion}`
+    : current.hasCover ? `/api/v1/publish-items/${current.id}/cover?v=${coverVersion}` : undefined;
+  async function refreshCovers() {
+    setCoverVersion((v) => v + 1);
+    await refresh(`/projects/${projectId}/social-covers/${current.id}/status`, `/variants/${variantId}/publish`);
+  }
+  useEffect(() => {
+    setRatio(null);
+    setPreviewAccountId(null);
+  }, [current?.fileInstanceId]);
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)]">
       <div>
@@ -870,19 +895,52 @@ function PublishDesk({
             })}
           </ul>
         )}
+        {savedAccounts.size > 0 ? (
+          <div className="mb-2 space-y-2">
+            <p className="text-xs font-semibold">Custom cover preview — select a social platform</p>
+            <div className="flex flex-wrap gap-2">
+              {accounts.filter((account) => savedAccounts.has(account.id)).map((account) => (
+                <button key={account.id} type="button" aria-pressed={selectedCoverAccount === account.id}
+                  className={clsx('flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs', selectedCoverAccount === account.id ? 'border-[#1d5748] bg-[#e5f6ea] text-[#1d5748]' : 'border-border')}
+                  onClick={() => { setPreviewAccountId(account.id); onSelect(current.id); }}>
+                  <PlatformLogo platform={account.platform} className="size-3.5" />
+                  {account.handle}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mb-2 text-xs text-muted">No custom cover saved for this video yet. Showing the original video frame.</p>
+        )}
+        {selectedCoverAccount ? (
+          <Button size="sm" onClick={() => setDesignAccountId(selectedCoverAccount)}>
+            Edit this social cover
+          </Button>
+        ) : null}
         <div className="overflow-hidden rounded-xl" style={{ width: cardWidth(ratio), maxWidth: '100%' }}>
-          <FilePreview item={current} playing={playing === current.fileInstanceId} onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
+          <FilePreview key={`${current.id}:${selectedCoverAccount ?? 'original'}`} item={current} poster={activeCoverUrl} playing={playing === current.fileInstanceId}
+            onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
         </div>
         {isVideoFile(current.fileName) ? (
           <div className="mt-3">
             <ThumbnailPicker
               variantId={variantId}
+              projectId={projectId}
+              accountId={previewAccountId ?? selectedCoverAccount ?? undefined}
               itemId={current.id}
               fileId={current.fileInstanceId}
               durationMs={Number(current.durationMs) || 0}
               online={current.deviceState === 'ONLINE'}
               hasCover={Boolean(current.hasCover)}
-              onSaved={() => void refresh(`/variants/${variantId}/publish`)}
+              accountCovers={accounts.filter((account) => savedAccounts.has(account.id))
+                .sort((a, b) => Number(b.id === selectedCoverAccount) - Number(a.id === selectedCoverAccount))
+                .map((account) => ({
+                  accountId: account.id, platform: account.platform, handle: account.handle,
+                }))}
+              selectedCoverAccount={selectedCoverAccount}
+              coverVersion={coverVersion}
+              onSelectAccount={setPreviewAccountId}
+              onSaved={() => void refreshCovers()}
             />
           </div>
         ) : null}
@@ -898,6 +956,20 @@ function PublishDesk({
         ) : null}
         {trim && isVideoFile(current.fileName) ? (
           <VideoTrim fileId={current.fileInstanceId} projectId={projectId} variantId={variantId} onClose={() => setTrim(false)} />
+        ) : null}
+        {designAccountId && accounts.find((account) => account.id === designAccountId) ? (
+          <SocialThumbnailStudio projectId={projectId} itemId={current.id} accountId={designAccountId}
+            fileId={current.fileInstanceId} fileName={current.fileName}
+            title={drafts.find((d) => d.itemId === current.id && d.accountId === designAccountId)?.title ?? ''}
+            platform={accounts.find((account) => account.id === designAccountId)?.platform ?? 'youtube'}
+            contentForm={drafts.find((d) => d.itemId === current.id && d.accountId === designAccountId)?.contentForm ?? undefined}
+            onClose={() => setDesignAccountId(null)}
+            onSaved={() => {
+              setPreviewAccountId(designAccountId);
+              setDesignAccountId(null);
+              void refreshCovers();
+            }}
+          />
         ) : null}
       </div>
       <ul className="space-y-2">
@@ -1000,11 +1072,13 @@ function FrameStill({ fileId, online, name }: { fileId: string; online: boolean;
 
 function FilePreview({
   item,
+  poster,
   playing,
   onPlay,
   onRatio,
 }: {
   item: any;
+  poster?: string;
   playing: boolean;
   onPlay: () => void;
   onRatio?: (ratio: number) => void;
@@ -1015,6 +1089,7 @@ function FilePreview({
   return (
     <VideoThumb
       fileId={item.fileInstanceId}
+      poster={poster}
       online={item.deviceState === 'ONLINE'}
       playing={playing}
       onPlay={onPlay}

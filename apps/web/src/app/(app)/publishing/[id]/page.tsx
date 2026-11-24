@@ -7,6 +7,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { FileDownload } from '@/components/file-download';
 import { ThumbnailPicker } from '@/components/publish-cover';
+import { SocialThumbnailStudio } from '@/components/social-thumbnail-studio';
 import { VideoTrim } from '@/components/video-trim';
 import { FileActions, LinkDialog, UploadDialog } from '@/components/publish-board';
 import { PublishFields, publishHashtags, publishPrivacy } from '@/components/publish-fields';
@@ -174,7 +175,9 @@ function Title() {
                   {current ? (
                     <LivePreview
                       variantId={id}
+                      projectId={data.projectId}
                       item={current}
+                      accounts={accounts}
                       variantTitle={data.title}
                       account={selectedAccount}
                       postTitle={copy.title}
@@ -201,7 +204,9 @@ function Title() {
 
 function LivePreview({
   variantId,
+  projectId,
   item,
+  accounts,
   variantTitle,
   account,
   postTitle,
@@ -211,7 +216,9 @@ function LivePreview({
   onActions,
 }: {
   variantId?: string;
+  projectId?: string;
   item: any;
+  accounts: any[];
   variantTitle: string;
   account?: any;
   postTitle: string;
@@ -223,9 +230,29 @@ function LivePreview({
   const [ratio, setRatio] = useState<number | null>(null);
   const [expand, setExpand] = useState(false);
   const [trim, setTrim] = useState(false);
+  const [coverVersion, setCoverVersion] = useState(0);
+  const [designCover, setDesignCover] = useState(false);
+  const coverStatus = useApi<{ covers: { accountId: string; platform: string; saved: boolean }[] }>(
+    projectId && item.id ? `/projects/${projectId}/social-covers/${item.id}/status` : null,
+  );
+  const savedAccounts = new Set((coverStatus.data?.covers ?? []).filter((x) => x.saved).map((x) => x.accountId));
+  const activeCoverId = account?.id && savedAccounts.has(account.id) ? account.id : null;
+  const accountCovers = accounts.filter((entry) => savedAccounts.has(entry.id))
+    .sort((a, b) => Number(b.id === account?.id) - Number(a.id === account?.id))
+    .map((entry) => ({ accountId: entry.id, platform: entry.platform, handle: entry.handle }));
+  const [coverChoice, setCoverChoice] = useState<string | null>(null);
+  const chosenCoverId = coverChoice && savedAccounts.has(coverChoice) ? coverChoice : activeCoverId;
+  const chosenPoster = chosenCoverId
+    ? `/api/v1/publish-items/${item.id}/social-covers/${chosenCoverId}?v=${coverVersion}`
+    : item.hasCover ? `/api/v1/publish-items/${item.id}/cover?v=${coverVersion}` : undefined;
+  async function refreshCovers() {
+    setCoverVersion((v) => v + 1);
+    if (projectId) await refresh(`/projects/${projectId}/social-covers/${item.id}/status`, `/variants/${variantId}/publish`);
+  }
   useEffect(() => {
     setRatio(null);
-  }, [item.fileInstanceId]);
+    setCoverChoice(null);
+  }, [item.fileInstanceId, item.id, account?.id]);
   const stored =
     Number(item.width) > 0 && Number(item.height) > 0 ? Number(item.width) / Number(item.height) : null;
   const measured = ratio ?? stored;
@@ -240,6 +267,7 @@ function LivePreview({
     <SocialFrame
       platform={platform}
       portrait={portrait}
+      poster={chosenPoster}
       title={heading}
       caption={caption}
       tags={tags}
@@ -268,17 +296,52 @@ function LivePreview({
       <div className="mx-auto" style={{ width: stageWidth, maxWidth: '100%' }}>
         {frame}
       </div>
+      {accountCovers.length > 0 ? (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold">Imported custom covers</p>
+          <div className="flex flex-wrap gap-1.5">
+            {accountCovers.map((entry) => (
+              <button key={entry.accountId} type="button" aria-pressed={chosenCoverId === entry.accountId}
+                className={clsx('rounded-md border px-2 py-1 text-xs', chosenCoverId === entry.accountId ? 'border-[#1d5748] bg-[#e5f6ea] text-[#1d5748]' : 'border-border')}
+                onClick={() => setCoverChoice(entry.accountId)}>
+                {entry.platform} · {entry.handle}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-green-700 dark:text-green-400">✓ Stored in Kemokem — shows the actual image with its text</p>
+        </div>
+      ) : (
+        <p className="text-xs text-muted">No platform-specific cover detected for this video. Prefill may need to run again after deployment.</p>
+      )}
       {variantId ? (
         <ThumbnailPicker
           variantId={variantId}
+          projectId={projectId}
+          accountId={account?.id}
           itemId={item.id}
           fileId={item.fileInstanceId}
           durationMs={Number(item.durationMs) || 0}
           online={online}
           hasCover={Boolean(item.hasCover)}
-          onSaved={() => void refresh(`/variants/${variantId}/publish`)}
+          accountCovers={accountCovers}
+          selectedCoverAccount={chosenCoverId}
+          coverVersion={coverVersion}
+          onSelectAccount={setCoverChoice}
+          onSaved={() => void refreshCovers()}
         />
       ) : null}
+      {chosenCoverId && projectId ? (
+        <Button size="sm" onClick={() => setDesignCover(true)}>Edit selected social cover</Button>
+      ) : null}
+      {designCover && chosenCoverId && projectId && (
+        <SocialThumbnailStudio projectId={projectId} itemId={item.id} accountId={chosenCoverId}
+          fileId={item.fileInstanceId} fileName={item.fileName} title={heading}
+          platform={accounts.find((a) => a.id === chosenCoverId)?.platform ?? platform ?? 'youtube'}
+          contentForm={platform === 'youtube' && portrait ? 'SHORT' : undefined}
+          onClose={() => setDesignCover(false)}
+          onSaved={() => { setDesignCover(false); void refreshCovers(); }}
+        />
+      )}
       <p className="text-xs text-muted">
         {portrait ? 'Vertical' : square ? 'Square' : measured ? 'Widescreen' : 'Shape appears with the first frame'} · {ratioText}
         {platform === 'youtube' && portrait ? ' · Shorts' : ''}
@@ -309,6 +372,7 @@ function LivePreview({
             <SocialFrame
               platform={platform}
               portrait={portrait}
+              poster={chosenPoster}
               title={heading}
               caption={caption}
               tags={tags}
@@ -330,6 +394,7 @@ function LivePreview({
 function SocialFrame({
   platform,
   portrait,
+  poster,
   title,
   caption,
   tags,
@@ -341,6 +406,7 @@ function SocialFrame({
 }: {
   platform?: string;
   portrait: boolean;
+  poster?: string;
   title: string;
   caption: string;
   tags: string;
@@ -355,8 +421,9 @@ function SocialFrame({
   const who = (handle ?? '').trim();
   const media = (
     <VideoThumb
-      key={fileId}
+      key={`${fileId}:${poster ?? 'original'}`}
       fileId={fileId}
+      poster={poster}
       online={online}
       flush
       ratioHint={ratioHint}
@@ -364,6 +431,16 @@ function SocialFrame({
       className="w-full"
     />
   );
+  // The saved JPG already contains the designed headline. Do not overlay the post's
+  // title/description over it a second time in Kemokem's simulated social preview.
+  if (poster) {
+    return (
+      <div className="overflow-hidden rounded-xl">
+        {media}
+        <p className="px-2 py-2 text-xs text-muted">Saved ${platform ?? 'social'} cover · headline is part of this image. Press play to view the original video.</p>
+      </div>
+    );
+  }
   const onPicture = portrait && (platform === 'youtube' || platform === 'instagram' || platform === 'tiktok');
   if (onPicture) {
     return (

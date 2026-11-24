@@ -37,6 +37,14 @@ import {
   deleteProject,
   getIdea,
   createProject,
+  startProjectDriveSync,
+  projectDriveStatus,
+  prefillProjectSocials,
+  uploadProjectSocialMetadata,
+  getProjectScheduleRows,
+  getProjectDriveAssets,
+  getProjectThumbnailBrief,
+  getProjectSocialCoverStatus,
   createRecord,
   createSocialAccount,
   createVariant,
@@ -45,6 +53,10 @@ import {
   savePublishCover,
   clearPublishCover,
   readPublishCover,
+  saveSocialCover,
+  deleteSocialCover,
+  readSocialCover,
+  verifySocialCoverToken,
   verifyCoverToken,
   linkPublishFile,
   detectNearDuplicates,
@@ -435,6 +447,41 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   );
 
   // ================================================================ projects
+  // Project Drive Sync and social metadata import never publish anything.
+  route({
+    method: 'GET', url: '/projects/:id/drive/assets', tag: 'Production', role: 'OWNER',
+    summary: 'Linked video files eligible for Google Drive Sync', params: idParam,
+  }, ({ ctx, params }) => getProjectDriveAssets(ctx, params.id));
+  route({
+    method: 'GET', url: '/projects/:id/drive', tag: 'Production', role: 'OWNER',
+    summary: 'Drive connection and latest project sync progress', params: idParam,
+  }, ({ ctx, params }) => projectDriveStatus(ctx, params.id));
+  route({
+    method: 'POST', url: '/projects/:id/drive/sync', tag: 'Production', role: 'OWNER',
+    summary: 'Queue selected linked project videos for Google Drive',
+    params: idParam, status: 202,
+    body: z.object({ itemIds: z.array(uuid).max(200).default([]) }),
+  }, ({ ctx, params, body }) => startProjectDriveSync(ctx, params.id, body.itemIds));
+  route({
+    method: 'POST', url: '/projects/:id/drive/metadata', tag: 'Production', role: 'OWNER',
+    summary: 'Write validated ChatGPT JSON into app-owned Drive metadata placeholders',
+    params: idParam, bodyLimit: 2 * 1024 * 1024,
+    body: z.object({
+      files: z.array(z.object({
+        name: z.string().regex(/^meta__[0-9a-f-]{36}__[0-9a-f-]{36}\.json$/),
+        data: z.unknown(),
+      })).min(1).max(40),
+    }),
+  }, ({ ctx, params, body }) => uploadProjectSocialMetadata(ctx, params.id, body.files));
+  route({
+    method: 'POST', url: '/projects/:id/drive/prefill', tag: 'Production', role: 'OWNER',
+    summary: 'Import validated Drive metadata into unsent per-account publishing drafts', params: idParam,
+  }, ({ ctx, params }) => prefillProjectSocials(ctx, params.id));
+  route({
+    method: 'GET', url: '/projects/:id/social-drafts', tag: 'Publishing', role: 'OWNER',
+    summary: 'Preview per-video per-social publishing drafts for owner-controlled scheduling', params: idParam,
+  }, ({ ctx, params }) => getProjectScheduleRows(ctx, params.id));
+
   const projectFields = {
     title: z.string().trim().min(1).max(200),
     type: z.enum(PROJECT_TYPE),
@@ -1018,6 +1065,27 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, params }) => unlinkPublishFile(ctx, params.id, params.itemId),
   );
+  route({
+    method: 'GET', url: '/projects/:id/social-covers/:itemId/status', role: 'OWNER', tag: 'Publishing',
+    summary: 'List which custom per-account video thumbnails have been saved to Kemokem',
+    params: z.object({ id: uuid, itemId: uuid }),
+  }, ({ ctx, params }) => getProjectSocialCoverStatus(ctx, params.id, params.itemId));
+  route({
+    method: 'GET', url: '/projects/:id/social-covers/:itemId/:accountId/brief', role: 'OWNER', tag: 'Publishing',
+    summary: 'Read the analyzed ChatGPT thumbnail brief for one social video',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }),
+  }, ({ ctx, params }) => getProjectThumbnailBrief(ctx, params.id, params.itemId, params.accountId));
+  route({
+    method: 'POST', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
+    summary: 'Save an independent custom cover for one video on one social account',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }), bodyLimit: 4 * 1024 * 1024,
+    body: z.object({ data: z.string().min(16).max(3_000_000) }),
+  }, ({ ctx, params, body }) => saveSocialCover(ctx, params.id, params.itemId, params.accountId, body.data));
+  route({
+    method: 'DELETE', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
+    summary: 'Use the automatic video frame instead of an account-specific custom thumbnail',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }),
+  }, ({ ctx, params }) => deleteSocialCover(ctx, params.id, params.itemId, params.accountId));
   route(
     {
       method: 'POST',
@@ -1270,6 +1338,19 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     },
     ({ ctx, query }) => calendar(ctx, query.from, query.to, query.tz, query.brandId),
   );
+
+  app.get('/publish-items/:id/social-covers/:accountId', async (req, reply) => {
+    const { id, accountId } = z.object({ id: uuid, accountId: uuid }).parse(req.params);
+    const token = (req.query as { token?: string }).token;
+    const signed = token ? verifySocialCoverToken(deps.config.env.agentPairingSecret, token) : null;
+    if (!req.session && (!signed || signed.itemId !== id || signed.accountId !== accountId)) throw unauthorized();
+    const orgId = req.session?.orgId ?? signed!.orgId;
+    const file = await readSocialCover({ db, env: deps.config.env }, orgId, id, accountId);
+    if (!file) return reply.status(404).send();
+    reply.header('content-type', file.mime);
+    reply.header('cache-control', 'private, max-age=60');
+    return reply.send(file.bytes);
+  });
 
   app.get('/publish-items/:id/cover', async (req, reply) => {
     const { id } = idParam.parse(req.params);

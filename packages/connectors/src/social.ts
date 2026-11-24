@@ -523,7 +523,7 @@ export class GatedConnector implements Connector<NormalizedPost, never> {
     private readonly blockers: string[],
     private readonly steps: string[],
   ) {}
-  async getCapabilities(): Promise<ConnectorCapabilities> {
+  async getCapabilities(_ctx: ConnectorContext): Promise<ConnectorCapabilities> {
     return {
       provider: this.id,
       state: 'UNSUPPORTED',
@@ -538,7 +538,7 @@ export class GatedConnector implements Connector<NormalizedPost, never> {
   async connect(): Promise<ConnectResult> {
     return { status: 'REQUIRES_APPROVAL', steps: this.steps };
   }
-  async disconnect() {}
+  async disconnect(_ctx: ConnectorContext) {}
   async refreshCredentials(ctx: ConnectorContext): Promise<Credentials> {
     return ctx.credentials;
   }

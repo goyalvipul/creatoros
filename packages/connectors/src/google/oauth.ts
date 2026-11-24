@@ -16,6 +16,8 @@ export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export const GOOGLE_SCOPES = {
   identity: ['openid', 'email'],
   gmailRead: ['https://www.googleapis.com/auth/gmail.readonly'],
+  /** Only files Kemokem creates or the user explicitly opens with Kemokem. */
+  driveFile: ['https://www.googleapis.com/auth/drive.file'],
   gmailDrafts: ['https://www.googleapis.com/auth/gmail.compose'],
   /** Send replies from inside Creator OS. Opt-in; needs a reconnect. */
   gmailSend: ['https://www.googleapis.com/auth/gmail.send'],
@@ -35,7 +37,7 @@ export interface GoogleClientConfig {
 }
 
 /**
- * OAuth client for a Google-backed provider. YouTube may use its own client (YOUTUBE_GOOGLE_CLIENT_ID / _CLIENT_SECRET /
+ * OAuth client for a Google-backed provider. Drive uses exclusively DRIVE_GOOGLE_* credentials. YouTube may use its own client (YOUTUBE_GOOGLE_CLIENT_ID / _CLIENT_SECRET /
  * _REDIRECT_URI) so it can belong to a different Google project/account than Gmail; the redirect URI falls back to
  * GOOGLE_REDIRECT_URI (same callback path). Without YOUTUBE_GOOGLE_CLIENT_ID, YouTube shares the GOOGLE_* client.
  * A client secret is never borrowed from the other client.
@@ -44,6 +46,15 @@ export function readGoogleClientConfig(
   env: Record<string, string | undefined>,
   provider?: string,
 ): GoogleClientConfig | null {
+  // Drive Sync uses an entirely separate OAuth client, never the Gmail or YouTube fallback.
+  if (provider === 'google') {
+    if (!env.DRIVE_GOOGLE_CLIENT_ID || !env.DRIVE_GOOGLE_REDIRECT_URI) return null;
+    return {
+      clientId: env.DRIVE_GOOGLE_CLIENT_ID,
+      clientSecret: env.DRIVE_GOOGLE_CLIENT_SECRET || undefined,
+      redirectUri: env.DRIVE_GOOGLE_REDIRECT_URI,
+    };
+  }
   if (provider === 'youtube' && env.YOUTUBE_GOOGLE_CLIENT_ID) {
     const redirectUri = env.YOUTUBE_GOOGLE_REDIRECT_URI || env.GOOGLE_REDIRECT_URI;
     if (!redirectUri) return null;

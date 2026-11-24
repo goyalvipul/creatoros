@@ -25,6 +25,10 @@ import {
   readThreadsClientConfig,
   threadsCapabilityMatrix,
   readGoogleClientConfig,
+  buildGoogleAuthUrl,
+  GOOGLE_SCOPES,
+  generatePkce,
+  randomState,
   readInstagramClientConfig,
   refreshInstagramToken,
   revokeGoogleToken,
@@ -262,9 +266,10 @@ async function setState(db: Db, conn: Conn, state: Conn['state'], lastError: str
 
 export async function startOAuth(
   ctx: Ctx,
-  provider: 'gmail' | 'youtube' | 'instagram' | 'facebook' | 'tiktok' | 'threads' | 'snapchat',
+  provider: 'google' | 'gmail' | 'youtube' | 'instagram' | 'facebook' | 'tiktok' | 'threads' | 'snapchat',
   input: {
     drafts?: boolean;
+    drive?: boolean;
     send?: boolean;
     analytics?: boolean;
     loginHint?: string;
@@ -280,9 +285,23 @@ export async function startOAuth(
 ) {
   if (provider === 'facebook')
     return startFacebookOAuth(ctx, { videos: input.videos, scopes: input.scopes, reconnect: input.reconnect });
-  const connector = getConnector(provider);
   const cctx = connectorContext(ctx.db, ctx.env, null, overrides, provider);
-  const res = await connector.connect(cctx, input);
+  // Separate Google OAuth connection: Drive grants do not alter Gmail or YouTube permissions.
+  const res = provider === 'google'
+    ? (() => {
+        const client = readGoogleClientConfig(ctx.env.processEnv, 'google');
+        if (!client) return { status: 'NOT_CONFIGURED' as const, steps: ['Configure DRIVE_GOOGLE_CLIENT_ID and DRIVE_GOOGLE_REDIRECT_URI.'], oauth: null, authorizeUrl: null };
+        const pkce = generatePkce();
+        const state = randomState();
+        const scopes = [...GOOGLE_SCOPES.identity, ...GOOGLE_SCOPES.driveFile];
+        return {
+          status: 'REDIRECT' as const,
+          steps: [],
+          authorizeUrl: buildGoogleAuthUrl({ client, scopes, state, codeChallenge: pkce.challenge, loginHint: input.loginHint }),
+          oauth: { state, verifier: pkce.verifier, scopes },
+        };
+      })()
+    : await getConnector(provider).connect(cctx, input);
   if (res.status !== 'REDIRECT' || !res.oauth)
     return { status: res.status, steps: res.steps ?? [], authorizeUrl: null };
   await ctx.db.insert(oauthStates).values({

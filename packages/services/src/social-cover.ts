@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, isAbsolute } from 'node:path';
 import { sql, type Db } from '@creatoros/db';
 import { hmacHex, safeEqualHex } from './crypto';
 import { badRequest, notFound, type Ctx, type ServiceEnv } from './types';
@@ -14,8 +14,19 @@ function imageKind(bytes: Buffer): 'jpg' | 'png' | 'webp' | null {
   if (bytes.length > 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'webp';
   return null;
 }
-function pathOf(env: ServiceEnv, itemId: string, accountId: string, ext: string) {
-  return join(env.mediaPreviewDir, 'social-covers', `${itemId}_${accountId}.${ext}`);
+type CoverExtension = 'jpg' | 'png' | 'webp';
+
+/** Only canonical UUIDs and allowlisted image extensions may reach a filesystem path.
+ * The containment check also rejects traversal if this helper changes later.
+ */
+function pathOf(env: ServiceEnv, itemId: string, accountId: string, ext: CoverExtension) {
+  if (!safeId.test(itemId) || !safeId.test(accountId)) throw badRequest('Invalid cover identifiers.');
+  if (ext !== 'jpg' && ext !== 'png' && ext !== 'webp') throw badRequest('Invalid cover extension.');
+  const base = join(env.mediaPreviewDir, 'social-covers');
+  const candidate = join(base, `${itemId}_${accountId}.${ext}`);
+  const rel = relative(base, candidate);
+  if (rel.startsWith('..') || isAbsolute(rel)) throw badRequest('Invalid cover path.');
+  return candidate;
 }
 
 /** Save a verified cover from either a manual upload or an app-owned Drive JSON template. */

@@ -864,7 +864,7 @@ function PublishDesk({
       ?? null;
   const activeCoverUrl = selectedCoverAccount
     ? `/api/v1/publish-items/${current.id}/social-covers/${selectedCoverAccount}?v=${coverVersion}`
-    : undefined;
+    : current.hasCover ? `/api/v1/publish-items/${current.id}/cover?v=${coverVersion}` : undefined;
   async function refreshCovers() {
     setCoverVersion((v) => v + 1);
     await refresh(`/projects/${projectId}/social-covers/${current.id}/status`, `/variants/${variantId}/publish`);

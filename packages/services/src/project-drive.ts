@@ -424,6 +424,19 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
         eq(publishDrafts.itemId, target.itemId),
         eq(publishDrafts.socialAccountId, target.accountId),
       )).limit(1);
+      // These image bytes are inside the Kemokem-created metadata file, which
+      // remains accessible with the narrow drive.file scope. The separate JPG
+      // in Drive is an editable/downloadable review copy, not the import source.
+      if (meta.thumbnail?.imageBase64) {
+        const currentCover = await readSocialCover(ctx, ctx.orgId, target.itemId, target.accountId);
+        if (currentCover) {
+          result.existingCoversPreserved++;
+        } else {
+          const bytes = Buffer.from(meta.thumbnail.imageBase64, 'base64');
+          await saveSocialCoverBytes(ctx, projectId, target.itemId, target.accountId, bytes);
+          result.coversImported++;
+        }
+      }
       if (existing && existing.uploadState !== 'DRAFT' && existing.uploadState !== 'FAILED') {
         result.skipped++; result.errors.push(`${file.name}: already ${existing.uploadState}; not overwritten`); continue;
       }
@@ -461,19 +474,6 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
           result.skipped++;
           result.errors.push(`${file.name}: draft was created concurrently; not overwritten`);
           continue;
-        }
-      }
-      // These image bytes are inside the Kemokem-created metadata file, which
-      // remains accessible with the narrow drive.file scope. The separate JPG
-      // in Drive is an editable/downloadable review copy, not the import source.
-      if (meta.thumbnail?.imageBase64) {
-        const currentCover = await readSocialCover(ctx, ctx.orgId, target.itemId, target.accountId);
-        if (currentCover) {
-          result.existingCoversPreserved++;
-        } else {
-          const bytes = Buffer.from(meta.thumbnail.imageBase64, 'base64');
-          await saveSocialCoverBytes(ctx, projectId, target.itemId, target.accountId, bytes);
-          result.coversImported++;
         }
       }
       result.imported++;

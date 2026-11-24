@@ -123,7 +123,7 @@ export function SocialThumbnailStudio({
     const fontSize = landscape ? 76 : 94;
     const maxLines = 3;
     const lineHeight = fontSize * 1.13;
-    const words = cleanVisibleCopy(headline).toUpperCase().trim().split(/\\s+/).filter(Boolean);
+    const words = cleanVisibleCopy(headline).toUpperCase().trim().split(/\s+/).filter(Boolean);
     // Wrap before drawing so right-aligned text respects the same safe area.
     ctx.font = `900 ${fontSize}px ${FONT_STACKS[fontStyle]}`;
     const lines: string[] = [];

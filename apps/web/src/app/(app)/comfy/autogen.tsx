@@ -244,7 +244,7 @@ export function AutoGen({ active }: { active: boolean }) {
                           {staging ? <p className="text-xs text-muted">Submitting to the GPU; stop becomes available once ComfyUI has acknowledged the prompt.</p> : null}
                         </div>
                         {(waiting || runningClip) ? (
-                          <Button size="sm" variant="outline" busy={cancelBusy === clip.id}
+                          <Button size="sm" variant={waiting ? "secondary" : "danger"} busy={cancelBusy === clip.id}
                             disabled={cancelBusy !== null} onClick={() => void cancelClip(clip)}>
                             {waiting ? 'Cancel queued' : `Stop on ${clip.workerLabel ?? 'GPU'}`}
                           </Button>

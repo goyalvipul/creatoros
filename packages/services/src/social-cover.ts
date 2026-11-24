@@ -18,7 +18,10 @@ function pathOf(env: ServiceEnv, itemId: string, accountId: string, ext: string)
   return join(env.mediaPreviewDir, 'social-covers', `${itemId}_${accountId}.${ext}`);
 }
 
-export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: string, accountId: string, data: string) {
+/** Save a verified cover from either a manual upload or an app-owned Drive JSON template. */
+export async function saveSocialCoverBytes(
+  ctx: Ctx, projectId: string, itemId: string, accountId: string, bytes: Buffer,
+) {
   const [row] = rowsOf<{ id: string }>(await ctx.db.execute(sql`
     select i.id from publish_items i
     join distribution_variants v on v.id=i.variant_id
@@ -27,8 +30,6 @@ export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: strin
       and v.org_id=${ctx.orgId} and v.project_id=${projectId}
   `));
   if (!row) throw notFound('Video and social account in project');
-  const raw = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
-  const bytes = Buffer.from(raw, 'base64');
   if (!bytes.length || bytes.length > MAX_BYTES) throw badRequest('A thumbnail must be 2 MB or smaller.');
   const ext = imageKind(bytes);
   if (!ext) throw badRequest('Upload a JPG, PNG, or WebP thumbnail.');
@@ -37,6 +38,11 @@ export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: strin
   for (const other of ['jpg', 'png', 'webp'])
     if (other !== ext) await rm(pathOf(ctx.env, itemId, accountId, other), { force: true });
   return { saved: true, itemId, accountId };
+}
+
+export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: string, accountId: string, data: string) {
+  const raw = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
+  return saveSocialCoverBytes(ctx, projectId, itemId, accountId, Buffer.from(raw, 'base64'));
 }
 
 export async function readSocialCover(

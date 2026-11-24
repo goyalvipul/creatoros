@@ -36,7 +36,7 @@ const PRESETS: Record<TextPreset, { label: string; font: FontStyle; accent: stri
 const FONTS_STYLESHEET = 'kemokem-thumbnail-fonts';
 const FONTS_URL = 'https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=League+Spartan:wght@700;800;900&family=Montserrat:wght@700;800;900&family=Sora:wght@700;800&family=Space+Grotesk:wght@700&display=swap';
 function cleanVisibleCopy(value: string): string {
-  return value.replace(/\\b(?:AI[ -]?generated|AI[ -]?model|synthetic (?:media|visual)|virtual (?:artist|influencer))\\b/gi, '').trim();
+  return value.replace(/\b(?:AI[ -]?generated|AI[ -]?model|synthetic (?:media|visual)|virtual (?:artist|influencer))\b/gi, '').trim();
 }
 function boundedAccent(value: string): string {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : '#e7bb8c';
@@ -142,24 +142,35 @@ export function SocialThumbnailStudio({
   // Canvas does not wait for web fonts automatically; load the exact selected face
   // before allowing image export, so preview and saved JPG use the same glyphs.
   useEffect(() => {
-    if (!document.getElementById(FONTS_STYLESHEET)) {
-      const link = document.createElement('link');
-      link.id = FONTS_STYLESHEET;
-      link.rel = 'stylesheet';
-      link.href = FONTS_URL;
-      document.head.appendChild(link);
-    }
-  }, []);
-
-  useEffect(() => {
     const family = FONT_FAMILIES[fontStyle];
     let cancelled = false;
     setFontReady(false);
-    if (!family) { setFontReady(true); return; }
-    void document.fonts.load(`800 48px "${family}"`).then(() => {
-      if (!cancelled) setFontReady(document.fonts.check(`800 48px "${family}"`));
-    }).catch(() => { if (!cancelled) setError('Could not load the selected font. Choose a system font to export.'); });
-    return () => { cancelled = true; };
+    if (!family) {
+      setFontReady(true);
+      return () => { cancelled = true; };
+    }
+    const loadFont = () => {
+      void document.fonts.load(`800 48px "${family}"`).then(() => {
+        if (!cancelled) setFontReady(document.fonts.check(`800 48px "${family}"`));
+      }).catch(() => {
+        if (!cancelled) setError('Selected font failed to load. Try a system font.');
+      });
+    };
+    let link = document.getElementById(FONTS_STYLESHEET) as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement('link');
+      link.id = FONTS_STYLESHEET;
+      link.rel = 'stylesheet';
+      link.href = FONTS_URL;
+      link.onload = () => { link!.dataset.loaded = 'yes'; loadFont(); };
+      link.onerror = () => { if (!cancelled) setError('Font stylesheet unavailable. Select a system font.'); };
+      document.head.appendChild(link);
+    } else if (link.dataset.loaded === 'yes' || document.fonts.check(`800 48px "${family}"`)) {
+      loadFont();
+    } else {
+      link.addEventListener('load', loadFont, { once: true });
+    }
+    return () => { cancelled = true; link?.removeEventListener('load', loadFont); };
   }, [fontStyle]);
 
   function applyPreset(value: TextPreset) {
@@ -194,7 +205,7 @@ export function SocialThumbnailStudio({
     const lineHeight = textSize * 1.11;
     const highlight = cleanVisibleCopy(highlightWord).toUpperCase().trim();
     const emphasis = boundedAccent(accent);
-    const words = cleanVisibleCopy(headline).toUpperCase().split(/\\s+/).filter(Boolean);
+    const words = cleanVisibleCopy(headline).toUpperCase().split(/\s+/).filter(Boolean);
     ctx.font = `800 ${textSize}px ${family}`;
     const lines: string[][] = [];
     let current: string[] = [];

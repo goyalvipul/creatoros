@@ -930,9 +930,11 @@ function PublishDesk({
               durationMs={Number(current.durationMs) || 0}
               online={current.deviceState === 'ONLINE'}
               hasCover={Boolean(current.hasCover)}
-              accountCovers={accounts.filter((account) => savedAccounts.has(account.id)).map((account) => ({
-                accountId: account.id, platform: account.platform, handle: account.handle,
-              }))}
+              accountCovers={accounts.filter((account) => savedAccounts.has(account.id))
+                .sort((a, b) => Number(b.id === selectedCoverAccount) - Number(a.id === selectedCoverAccount))
+                .map((account) => ({
+                  accountId: account.id, platform: account.platform, handle: account.handle,
+                }))}
               selectedCoverAccount={selectedCoverAccount}
               coverVersion={coverVersion}
               onSelectAccount={setPreviewAccountId}

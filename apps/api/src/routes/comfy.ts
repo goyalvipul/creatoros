@@ -3,7 +3,7 @@ import { attachmentHeaders } from '../attachment';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { AppError, checkGpuWorker, createAutogenRun, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
+import { AppError, checkGpuWorker, createAutogenRun, cancelAutogenClip, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
 import { ctxFor, makeRouter, originAllowed } from '../http';
 
@@ -247,6 +247,14 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
       }
       return created;
     },
+  );
+  route(
+    {
+      method: 'POST', url: '/comfy/autogen/clips/:id/cancel',
+      tag: 'ComfyUI', summary: 'Cancel exactly one waiting or running AutoGen clip',
+      role: 'OWNER', params: idParam,
+    },
+    ({ ctx, params }) => cancelAutogenClip(ctx, params.id),
   );
   route(
     { method: 'GET', url: '/comfy/windows-tasks', tag: 'ComfyUI', summary: 'Windows scheduled tasks the owner can see and restart', role: 'OWNER' },

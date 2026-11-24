@@ -275,7 +275,7 @@ export function SocialThumbnailStudio({
     setReady(true);
   }, [format, focalX, headline, style, subhead, placement, fontStyle, preset, accent, highlightWord, typeScale, outline]);
 
-  useEffect(() => { if (ready && fontReady) render(); }, [render, ready, fontReady]);
+  useEffect(() => { if (fontReady) render(); }, [render, fontReady]);
 
   function seek(seconds: number) {
     const video = videoRef.current;

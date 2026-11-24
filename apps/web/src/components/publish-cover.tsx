@@ -131,7 +131,7 @@ export function ThumbnailPicker({
       setTick((n) => n + 1);
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not restore automatic video frame.');
+      setError(e instanceof Error ? e.message : 'Could not clear this account's custom thumbnail.');
     } finally {
       setBusy(false);
     }
@@ -145,7 +145,7 @@ export function ThumbnailPicker({
           <button type="button" disabled={busy}
             className="text-xs font-semibold text-muted underline"
             onClick={() => void useAutomaticFrame()}>
-            Use automatic video frame
+            Use video/default cover
           </button>
         ) : null}
       </div>
@@ -238,7 +238,7 @@ export function ThumbnailPicker({
         </label>
       </div>
       {specificCover ? (
-        <p className="text-xs text-muted">For this account, click any original frame or upload a picture to REPLACE its custom cover. Use automatic video frame to remove its custom cover. Other social accounts are unchanged.</p>
+        <p className="text-xs text-muted">For this account, click any original frame or upload a picture to REPLACE its custom cover. Use video/default cover to remove this account's custom cover. If a shared fallback cover exists, that may still be used. Other social accounts are unchanged.</p>
       ) : accountCovers.length ? (
         <p className="text-xs text-muted">The first thumbnails are social-specific saved covers. The six following frames are selectable.</p>
       ) : null}

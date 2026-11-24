@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { ChevronDown } from 'lucide-react';
 import { ApiError, post, refresh, useApi } from '@/lib/api';
 import { Badge, Button, Card, CardTitle, EmptyState, Field, Textarea } from '@/components/ui';
 
@@ -44,6 +45,7 @@ Go on and feed them, this is your moment, no hesitation"`;
 function clipLabel(clip: Clip) {
   if (clip.status === 'READY') return 'Ready';
   if (clip.status === 'FAILED') return 'Failed';
+  if (clip.status === 'CANCELLED') return 'Cancelled';
   if (clip.status === 'RUNNING' || clip.status === 'CLAIMED') return 'Running';
   if (clip.attempt > 0) return 'Waiting for the other PC';
   return 'Waiting';
@@ -52,6 +54,7 @@ function clipLabel(clip: Clip) {
 function clipTone(clip: Clip): 'ok' | 'bad' | 'neutral' | 'info' {
   if (clip.status === 'READY') return 'ok';
   if (clip.status === 'FAILED') return 'bad';
+  if (clip.status === 'CANCELLED') return 'neutral';
   if (clip.status === 'RUNNING' || clip.status === 'CLAIMED') return 'info';
   return 'neutral';
 }
@@ -68,12 +71,31 @@ export function AutoGen({ active }: { active: boolean }) {
   const [prompt, setPrompt] = useState(AUTOGEN_PROMPT);
   const [busy, setBusy] = useState<'song' | 'image' | 'run' | null>(null);
   const [error, setError] = useState('');
+  const [cancelBusy, setCancelBusy] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState('');
   const running = (board.data?.runs ?? []).some((run) => run.status === 'RUNNING' || run.clips.some((clip) => clip.status === 'WAITING' || clip.status === 'RUNNING' || clip.status === 'CLAIMED'));
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => void refresh('/comfy/autogen'), running ? 5000 : 15000);
     return () => clearInterval(timer);
   }, [active, running]);
+
+  async function cancelClip(clip: Clip) {
+    const queued = clip.status === 'WAITING';
+    if (!window.confirm(queued
+      ? `Cancel queued AutoGen clip starting at ${clip.startSec}s? It will not be dispatched to a GPU.`
+      : `Stop the AutoGen clip starting at ${clip.startSec}s on ${clip.workerLabel ?? 'its assigned GPU'}? Only this clip is targeted.`)) return;
+    setCancelBusy(clip.id);
+    setCancelError('');
+    try {
+      await post(`/comfy/autogen/clips/${clip.id}/cancel`, {});
+      await refresh('/comfy/autogen');
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : 'The clip could not be stopped.');
+    } finally {
+      setCancelBusy(null);
+    }
+  }
 
   const uploadWorker = board.data?.workers?.[0];
 
@@ -175,37 +197,64 @@ export function AutoGen({ active }: { active: boolean }) {
         </Button>
       </Card>
       {board.data && board.data.runs.length === 0 ? <EmptyState title="No AutoGen runs yet">The row for each song appears here, with the PC that is rendering each clip.</EmptyState> : null}
+      {cancelError ? <p role="alert" className="text-sm text-bad">{cancelError}</p> : null}
       {(board.data?.runs ?? []).map((run) => {
         const ready = run.clips.filter((clip) => clip.status === 'READY').length;
         const failed = run.clips.filter((clip) => clip.status === 'FAILED').length;
-        const active = run.clips.filter((clip) => clip.status === 'RUNNING' || clip.status === 'CLAIMED');
+        const cancelled = run.clips.filter((clip) => clip.status === 'CANCELLED').length;
+        const activeClips = run.clips.filter((clip) => clip.status === 'RUNNING' || clip.status === 'CLAIMED');
         return (
           <Card key={run.id}>
-            <div className="flex flex-wrap items-center gap-2">
-              <CardTitle>{run.title}</CardTitle>
-              <Badge tone={run.status === 'DONE' ? 'ok' : 'info'}>{run.status === 'DONE' ? 'Done' : 'In progress'}</Badge>
-              <span className="text-sm text-muted">{ready} of {run.clips.length} ready{failed ? `, ${failed} failed` : ''}</span>
-              {run.projectId ? <Link className="text-sm underline" href={`/production/${run.projectId}`}>Open project</Link> : null}
-            </div>
-            <p className="mt-1 text-sm text-muted">{run.prompt}</p>
-            {active.map((clip) => (
-              <p key={clip.id} className="mt-1 text-sm">{clip.workerLabel || 'A PC'} is rendering the clip that starts at {clip.startSec}s.</p>
-            ))}
-            <ul className="mt-3 space-y-2">
-              {run.clips.map((clip) => (
-                <li key={clip.id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border p-3 text-sm">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">Starts at {clip.startSec}s</span>
-                      <Badge tone={clipTone(clip)}>{clipLabel(clip)}</Badge>
-                      {clip.durationSec != null ? <span className="text-muted">{clip.durationSec}s</span> : null}
-                    </div>
-                    <div className="text-xs text-muted">{clip.workerLabel || 'No PC yet'}</div>
-                    {clip.error ? <div className="text-xs text-bad">{clip.error}</div> : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            <details defaultOpen={run.status !== 'DONE'} className="group">
+              <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+                <ChevronDown className="size-4 shrink-0 text-muted transition-transform group-open:rotate-180" aria-hidden />
+                <span className="min-w-0 font-semibold">{run.title}</span>
+                <Badge tone={run.status === 'DONE' ? 'ok' : 'info'}>{run.status === 'DONE' ? 'Done' : 'In progress'}</Badge>
+                <span className="text-sm text-muted">{ready} of {run.clips.length} ready
+                  {failed ? `, ${failed} failed` : ''}
+                  {cancelled ? `, ${cancelled} cancelled` : ''}
+                </span>
+                <span className="ml-auto text-xs text-muted">Expand / collapse</span>
+              </summary>
+              <div className="mt-3">
+                {run.projectId ? (
+                  <Link className="text-sm font-medium underline" href={`/production/${run.projectId}`}>Open project</Link>
+                ) : null}
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-muted">{run.prompt}</p>
+                {activeClips.map((clip) => (
+                  <p key={clip.id} className="mt-1 text-sm">
+                    {clip.workerLabel || 'A PC'} is rendering the clip that starts at {clip.startSec}s.
+                  </p>
+                ))}
+                <ul className="mt-3 space-y-2">
+                  {run.clips.map((clip) => {
+                    const waiting = clip.status === 'WAITING';
+                    const runningClip = clip.status === 'RUNNING';
+                    const staging = clip.status === 'CLAIMED';
+                    return (
+                      <li key={clip.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">Starts at {clip.startSec}s</span>
+                            <Badge tone={clipTone(clip)}>{clipLabel(clip)}</Badge>
+                            {clip.durationSec != null ? <span className="text-muted">{clip.durationSec}s</span> : null}
+                          </div>
+                          <div className="text-xs text-muted">{clip.workerLabel || 'Waiting for GPU assignment'}</div>
+                          {clip.error ? <div className={clip.status === 'CANCELLED' ? 'text-xs text-muted' : 'text-xs text-bad'}>{clip.error}</div> : null}
+                          {staging ? <p className="text-xs text-muted">Submitting to the GPU; stop becomes available once ComfyUI has acknowledged the prompt.</p> : null}
+                        </div>
+                        {(waiting || runningClip) ? (
+                          <Button size="sm" variant="outline" busy={cancelBusy === clip.id}
+                            disabled={cancelBusy !== null} onClick={() => void cancelClip(clip)}>
+                            {waiting ? 'Cancel queued' : `Stop on ${clip.workerLabel ?? 'GPU'}`}
+                          </Button>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            </details>
           </Card>
         );
       })}

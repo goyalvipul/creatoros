@@ -33,7 +33,10 @@ export const socialMetadataSchema = z.object({
     focalX: z.number().min(0).max(1).default(0.5),
     aspect: z.enum(['9:16', '16:9', '4:5', '1.91:1']).optional(),
     placement: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']).optional(),
-    fontStyle: z.enum(['impact', 'geometric', 'condensed']).optional(),
+    fontStyle: z.enum(['impact', 'geometric', 'condensed', 'anton', 'bebas', 'spartan', 'sora', 'space-grotesk', 'montserrat']).optional(),
+    designPreset: z.enum(['bold-viral', 'premium-music', 'highlight-box', 'cinematic-poster', 'neon-stage', 'sticker-punch', 'minimal-clean']).optional(),
+    accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    highlightWord: z.string().max(24).optional(),
     hookType: z.enum(['curiosity', 'emotion', 'performance', 'dramatic', 'crowd', 'beauty']).optional(),
     notes: z.string().max(500).optional(),
     /** Optional self-contained JPEG cover in the app-owned JSON placeholder.
@@ -70,7 +73,10 @@ export function metadataTemplate(projectId: string, target: {
       style: 'cinematic',
       focalX: 0.5,
       placement: 'bottom-left',
-      fontStyle: 'geometric',
+      fontStyle: 'spartan',
+      designPreset: 'premium-music',
+      accentColor: '#e7bb8c',
+      highlightWord: '',
       hookType: 'performance',
       notes: 'Use a clear expressive frame. Keep short, high-contrast text off the eyes and face.',
       aspect: target.platform === 'youtube' || target.platform === 'instagram' || target.platform === 'tiktok'

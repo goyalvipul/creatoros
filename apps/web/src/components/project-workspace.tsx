@@ -676,7 +676,7 @@ function ProjectPublish({
   const choices = (assets.data?.length ? assets.data : allAssets.data) ?? [];
   return (
     <div className="space-y-3">
-      {mode === 'assets' ? <ProjectDriveWorkflow projectId={projectId} tz={tz} /> : null}
+      {mode === 'assets' ? <ProjectDriveWorkflow projectId={projectId} tz={tz} variantIds={variants.map((v) => v.id)} /> : null}
       {variants.length === 0 && (
         <Card>
           <CardTitle>Link this project to a title</CardTitle>

@@ -42,13 +42,16 @@ export async function listAutogen(ctx: Ctx) {
         status: string;
         attempt: number;
         workerLabel: string | null;
+        promptId: string | null;
         error: string | null;
       }>(await ctx.db.execute(sql`
-        select id, run_id as "runId", ordinal, start_sec as "startSec", duration_sec as "durationSec",
-               status, attempt, worker_label as "workerLabel", error
-        from autogen_clips
-        where org_id = ${ctx.orgId} and run_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-        order by ordinal asc`))
+        select c.id, c.run_id as "runId", c.ordinal, c.start_sec as "startSec", c.duration_sec as "durationSec",
+               c.status, c.attempt, c.worker_label as "workerLabel", c.error,
+               j.prompt_id as "promptId"
+        from autogen_clips c
+        left join generation_jobs j on j.id = c.job_id
+        where c.org_id = ${ctx.orgId} and c.run_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+        order by c.ordinal asc`))
     : [];
   const workers = await ctx.db
     .select({ id: gpuWorkers.id, label: gpuWorkers.label, enabled: gpuWorkers.enabled })

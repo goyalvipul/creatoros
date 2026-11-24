@@ -50,7 +50,7 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [prefillErrors, setPrefillErrors] = useState<string[]>([]);
+  const [prefillResult, setPrefillResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
   const [dates, setDates] = useState<Record<string, string>>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
@@ -102,13 +102,12 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
   }
 
   async function prefill() {
-    setBusy('prefill'); setError(''); setNotice(''); setPrefillErrors([]);
+    setBusy('prefill'); setError(''); setNotice(''); setPrefillResult(null);
     try {
       const result = await post<{ imported: number; skipped: number; errors: string[] }>(`/projects/${projectId}/drive/prefill`, {});
       await refresh(`/projects/${projectId}/social-drafts`, '/publishing/matrix',
         ...variantIds.map((id) => `/variants/${id}/publish`));
-      setNotice(`Prefilled ${result.imported} social drafts; ${result.skipped} skipped; ${result.errors.length} issues. Open this project's Publishing tab to review imported drafts.`);
-      setPrefillErrors(result.errors);
+      setPrefillResult(result);
     } catch (e) { setError(e instanceof Error ? e.message : 'Social prefill failed.'); }
     finally { setBusy(null); }
   }
@@ -204,16 +203,44 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
       {drive.data?.job?.status === 'FAILED' ? <p className="mt-2 text-sm text-bad">{drive.data.job.error}</p> : null}
       {notice ? <p className="mt-2 text-sm text-muted">{notice}</p> : null}
       {error ? <p className="mt-2 text-sm text-bad">{error}</p> : null}
-      {prefillErrors.length ? (
-        <details className="mt-2 rounded-lg border border-border p-2">
-          <summary className="cursor-pointer text-sm font-semibold">
-            {prefillErrors.length} prefill details — already published items are protected
-          </summary>
-          <div className="mt-2 max-h-48 space-y-1 overflow-auto text-xs text-muted">
-            {prefillErrors.map((message, i) => <p key={i} className="break-all">{message}</p>)}
+      {prefillResult ? (() => {
+        const protectedSkips = prefillResult.errors.filter((message) =>
+          /already (?:PUBLISHED|SCHEDULED|QUEUED|UPLOADING|UNCERTAIN)/i.test(message));
+        const otherFailures = prefillResult.errors.filter((message) =>
+          !/already (?:PUBLISHED|SCHEDULED|QUEUED|UPLOADING|UNCERTAIN)/i.test(message));
+        const unexplainedSkips = Math.max(0, prefillResult.skipped - prefillResult.errors.length);
+        const successful = prefillResult.imported > 0 && otherFailures.length === 0;
+        return (
+          <div className="mt-3 space-y-2 rounded-lg border border-border p-3" role="status" aria-live="polite">
+            <p className="text-sm font-semibold">Prefill results — {successful ? 'Completed with protected skips' : otherFailures.length ? 'Needs attention' : 'Completed'}</p>
+            <ul className="space-y-1 text-sm">
+              <li className="font-medium text-green-700 dark:text-green-400">✓ {prefillResult.imported} drafts imported successfully</li>
+              <li className="font-medium text-amber-700 dark:text-amber-400">⚠ {prefillResult.skipped} drafts skipped ({protectedSkips.length} protected existing posts)</li>
+              <li className={otherFailures.length ? 'font-medium text-red-700 dark:text-red-400' : 'font-medium text-green-700 dark:text-green-400'}>
+                {otherFailures.length ? '✕' : '✓'} {otherFailures.length} import errors
+              </li>
+            </ul>
+            {prefillResult.imported ? <p className="text-xs text-muted">Open this project's Publishing tab to review the imported fields. Nothing has been published by this action.</p> : null}
+            {protectedSkips.length ? (
+              <details className="text-xs text-amber-700 dark:text-amber-400">
+                <summary className="cursor-pointer font-semibold">Protected drafts ({protectedSkips.length}) — not overwritten</summary>
+                <ul className="mt-2 list-inside list-disc space-y-1">
+                  {protectedSkips.map((message, index) => <li key={index} className="break-all">{message}</li>)}
+                </ul>
+              </details>
+            ) : null}
+            {unexplainedSkips ? <p className="text-xs text-amber-700 dark:text-amber-400">{unexplainedSkips} incomplete templates were skipped (for example, ready=false).</p> : null}
+            {otherFailures.length ? (
+              <details open className="text-xs text-red-700 dark:text-red-400">
+                <summary className="cursor-pointer font-semibold">Import errors ({otherFailures.length})</summary>
+                <ul className="mt-2 list-inside list-disc space-y-1">
+                  {otherFailures.map((message, index) => <li key={index} className="break-all">{message}</li>)}
+                </ul>
+              </details>
+            ) : null}
           </div>
-        </details>
-      ) : null}
+        );
+      })() : null}
       <Dialog open={scheduleOpen} onClose={() => setScheduleOpen(false)} title="Review and schedule videos" wide>
         <div className="space-y-4 p-4">
           <p className="text-sm text-muted">

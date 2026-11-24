@@ -244,7 +244,7 @@ function LivePreview({
   const chosenCoverId = coverChoice && savedAccounts.has(coverChoice) ? coverChoice : activeCoverId;
   const chosenPoster = chosenCoverId
     ? `/api/v1/publish-items/${item.id}/social-covers/${chosenCoverId}?v=${coverVersion}`
-    : undefined;
+    : item.hasCover ? `/api/v1/publish-items/${item.id}/cover?v=${coverVersion}` : undefined;
   async function refreshCovers() {
     setCoverVersion((v) => v + 1);
     if (projectId) await refresh(`/projects/${projectId}/social-covers/${item.id}/status`, `/variants/${variantId}/publish`);

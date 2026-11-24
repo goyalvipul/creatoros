@@ -1,4 +1,4 @@
-import { and, desc, eq, projectDriveSyncs, providerConnections, sql, type Db } from '@creatoros/db';
+import { and, desc, eq, projectDriveSyncs, publishDrafts, providerConnections, sql, type Db } from '@creatoros/db';
 import { ensureFreshToken, refreshGoogleToken, GOOGLE_SCOPES } from '@creatoros/connectors';
 import { connectorContext, loadCredentials } from './integrations';
 import { openAgentFile } from './agent-file';
@@ -416,31 +416,51 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
         fileName: target.fileName, accountId: target.accountId, platform: target.platform,
       });
       if (!meta.ready) { result.skipped++; continue; }
-      const existing = rowsOf<{ id: string; uploadState: string }>(await ctx.db.execute(sql`
-        select id, upload_state as "uploadState" from publish_drafts
-        where org_id=${ctx.orgId} and item_id=${target.itemId} and social_account_id=${target.accountId}
-      `))[0];
+      const [existing] = await ctx.db.select({
+        id: publishDrafts.id, uploadState: publishDrafts.uploadState,
+      }).from(publishDrafts).where(and(
+        eq(publishDrafts.orgId, ctx.orgId),
+        eq(publishDrafts.itemId, target.itemId),
+        eq(publishDrafts.socialAccountId, target.accountId),
+      )).limit(1);
       if (existing && existing.uploadState !== 'DRAFT' && existing.uploadState !== 'FAILED') {
         result.skipped++; result.errors.push(`${file.name}: already ${existing.uploadState}; not overwritten`); continue;
       }
-      const hashtags = meta.hashtags.map((h) => h.replace(/^#/, ''));
-      const privacy = meta.privacy ?? (target.platform === 'youtube' ? 'PRIVATE' : null);
-      const contentForm = meta.contentForm ?? (target.platform === 'youtube' ? 'SHORT' : target.platform === 'instagram' ? 'REEL' : null);
-      const aiUse = meta.aiUse ?? 'YES';
+      // Drizzle's typed text[] mapping encodes hashtags and playlist IDs as
+      // PostgreSQL arrays; raw SQL interpolation incorrectly serialized them.
+      const values = {
+        title: meta.title, caption: meta.caption,
+        hashtags: meta.hashtags.map((h) => h.replace(/^#/, '')),
+        privacy: meta.privacy ?? (target.platform === 'youtube' ? 'PRIVATE' : null),
+        contentForm: meta.contentForm ?? (target.platform === 'youtube' ? 'SHORT' : target.platform === 'instagram' ? 'REEL' : null),
+        playlistIds: meta.playlistIds,
+        aiUse: meta.aiUse ?? 'YES',
+        uploadState: 'DRAFT',
+        error: null,
+        updatedAt: new Date(),
+      };
       if (existing) {
-        await ctx.db.execute(sql`
-          update publish_drafts set title=${meta.title}, caption=${meta.caption}, hashtags=${hashtags},
-            privacy=${privacy}, content_form=${contentForm}, playlist_ids=${meta.playlistIds}, ai_use=${aiUse},
-            upload_state='DRAFT', error=null, updated_at=now()
-          where id=${existing.id} and upload_state in ('DRAFT','FAILED')
-        `);
+        const [updated] = await ctx.db.update(publishDrafts).set(values).where(and(
+          eq(publishDrafts.id, existing.id),
+          eq(publishDrafts.orgId, ctx.orgId),
+          eq(publishDrafts.uploadState, existing.uploadState),
+        )).returning({ id: publishDrafts.id });
+        if (!updated) {
+          result.skipped++;
+          result.errors.push(`${file.name}: draft changed state during prefill; not overwritten`);
+          continue;
+        }
       } else {
-        await ctx.db.execute(sql`
-          insert into publish_drafts (org_id, item_id, social_account_id, title, caption, hashtags, privacy, content_form, playlist_ids, ai_use, upload_state)
-          values (${ctx.orgId}, ${target.itemId}, ${target.accountId}, ${meta.title}, ${meta.caption},
-            ${hashtags}, ${privacy}, ${contentForm}, ${meta.playlistIds}, ${aiUse}, 'DRAFT')
-          on conflict (item_id, social_account_id) do nothing
-        `);
+        const inserted = await ctx.db.insert(publishDrafts).values({
+          orgId: ctx.orgId, itemId: target.itemId,
+          socialAccountId: target.accountId, ...values,
+        }).onConflictDoNothing({ target: [publishDrafts.itemId, publishDrafts.socialAccountId] })
+          .returning({ id: publishDrafts.id });
+        if (!inserted.length) {
+          result.skipped++;
+          result.errors.push(`${file.name}: draft was created concurrently; not overwritten`);
+          continue;
+        }
       }
       result.imported++;
     } catch (e) {

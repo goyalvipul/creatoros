@@ -70,6 +70,18 @@ describe('project social metadata contract', () => {
       thumbnail: { ...raw.thumbnail, imageFile, imageBase64: 'not-base64!' },
     }, expected)).toThrow(/base64/);
   });
+  it('accepts modern typography presets and validates colors and named fonts', () => {
+    const thumb = { ...raw.thumbnail, fontStyle: 'anton', designPreset: 'highlight-box', accentColor: '#FDC22C', highlightWord: 'THUNDER' };
+    const meta = parseSocialMetadata({ ...raw, ready: true, title: 'Eh Oh Ra', thumbnail: thumb }, expected);
+    expect(meta.thumbnail?.designPreset).toBe('highlight-box');
+    expect(meta.thumbnail?.highlightWord).toBe('THUNDER');
+    expect(() => parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra', thumbnail: { ...thumb, accentColor: 'javascript:evil' },
+    }, expected)).toThrow();
+    expect(() => parseSocialMetadata({
+      ...raw, ready: true, title: 'Eh Oh Ra', thumbnail: { ...thumb, fontStyle: 'unknown-font' },
+    }, expected)).toThrow();
+  });
   it('rejects oversized fields and invented API fields', () => {
     expect(() => parseSocialMetadata({ ...raw, caption: 'x'.repeat(5001) }, expected)).toThrow();
     expect(() => parseSocialMetadata({ ...raw, autoPublish: true }, expected)).toThrow();

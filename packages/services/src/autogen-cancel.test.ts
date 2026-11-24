@@ -48,8 +48,8 @@ describe('AutoGen targeted cancellation', () => {
     vi.stubGlobal('fetch', fetcher);
     await cancelAutogenClip(ctx, clipId);
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(String(fetcher.mock.calls[1]![0])).toContain('/queue');
-    expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toEqual({ delete: [promptId] });
+    expect(String((fetcher.mock.calls[1] as unknown as [URL, RequestInit])[0])).toContain('/queue');
+    expect(JSON.parse((fetcher.mock.calls[1] as unknown as [URL, RequestInit])[1].body)).toEqual({ delete: [promptId] });
   });
 
   it('interrupts only the selected running prompt and never issues a global interrupt', async () => {

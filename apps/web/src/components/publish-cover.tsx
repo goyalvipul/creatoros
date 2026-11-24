@@ -6,6 +6,8 @@ import { del, post } from '@/lib/api';
 /** Six frames from the video, plus an upload. One choice is sent with every post of this file. */
 export function ThumbnailPicker({
   variantId,
+  projectId,
+  accountId,
   itemId,
   fileId,
   durationMs,
@@ -18,6 +20,8 @@ export function ThumbnailPicker({
   onSaved,
 }: {
   variantId: string;
+  projectId?: string;
+  accountId?: string;
   itemId: string;
   fileId: string;
   durationMs: number;
@@ -87,11 +91,23 @@ export function ThumbnailPicker({
     if (shots.length) setFrames(shots);
   }
 
+  const specificCover = Boolean(projectId && accountId);
+  const activeHasCover = specificCover
+    ? accountCovers.some((cover) => cover.accountId === accountId)
+    : hasCover;
+
   async function save(data: string, source: 'frame' | 'upload', atMs?: number) {
     setBusy(true);
     setError(null);
     try {
-      await post(`/variants/${variantId}/files/${itemId}/cover`, { data, source, atMs: atMs ?? null });
+      if (projectId && accountId) {
+        // A manual selection replaces only THIS account's imported custom thumbnail.
+        // Other social accounts keep their independent covers.
+        await post(`/projects/${projectId}/social-covers/${itemId}/${accountId}`, { data });
+        onSelectAccount?.(accountId);
+      } else {
+        await post(`/variants/${variantId}/files/${itemId}/cover`, { data, source, atMs: atMs ?? null });
+      }
       setTick((n) => n + 1);
       onSaved();
     } catch (e) {
@@ -101,22 +117,35 @@ export function ThumbnailPicker({
     }
   }
 
+  async function useAutomaticFrame() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (projectId && accountId) {
+        await del(`/projects/${projectId}/social-covers/${itemId}/${accountId}`);
+        onSelectAccount?.('');
+      } else {
+        await del(`/variants/${variantId}/files/${itemId}/cover`);
+      }
+      setPicked(null);
+      setTick((n) => n + 1);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not restore automatic video frame.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold">Thumbnail</p>
-        {hasCover ? (
-          <button
-            type="button"
+        {activeHasCover ? (
+          <button type="button" disabled={busy}
             className="text-xs font-semibold text-muted underline"
-            onClick={() => {
-              setPicked(null);
-              void del(`/variants/${variantId}/files/${itemId}/cover`)
-                .then(onSaved)
-                .catch((e) => setError(e instanceof Error ? e.message : 'Could not clear it.'));
-            }}
-          >
-            Use the video
+            onClick={() => void useAutomaticFrame()}>
+            Use automatic video frame
           </button>
         ) : null}
       </div>
@@ -156,9 +185,8 @@ export function ThumbnailPicker({
             aria-pressed={picked === frame.at}
             className={`h-16 w-12 shrink-0 overflow-hidden rounded-md border ${picked === frame.at ? 'border-[#1d5748] ring-2 ring-[#1d5748]' : 'border-border'}`}
             onClick={() => {
-              setPicked(frame.at);
               void shot(frame.at, true)
-                .then((big) => save(big, 'frame', Math.round(frame.at * 1000)))
+                .then(async (big) => { await save(big, 'frame', Math.round(frame.at * 1000)); setPicked(frame.at); })
                 .catch((e) => setError(e instanceof Error ? e.message : 'That frame could not be read.'));
             }}
           >
@@ -209,8 +237,10 @@ export function ThumbnailPicker({
           />
         </label>
       </div>
-      {accountCovers.length ? (
-        <p className="text-xs text-muted">The first thumbnails above are saved social-specific designs from Kemokem, including their headlines. Choose one to preview it above; the following images are unedited source frames.</p>
+      {specificCover ? (
+        <p className="text-xs text-muted">For this account, click any original frame or upload a picture to REPLACE its custom cover. Use automatic video frame to remove its custom cover. Other social accounts are unchanged.</p>
+      ) : accountCovers.length ? (
+        <p className="text-xs text-muted">The first thumbnails are social-specific saved covers. The six following frames are selectable.</p>
       ) : null}
       {!online ? (
         <p className="text-xs text-muted">The PC that holds this video is off, so frames cannot be read. You can still upload a picture.</p>

@@ -45,6 +45,22 @@ export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: strin
   return saveSocialCoverBytes(ctx, projectId, itemId, accountId, Buffer.from(raw, 'base64'));
 }
 
+/** Restore platform's automatic video frame for one account without touching others. */
+export async function deleteSocialCover(ctx: Ctx, projectId: string, itemId: string, accountId: string) {
+  const [row] = rowsOf<{ id: string }>(await ctx.db.execute(sql`
+    select i.id from publish_items i
+    join distribution_variants v on v.id=i.variant_id
+    join social_accounts sa on sa.id=${accountId} and sa.org_id=${ctx.orgId} and sa.deleted_at is null
+    where i.id=${itemId} and i.org_id=${ctx.orgId}
+      and v.org_id=${ctx.orgId} and v.project_id=${projectId}
+  `));
+  if (!row) throw notFound('Video and social account in project');
+  for (const ext of ['jpg', 'png', 'webp']) {
+    await rm(pathOf(ctx.env, itemId, accountId, ext), { force: true });
+  }
+  return { removed: true, itemId, accountId };
+}
+
 export async function readSocialCover(
   ctx: Pick<Ctx, 'db' | 'env'>, orgId: string, itemId: string, accountId: string,
 ): Promise<{ mime: string; bytes: Buffer } | null> {

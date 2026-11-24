@@ -14,6 +14,7 @@ type Clip = {
   status: string;
   attempt: number;
   workerLabel: string | null;
+  promptId: string | null;
   error: string | null;
 };
 
@@ -229,7 +230,8 @@ export function AutoGen({ active }: { active: boolean }) {
                 <ul className="mt-3 space-y-2">
                   {run.clips.map((clip) => {
                     const waiting = clip.status === 'WAITING';
-                    const runningClip = clip.status === 'RUNNING';
+                    const runningClip = clip.status === 'RUNNING' && Boolean(clip.promptId);
+                    const submitting = clip.status === 'RUNNING' && !clip.promptId;
                     const staging = clip.status === 'CLAIMED';
                     return (
                       <li key={clip.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3 text-sm">
@@ -241,7 +243,7 @@ export function AutoGen({ active }: { active: boolean }) {
                           </div>
                           <div className="text-xs text-muted">{clip.workerLabel || 'Waiting for GPU assignment'}</div>
                           {clip.error ? <div className={clip.status === 'CANCELLED' ? 'text-xs text-muted' : 'text-xs text-bad'}>{clip.error}</div> : null}
-                          {staging ? <p className="text-xs text-muted">Submitting to the GPU; stop becomes available once ComfyUI has acknowledged the prompt.</p> : null}
+                          {(staging || submitting) ? <p className="text-xs text-muted">Submitting to the GPU; stop becomes available once ComfyUI confirms the prompt.</p> : null}
                         </div>
                         {(waiting || runningClip) ? (
                           <Button size="sm" variant={waiting ? "secondary" : "danger"} busy={cancelBusy === clip.id}

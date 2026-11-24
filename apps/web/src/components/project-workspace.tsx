@@ -911,7 +911,7 @@ function PublishDesk({
           <p className="mb-2 text-xs text-muted">No custom cover saved for this video yet. Showing the original video frame.</p>
         )}
         <div className="overflow-hidden rounded-xl" style={{ width: cardWidth(ratio), maxWidth: '100%' }}>
-          <FilePreview item={current} poster={activeCoverUrl} playing={playing === current.fileInstanceId}
+          <FilePreview key={`${current.id}:${selectedCoverAccount ?? 'original'}`} item={current} poster={activeCoverUrl} playing={playing === current.fileInstanceId}
             onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
         </div>
         {isVideoFile(current.fileName) ? (

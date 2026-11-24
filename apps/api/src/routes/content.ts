@@ -54,6 +54,7 @@ import {
   clearPublishCover,
   readPublishCover,
   saveSocialCover,
+  deleteSocialCover,
   readSocialCover,
   verifySocialCoverToken,
   verifyCoverToken,
@@ -1080,6 +1081,11 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
     params: z.object({ id: uuid, itemId: uuid, accountId: uuid }), bodyLimit: 4 * 1024 * 1024,
     body: z.object({ data: z.string().min(16).max(3_000_000) }),
   }, ({ ctx, params, body }) => saveSocialCover(ctx, params.id, params.itemId, params.accountId, body.data));
+  route({
+    method: 'DELETE', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
+    summary: 'Use the automatic video frame instead of an account-specific custom thumbnail',
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }),
+  }, ({ ctx, params }) => deleteSocialCover(ctx, params.id, params.itemId, params.accountId));
   route(
     {
       method: 'POST',

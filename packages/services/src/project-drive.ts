@@ -3,6 +3,7 @@ import { ensureFreshToken, refreshGoogleToken, GOOGLE_SCOPES } from '@creatoros/
 import { connectorContext, loadCredentials } from './integrations';
 import { openAgentFile } from './agent-file';
 import { uploadDriveStream } from './drive-resumable';
+import { readSocialCover, saveSocialCoverBytes } from './social-cover';
 import { audit } from './audit';
 import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 import { parseSocialMetadata, metadataFileName, metadataTemplate, type SocialMetadata } from './project-drive-metadata';
@@ -388,11 +389,11 @@ export async function getProjectThumbnailBrief(ctx: Ctx, projectId: string, item
   if (!file) throw notFound('Thumbnail brief');
   const response = await driveFetch(ctx.db, ctx.env, ctx.orgId, `${DRIVE}/${encodeURIComponent(file.id)}?alt=media`);
   const raw = await response.text();
-  if (raw.length > 100_000) throw badRequest('Thumbnail metadata is too large.');
+  if (raw.length > 650_000) throw badRequest('Thumbnail metadata is too large.');
   const meta = parseSocialMetadata(JSON.parse(raw), {
     projectId, itemId, accountId, fileInstanceId: target.fileInstanceId, fileName: target.fileName, platform: target.platform,
   });
-  return meta.ready ? meta.thumbnail ?? null : null;
+  return meta.ready && meta.thumbnail ? { ...meta.thumbnail, imageBase64: undefined } : null;
 }
 
 /** Import metadata only for the exact project + video + account. Never replace scheduled/published drafts. */
@@ -402,7 +403,7 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
   const files = await listDriveFiles(ctx.db, ctx.env, ctx.orgId, `'${quoted(status.job.folderId)}' in parents and trashed=false`);
   const targets = await socialTargets(ctx.db, ctx.orgId, projectId);
   const validTargets = new Map(targets.map((target) => [metadataFileName(target.itemId, target.accountId), target]));
-  const result = { imported: 0, skipped: 0, errors: [] as string[] };
+  const result = { imported: 0, skipped: 0, coversImported: 0, existingCoversPreserved: 0, errors: [] as string[] };
   for (const file of files) {
     if (!file.name.startsWith('meta__') || !file.name.endsWith('.json')) continue;
     const target = validTargets.get(file.name);
@@ -410,7 +411,7 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
     try {
       const response = await driveFetch(ctx.db, ctx.env, ctx.orgId, `${DRIVE}/${encodeURIComponent(file.id)}?alt=media`);
       const raw = await response.text();
-      if (raw.length > 100_000) throw badRequest('Metadata JSON is too large.');
+      if (raw.length > 650_000) throw badRequest('Metadata JSON is too large.');
       const meta = parseSocialMetadata(JSON.parse(raw), {
         projectId, itemId: target.itemId, fileInstanceId: target.fileInstanceId,
         fileName: target.fileName, accountId: target.accountId, platform: target.platform,
@@ -460,6 +461,19 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
           result.skipped++;
           result.errors.push(`${file.name}: draft was created concurrently; not overwritten`);
           continue;
+        }
+      }
+      // These image bytes are inside the Kemokem-created metadata file, which
+      // remains accessible with the narrow drive.file scope. The separate JPG
+      // in Drive is an editable/downloadable review copy, not the import source.
+      if (meta.thumbnail?.imageBase64) {
+        const currentCover = await readSocialCover(ctx, ctx.orgId, target.itemId, target.accountId);
+        if (currentCover) {
+          result.existingCoversPreserved++;
+        } else {
+          const bytes = Buffer.from(meta.thumbnail.imageBase64, 'base64');
+          await saveSocialCoverBytes(ctx, projectId, target.itemId, target.accountId, bytes);
+          result.coversImported++;
         }
       }
       result.imported++;

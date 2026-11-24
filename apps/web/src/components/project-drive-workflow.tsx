@@ -50,7 +50,7 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [prefillResult, setPrefillResult] = useState<{ imported: number; skipped: number; errors: string[] } | null>(null);
+  const [prefillResult, setPrefillResult] = useState<{ imported: number; skipped: number; coversImported?: number; existingCoversPreserved?: number; errors: string[] } | null>(null);
   const [dates, setDates] = useState<Record<string, string>>({});
   const [selectedTargets, setSelectedTargets] = useState<string[]>([]);
   const [metadataBusy, setMetadataBusy] = useState(false);
@@ -104,7 +104,7 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
   async function prefill() {
     setBusy('prefill'); setError(''); setNotice(''); setPrefillResult(null);
     try {
-      const result = await post<{ imported: number; skipped: number; errors: string[] }>(`/projects/${projectId}/drive/prefill`, {});
+      const result = await post<{ imported: number; skipped: number; coversImported?: number; existingCoversPreserved?: number; errors: string[] }>(`/projects/${projectId}/drive/prefill`, {});
       await refresh(`/projects/${projectId}/social-drafts`, '/publishing/matrix',
         ...variantIds.map((id) => `/variants/${id}/publish`));
       setPrefillResult(result);
@@ -216,6 +216,10 @@ export function ProjectDriveWorkflow({ projectId, tz, variantIds = [] }: { proje
             <ul className="space-y-1 text-sm">
               <li className="font-medium text-green-700 dark:text-green-400">✓ {prefillResult.imported} drafts imported successfully</li>
               <li className="font-medium text-amber-700 dark:text-amber-400">⚠ {prefillResult.skipped} drafts skipped ({protectedSkips.length} protected existing posts)</li>
+              <li className="font-medium text-green-700 dark:text-green-400">✓ {prefillResult.coversImported ?? 0} custom social thumbnails imported</li>
+              {(prefillResult.existingCoversPreserved ?? 0) > 0 ? (
+                <li className="font-medium text-amber-700 dark:text-amber-400">⚠ {prefillResult.existingCoversPreserved} existing custom thumbnails preserved</li>
+              ) : null}
               <li className={otherFailures.length ? 'font-medium text-red-700 dark:text-red-400' : 'font-medium text-green-700 dark:text-green-400'}>
                 {otherFailures.length ? '✕' : '✓'} {otherFailures.length} import errors
               </li>

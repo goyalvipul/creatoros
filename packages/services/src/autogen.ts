@@ -303,7 +303,7 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
         await db.execute(sql`
           update autogen_clips
           set status = 'FAILED', error = 'The other PC is not available for a retry.', updated_at = now()
-          where id = ${clip.id}`);
+          where id = ${clip.id} and status = 'WAITING'`);
       }
     }
     const still = waiting.filter((clip) => clip.attempt === 0 || workers.some((worker) => worker.id !== clip.excludeWorkerId));
@@ -324,7 +324,7 @@ export async function dispatchAutogen(db: Db, env: ServiceEnv) {
       const duration = autogenClipSeconds(worker, clip.startSec, run.audioLengthSec);
       if (duration == null) {
         await db.execute(sql`
-          update autogen_clips set status = 'FAILED', error = 'The song ends before this start.', updated_at = now() where id = ${clip.id}`);
+          update autogen_clips set status = 'FAILED', error = 'The song ends before this start.', updated_at = now() where id = ${clip.id} and status = 'WAITING'`);
         continue;
       }
       const claimed = rowsOf<{ id: string }>(await db.execute(sql`

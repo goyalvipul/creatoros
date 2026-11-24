@@ -49,21 +49,6 @@ const FORMATS: Record<string, { w: number; h: number; label: string }> = {
   tiktok: { w: 1080, h: 1920, label: 'TikTok · 9:16' },
   threads: { w: 1080, h: 1350, label: 'Threads · 4:5' },
 };
-function drawWrapped(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number, line: number, limit: number) {
-  const words = value.trim().split(/\s+/);
-  let current = '';
-  let count = 0;
-  for (const word of words) {
-    const test = current ? current + ' ' + word : word;
-    if (current && ctx.measureText(test).width > maxWidth && count < limit - 1) {
-      ctx.fillText(current, x, y + count * line);
-      count++;
-      current = word;
-    } else current = test;
-  }
-  if (current) ctx.fillText(current, x, y + count * line);
-  return count + 1;
-}
 function drawImageCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, iw: number, ih: number, w: number, h: number, focalX: number) {
   const scale = Math.max(w / iw, h / ih);
   const sw = w / scale;

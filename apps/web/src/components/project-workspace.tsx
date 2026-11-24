@@ -849,7 +849,28 @@ function PublishDesk({
   const current = items.find((item) => item.id === selected) ?? items[0];
   const [ratio, setRatio] = useState<number | null>(null);
   const [trim, setTrim] = useState(false);
-  useEffect(() => setRatio(null), [current?.fileInstanceId]);
+  const [previewAccountId, setPreviewAccountId] = useState<string | null>(null);
+  const [coverVersion, setCoverVersion] = useState(0);
+  const coverStatus = useApi<{ itemId: string; covers: { accountId: string; platform: string; saved: boolean }[] }>(
+    current?.id ? `/projects/${projectId}/social-covers/${current.id}/status` : null,
+  );
+  const savedAccounts = new Set((coverStatus.data?.covers ?? []).filter((cover) => cover.saved).map((cover) => cover.accountId));
+  const selectedCoverAccount = previewAccountId && savedAccounts.has(previewAccountId)
+    ? previewAccountId
+    : accounts.find((account) => account.platform === 'youtube' && savedAccounts.has(account.id))?.id
+      ?? accounts.find((account) => savedAccounts.has(account.id))?.id
+      ?? null;
+  const activeCoverUrl = selectedCoverAccount
+    ? `/api/v1/publish-items/${current.id}/social-covers/${selectedCoverAccount}?v=${coverVersion}`
+    : undefined;
+  async function refreshCovers() {
+    setCoverVersion((v) => v + 1);
+    await refresh(`/projects/${projectId}/social-covers/${current.id}/status`, `/variants/${variantId}/publish`);
+  }
+  useEffect(() => {
+    setRatio(null);
+    setPreviewAccountId(null);
+  }, [current?.fileInstanceId]);
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(240px,0.8fr)]">
       <div>
@@ -872,8 +893,26 @@ function PublishDesk({
             })}
           </ul>
         )}
+        {savedAccounts.size > 0 ? (
+          <div className="mb-2 space-y-2">
+            <p className="text-xs font-semibold">Custom cover preview — select a social platform</p>
+            <div className="flex flex-wrap gap-2">
+              {accounts.filter((account) => savedAccounts.has(account.id)).map((account) => (
+                <button key={account.id} type="button" aria-pressed={selectedCoverAccount === account.id}
+                  className={clsx('flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs', selectedCoverAccount === account.id ? 'border-[#1d5748] bg-[#e5f6ea] text-[#1d5748]' : 'border-border')}
+                  onClick={() => { setPreviewAccountId(account.id); onSelect(current.id); }}>
+                  <PlatformLogo platform={account.platform} className="size-3.5" />
+                  {account.handle}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p className="mb-2 text-xs text-muted">No custom cover saved for this video yet. Showing the original video frame.</p>
+        )}
         <div className="overflow-hidden rounded-xl" style={{ width: cardWidth(ratio), maxWidth: '100%' }}>
-          <FilePreview item={current} playing={playing === current.fileInstanceId} onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
+          <FilePreview item={current} poster={activeCoverUrl} playing={playing === current.fileInstanceId}
+            onPlay={() => onPlay(current.fileInstanceId)} onRatio={setRatio} />
         </div>
         {isVideoFile(current.fileName) ? (
           <div className="mt-3">
@@ -884,7 +923,13 @@ function PublishDesk({
               durationMs={Number(current.durationMs) || 0}
               online={current.deviceState === 'ONLINE'}
               hasCover={Boolean(current.hasCover)}
-              onSaved={() => void refresh(`/variants/${variantId}/publish`)}
+              accountCovers={accounts.filter((account) => savedAccounts.has(account.id)).map((account) => ({
+                accountId: account.id, platform: account.platform, handle: account.handle,
+              }))}
+              selectedCoverAccount={selectedCoverAccount}
+              coverVersion={coverVersion}
+              onSelectAccount={setPreviewAccountId}
+              onSaved={() => void refreshCovers()}
             />
           </div>
         ) : null}
@@ -1002,11 +1047,13 @@ function FrameStill({ fileId, online, name }: { fileId: string; online: boolean;
 
 function FilePreview({
   item,
+  poster,
   playing,
   onPlay,
   onRatio,
 }: {
   item: any;
+  poster?: string;
   playing: boolean;
   onPlay: () => void;
   onRatio?: (ratio: number) => void;
@@ -1017,6 +1064,7 @@ function FilePreview({
   return (
     <VideoThumb
       fileId={item.fileInstanceId}
+      poster={poster}
       online={item.deviceState === 'ONLINE'}
       playing={playing}
       onPlay={onPlay}

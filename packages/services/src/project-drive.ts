@@ -485,6 +485,19 @@ export async function prefillProjectSocials(ctx: Ctx, projectId: string) {
   return result;
 }
 
+/** Which per-account covers were actually saved to Kemokem storage for this project video?
+ * Client uses this instead of guessing whether a Drive JPG was imported. */
+export async function getProjectSocialCoverStatus(ctx: Ctx, projectId: string, itemId: string) {
+  const matches = (await socialTargets(ctx.db, ctx.orgId, projectId)).filter((target) => target.itemId === itemId);
+  if (!matches.length) throw notFound('Project publishing video');
+  const covers = await Promise.all(matches.map(async (target) => ({
+    accountId: target.accountId,
+    platform: target.platform,
+    saved: Boolean(await readSocialCover(ctx, ctx.orgId, itemId, target.accountId)),
+  })));
+  return { itemId, covers };
+}
+
 export async function getProjectScheduleRows(ctx: Ctx, projectId: string) {
   const [project] = rowsOf<{ id: string }>(await ctx.db.execute(sql`
     select id from creative_projects where id=${projectId} and org_id=${ctx.orgId} and deleted_at is null

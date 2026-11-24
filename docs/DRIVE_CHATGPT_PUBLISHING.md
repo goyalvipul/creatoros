@@ -106,6 +106,21 @@ When analyzing a Drive project folder for Kemokem:
 
 Suggested design reading: vidIQ's 2026 500-breakout-thumbnail study (https://vidiq.com/research/youtube-thumbnail-study/) found that faces, short text and strong contrast are common among breakout thumbnails. This is descriptive evidence, **not** proof that a specific design will improve CTR. Verify current YouTube custom-thumbnail upload rules at https://support.google.com/youtube/answer/72431.
 
+## Drive-based custom thumbnail import (no broad Drive scope)
+
+Kemokem can now import actual custom thumbnails when the user presses **Prefill socials**. A thumbnail for one publishing item + social account is named `thumb__<publishItemId>__<socialAccountId>.jpg` and appears in the project Drive folder for visual review.
+
+**Important Google OAuth detail:** Kemokem deliberately uses `drive.file`, which does not automatically grant it access to independently created JPGs, even inside an app-created folder. For this reason the corresponding **existing app-owned** `meta__*.json` file may include `thumbnail.imageFile` and the verified JPG's base64 bytes in `thumbnail.imageBase64`. The metadata importer validates that both refer to the exact project video/account. This avoids changing to a broad Google Drive scope or requiring a new OAuth connection. The JSON file is capped at 650 KB and the stored cover itself at 2 MB.
+
+On Prefill:
+- Existing scheduled, queued and published posts are protected; nothing is re-published.
+- Imported or updated draft records receive their normal title/caption/tags/AI disclosure.
+- If the matching draft has no manually saved social cover, the validated embedded JPG is saved into Kemokem's shared per-account social cover directory.
+- If the user already created their own custom cover, it is **preserved** rather than overwritten.
+- The result reports how many thumbnails were imported and how many existing covers were preserved.
+- The JPG files are downloadable review copies; Kemokem imports from the matching app-owned JSON. Future automatic folder analyses should update the **existing** templates in place rather than create replacements.
+- Do not click Prefill on an **older deployed Kemokem build** after embedding images in the JSON: the older importer rejects files over 100 KB. Deploy this branch's importer first.
+
 ## Prefill result display
 
 Show a concise green imported-count row, amber skipped/protected-count row and red error-count row **only when errors occur**. Provide expandable per-file detail. An already published item is a protected skip, not a failure. Opening project Publishing afterwards should show refreshed draft fields.

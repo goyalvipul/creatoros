@@ -195,7 +195,7 @@ async function uploadVideo(
     metadata.appProperties?.kemokemFileInstanceId !== video.fileInstanceId) {
     throw badRequest(`Drive upload verification failed for ${video.fileName}; the file will be retried.`);
   }
-  known.push(item);
+  known.push({ id: item.id, name: item.name ?? video.fileName, size: String(source.size), appProperties: metadata.appProperties });
 }
 
 /**

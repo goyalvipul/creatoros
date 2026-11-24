@@ -124,3 +124,31 @@ On Prefill:
 ## Prefill result display
 
 Show a concise green imported-count row, amber skipped/protected-count row and red error-count row **only when errors occur**. Provide expandable per-file detail. An already published item is a protected skip, not a failure. Opening project Publishing afterwards should show refreshed draft fields.
+
+## 2026 creator-grade thumbnail typography upgrade
+
+The thumbnail studio provides **static cover design only**. It does not apply animated subtitles or timed karaoke captions to the MP4; those require a separate non-destructive video-renderer workflow.
+
+Research reference: [10 current CapCut caption treatments](https://www.youtube.com/watch?v=Q04FF5KZyt4) (Patrik Key, Aug. 2026), [bold/thin type pairing and reusable presets](https://www.youtube.com/watch?v=3yQN5RqdZ4U), [Figma's thumbnail font guide](https://www.figma.com/resource-library/best-fonts-for-thumbnails/), and the [MDN canvas font-loading API](https://developer.mozilla.org/en-US/docs/Web/API/CSS_Font_Loading_API). These demonstrate style ideas, **not** evidence of a guaranteed CTR increase. The provided reference Short `zsnD2OjwEsQ` could not be independently fetched during development; do not describe its on-screen typography as inspected.
+
+The editor offers seven independent visual presets:
+- `bold-viral`: heavy outline with a single highlighted word
+- `premium-music`: restrained gold accent, high-contrast modern headline
+- `highlight-box`: colored keyword and dark text card
+- `cinematic-poster`: tall poster typography
+- `neon-stage`: subtle accent glow
+- `sticker-punch`: bright sticker headline
+- `minimal-clean`: reduced shadow and editorial hierarchy
+
+Supported fonts: Anton, Bebas Neue, League Spartan, Sora, Space Grotesk and Montserrat, plus three system fallbacks. They load through the Google Fonts CSS API **at runtime**, and the editor explicitly awaits `document.fonts.load` before exporting a JPG to prevent font substitution between preview and save. If external font requests are unavailable, select a system fallback. No font binaries are distributed or committed into the repo.
+
+The metadata `thumbnail` object additionally supports:
+- `designPreset`: one of the seven options above
+- `fontStyle`: the exact supported family key
+- `accentColor`: six-digit hex CSS color
+- `highlightWord`: at most 24 characters
+- Existing keys `headline`, `subheadline`, `placement`, `focalX`, `aspect`, `notes`, `imageFile` and `imageBase64` remain backward-compatible.
+
+Each design should prioritize recognizable Mehak identity, a clear emotion, **2–5 word hook** and strong mobile contrast. Keep text away from the eyes and important action. Avoid unverified performance claims or text that advertises the production process in visible titles/thumbnails. Required `aiUse` disclosure remains separate.
+
+**Caution for new analyses:** If existing JSON already embeds `thumbnail.imageBase64`, that represents the existing finished cover and may be imported unchanged by Prefill. Updating `designPreset` or `fontStyle` alone **does not regenerate** that JPEG. To apply a new style, open Design cover, render and save it, or produce a replacement finished JPG and update its embedded bytes. Existing manually saved covers are protected against Prefill overwrites.

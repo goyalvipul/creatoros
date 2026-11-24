@@ -237,9 +237,6 @@ function LivePreview({
   );
   const savedAccounts = new Set((coverStatus.data?.covers ?? []).filter((x) => x.saved).map((x) => x.accountId));
   const activeCoverId = account?.id && savedAccounts.has(account.id) ? account.id : null;
-  const customPoster = activeCoverId
-    ? `/api/v1/publish-items/${item.id}/social-covers/${activeCoverId}?v=${coverVersion}`
-    : undefined;
   const accountCovers = accounts.filter((entry) => savedAccounts.has(entry.id))
     .sort((a, b) => Number(b.id === account?.id) - Number(a.id === account?.id))
     .map((entry) => ({ accountId: entry.id, platform: entry.platform, handle: entry.handle }));

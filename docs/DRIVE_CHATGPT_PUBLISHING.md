@@ -152,3 +152,11 @@ The metadata `thumbnail` object additionally supports:
 Each design should prioritize recognizable Mehak identity, a clear emotion, **2–5 word hook** and strong mobile contrast. Keep text away from the eyes and important action. Avoid unverified performance claims or text that advertises the production process in visible titles/thumbnails. Required `aiUse` disclosure remains separate.
 
 **Caution for new analyses:** If existing JSON already embeds `thumbnail.imageBase64`, that represents the existing finished cover and may be imported unchanged by Prefill. Updating `designPreset` or `fontStyle` alone **does not regenerate** that JPEG. To apply a new style, open Design cover, render and save it, or produce a replacement finished JPG and update its embedded bytes. Existing manually saved covers are protected against Prefill overwrites.
+
+## Showing imported custom thumbnails in Publishing
+
+After running Prefill socials on the build containing the cover importer, open **Project → Publishing**. Imported covers reside in Kemokem's shared media volume (`mediaPreviewDir/social-covers/<publishItemId>_<socialAccountId>.jpg`) rather than inside the source MP4 or the older generic publish-item cover. Separate JPG review copies also remain in Google Drive. An existing video-frame preview does not indicate whether a social cover was imported.
+
+The Publishing screen now queries `GET /projects/:id/social-covers/:itemId/status`. It shows the saved platform/account covers in a selectable toolbar, uses the selected cover (including its rendered text) as the main video's poster, and puts the selected custom cover **first** in the thumbnail strip. The original six video frames remain selectable as a separate generic fallback. **Edit this social cover** opens the platform-specific cover editor; saving updates the preview. These previews are not burned into the MP4.
+
+When Prefill sees a draft that is already `PUBLISHED`, `SCHEDULED` or queued, it does not modify that draft's metadata. It may still import a missing matching cover into Kemokem for reference and future reuse. Existing saved custom covers remain preserved. If the screen reports no cover, confirm the latest deployed importer and inspect the Prefill `custom social thumbnails imported` count; do not claim that thumbnails are imported solely because the JPGs are visible in Google Drive.

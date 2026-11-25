@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { sql } from '@creatoros/db';
+import { sql, type Executor } from '@creatoros/db';
 import { audit, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
@@ -14,8 +14,12 @@ type Mode = z.infer<typeof mode>;
 type State = { enabled:boolean; mode:Mode; scopes:string[]; local_scopes:string[]; hosted_scopes:string[]; local_configured:boolean; hosted_configured:boolean; local_seen:string|null; hosted_seen:string|null };
 type GatewayAuth = { ctx:Ctx; mode:Mode; hash:string; scopes:string[] };
 type RequestRow = { id:string; mode:Mode; operation:string; scope:string; input:unknown; status:string; result:unknown; created_at:string; expires_at:string; finished_at:string|null };
+function reqFailure(error:unknown):never {
+  if(error instanceof z.ZodError) throw badRequest('Approved operation has invalid input.');
+  throw badRequest('Operation failed. Review the corresponding Kemokem page before retrying.');
+}
 const defaults = ['projects.read','media.read'];
-async function state(ctx:Ctx) {
+async function state(ctx: {orgId:string;db:Executor}) {
   const [r]=rows<State>(await ctx.db.execute(sql`select enabled,mode,case when mode='local' then local_scopes else hosted_scopes end as scopes,local_scopes,hosted_scopes,local_hash is not null as local_configured,hosted_hash is not null as hosted_configured,local_seen,hosted_seen from ai_gateway_connections where org_id=${ctx.orgId}`));
   return {...(r??{enabled:false,mode:'hosted',scopes:defaults,local_scopes:defaults,hosted_scopes:defaults,local_configured:false,hosted_configured:false,local_seen:null,hosted_seen:null}),permissionGroups};
 }
@@ -87,7 +91,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   route({method:'GET',url:'/integrations/ai-gateway/requests',tag:'AI Gateway',summary:'Review requested operations',role:'OWNER'},async({ctx,reply})=>{
     reply.header('cache-control','no-store');
     // Avoid transmitting base64 thumbnails in the review list; the immutable input stays on the server.
-    return rows(await ctx.db.execute(sql`select id,mode,operation,scope,input-'base64' as input,status,result,created_at,expires_at,finished_at from ai_gateway_requests where org_id=${ctx.orgId} order by created_at desc limit 50`));
+    return rows(await ctx.db.execute(sql`select id,mode,operation,scope,input-'base64' as input,case when status='PENDING' and expires_at<=now() then 'EXPIRED' else status end as status,result,created_at,expires_at,finished_at from ai_gateway_requests where org_id=${ctx.orgId} order by created_at desc limit 50`));
   });
   route({method:'POST',url:'/integrations/ai-gateway/requests/:id/review',tag:'AI Gateway',summary:'Owner approves or rejects one immutable request',role:'OWNER',params:z.object({id:z.uuid()}),body:z.object({decision:z.enum(['approve','reject'])}).strict()},async({ctx,params,body,reply})=>{
     reply.header('cache-control','no-store');
@@ -111,7 +115,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       // Never echo upstream secrets. Running/failed operations are not automatically retried.
       await ctx.db.execute(sql`update ai_gateway_requests set status='FAILED',result='{"message":"Operation failed. Check Kemokem before retrying."}'::jsonb,finished_at=now() where id=${r.id} and org_id=${ctx.orgId}`);
       await audit(ctx,'ai_gateway.failed',{type:'ai_gateway_request',id:r.id},undefined,{operation:r.operation});
-      throw e;
+      reqFailure(e);
     }
   });
   app.addHook('onSend',async(req,reply,payload)=>{if(req.url.split('?')[0]!.startsWith('/api/v1/ai-gateway/'))reply.header('cache-control','no-store');return payload;});

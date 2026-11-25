@@ -9,6 +9,7 @@ import {
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
   type Ctx,
 } from '@creatoros/services';
+import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
 import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -95,7 +96,7 @@ async function keyframes(ctx:Ctx,p:{id:string;seconds:number[]}) {
     const frames=[];
     for(const second of p.seconds){
       const out=join(dir,'frame.jpg');
-      await exec('ffmpeg',['-nostdin','-v','error','-y','-threads','1','-ss',String(second),'-i',join(dir,'input'),'-frames:v','1','-vf','scale=640:640:force_original_aspect_ratio=decrease','-q:v','5',out],{timeout:15000,maxBuffer:65536});
+      await exec('ffmpeg',['-nostdin','-v','error','-y','-threads','1','-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,avi,mpegts,mpeg,flv','-ss',String(second),'-i',join(dir,'input'),'-frames:v','1','-vf','scale=640:640:force_original_aspect_ratio=decrease','-q:v','5',out],{timeout:15000,maxBuffer:65536});
       const bytes=await readFile(out);
       if(bytes.length>300000)throw badRequest('Frame exceeds limit.');
       frames.push({second,mime:'image/jpeg',base64:bytes.toString('base64')});
@@ -109,14 +110,14 @@ export const permissionGroups = [
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
   {name:'Production',items:[['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},
-  {name:'Media and analysis',items:[['media.read','Read video inventory and saved analysis'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
+  {name:'Media and analysis',items:[['media.read','Read video inventory, analysis and transcripts'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
   {name:'GPU and generation',items:[['gpu.read','Read GPU availability'],['generation.read','Read generation jobs and output IDs'],['generation.submit','Queue generation jobs'],['generation.cancel','Cancel specific generation jobs']]},
   {name:'Publishing and SEO',items:[['publishing.read','Read publishing queue and social accounts'],['publishing.write','Save platform publishing drafts'],['thumbnail.write','Attach custom thumbnails'],['schedule.write','Schedule approved videos'],['schedule.manage','Reschedule or cancel pending uploads']]},
-  {name:'Analytics',items:[['analytics.read','Read stored analytics and post performance']]},
+  {name:'Analytics',items:[['analytics.read','Read stored analytics, post performance and demographics']]},
   {name:'Unified Inbox',items:[['comments.read','Read comments'],['messages.read','Read direct messages'],['replies.draft','Draft replies'],['replies.send','Send approved replies']]},
 ] as const;
 export const scopes=permissionGroups.flatMap(g=>g.items.map(item=>item[0]));
-type Scope=typeof scopes[number];
+type Scope=(typeof permissionGroups)[number]['items'][number][0];
 type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknown,requestId:string)=>Promise<unknown>};
 function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string)=>Promise<unknown>):Operation {
   return {scope,write,schema,run:(ctx,p,r)=>run(ctx,schema.parse(p),r)};
@@ -148,8 +149,9 @@ export const operations:Record<string,Operation>={
  'longvideo.attach':op('longvideo.write',true,z.object({projectId:uuid,fileId:uuid,sceneId:uuid.nullable()}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.fileId);await addLongVideoFromLibrary(ctx,p.projectId,p.fileId,p.sceneId);return {attached:true};}),
  'media.list':op('media.read',false,z.object({kind:z.enum(['IMAGE','VIDEO','AUDIO']).default('VIDEO')}).strict(),(ctx,p)=>query(ctx,sql`select id,file_name,file_type,tech from file_instances where org_id=${ctx.orgId} and archived_at is null and availability='AVAILABLE' and file_type::text=${p.kind} order by created_at desc limit 100`)),
  'media.analysis':op('media.read',false,id,(ctx,p)=>query(ctx,sql`select j.id,j.status,j.output,j.finished_at from ai_jobs j join file_instances f on f.id::text=j.target_id and f.org_id=j.org_id where j.org_id=${ctx.orgId} and f.id=${p.id} and j.target_type='library_file' and j.task='video_analyze' order by j.created_at desc limit 5`)),
+ 'media.transcript':op('media.read',false,id,async(ctx,p)=>{await owned(ctx,'file',p.id);const [r]=rows<{transcript:unknown}>(await ctx.db.execute(sql`select output->'analysis'->'transcript' as transcript from ai_jobs where org_id=${ctx.orgId} and task='video_analyze' and target_type='library_file' and target_id=${p.id} and status='COMPLETED' order by finished_at desc limit 1`));return {available:Array.isArray(r?.transcript),transcript:r?.transcript??null,source:'Gemini video analysis; not a verified verbatim transcript'};}),
  'media.keyframes':op('frames.read',false,z.object({id:uuid,seconds:z.array(z.number().min(0).max(7200)).min(1).max(4)}).strict(),keyframes),
- 'media.analyze':op('analysis.request',true,id,async(ctx,p,r)=>{await owned(ctx,'file',p.id);const job=await queueVideoAnalysis(ctx,{fileId:p.id,acceptBillable:true,idempotencyKey:r});return {id:job.id,status:job.status};}),
+ 'media.analyze':op('analysis.request',true,id,async(ctx,p,r)=>{await owned(ctx,'file',p.id);if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${p.id} and file_type='VIDEO'`)).length)throw badRequest('Choose a video.');const job=await queueVideoAnalysis(ctx,{fileId:p.id,acceptBillable:true,idempotencyKey:r});return {id:job.id,status:job.status};}),
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
  'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,finished_at from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
@@ -160,12 +162,24 @@ export const operations:Record<string,Operation>={
  'generation.cancelClip':op('generation.cancel',true,id,(ctx,p)=>cancelAutogenClip(ctx,p.id)),
  'generation.cancelScene':op('generation.cancel',true,scenePair,async(ctx,p)=>{await cancelLongVideoScene(ctx,p.projectId,p.sceneId);return {cancelled:true};}),
  'publishing.accounts':op('publishing.read',false,empty,ctx=>query(ctx,sql`select id,platform,handle from social_accounts where org_id=${ctx.orgId} and active and deleted_at is null order by platform,handle`)),
- 'publishing.queue':op('publishing.read',false,empty,ctx=>query(ctx,sql`select i.id as item_id,v.project_id,f.file_name,d.social_account_id,d.title,d.caption,d.hashtags,d.upload_state,d.scheduled_at from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id join file_instances f on f.id=i.file_instance_id and f.org_id=i.org_id left join publish_drafts d on d.item_id=i.id and d.org_id=i.org_id where i.org_id=${ctx.orgId} order by i.created_at desc limit 200`)),
+ 'publishing.queue':op('publishing.read',false,empty,ctx=>query(ctx,sql`select i.id as item_id,v.project_id,f.file_name,d.id as draft_id,d.social_account_id,d.title,d.caption,d.hashtags,d.upload_state,d.scheduled_at from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id join file_instances f on f.id=i.file_instance_id and f.org_id=i.org_id left join publish_drafts d on d.item_id=i.id and d.org_id=i.org_id where i.org_id=${ctx.orgId} order by i.created_at desc limit 200`)),
  'publishing.preview':op('publishing.read',false,id,(ctx,p)=>getProjectScheduleRows(ctx,p.id)),
  'publishing.draft':op('publishing.write',true,draftSchema,saveDraft),
  'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(2700000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),async(ctx,p)=>{const t=await draftTarget(ctx,p.itemId,p.socialAccountId);if(!t.project_id)throw badRequest('Link a project first.');return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,Buffer.from(p.base64,'base64'));}),
  'publishing.schedule':op('schedule.write',true,scheduleSchema,async(ctx,p,r)=>{await draftTarget(ctx,p.itemId,p.socialAccountId);await schedulePublish(ctx,{...p,requestId:r});return {scheduled:true};}),
  'publishing.cancel':op('schedule.manage',true,id,async(ctx,p)=>ctx.db.transaction(async tx=>{const [d]=rows<{publication_id:string|null}>(await tx.execute(sql`update publish_drafts set upload_state='DRAFT',scheduled_at=null,request_id=null,updated_at=now() where org_id=${ctx.orgId} and id=${p.id} and upload_state='SCHEDULED' returning publication_id`));if(!d)throw conflict('Only pending scheduled uploads can be cancelled.');if(d.publication_id)await tx.execute(sql`update publication_records set state='PLANNED',planned_at=null,updated_at=now() where org_id=${ctx.orgId} and id=${d.publication_id} and state='SCHEDULED'`);return {cancelled:true};})),
+ 'publishing.reschedule':op('schedule.manage',true,z.object({id:uuid,plannedLocal:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),timezone:z.string().max(64)}).strict(),async(ctx,p)=>{
+   if(!isValidTimeZone(p.timezone))throw badRequest('Invalid timezone.');
+   const at=parseLocalDateTime(p.plannedLocal,p.timezone);
+   if(!Number.isFinite(at.getTime())||at.getTime()<=Date.now())throw badRequest('Choose a future time.');
+   return ctx.db.transaction(async tx=>{
+     const [d]=rows<{publication_id:string|null}>(await tx.execute(sql`update publish_drafts set scheduled_at=${at.toISOString()}::timestamptz,updated_at=now() where org_id=${ctx.orgId} and id=${p.id} and upload_state='SCHEDULED' returning publication_id`));
+     if(!d)throw conflict('Only pending scheduled uploads can be rescheduled.');
+     if(d.publication_id)await tx.execute(sql`update publication_records set planned_at=${at.toISOString()}::timestamptz,planned_timezone=${p.timezone},updated_at=now() where org_id=${ctx.orgId} and id=${d.publication_id} and state='SCHEDULED'`);
+     return {scheduledAt:at.toISOString()};
+   });
+ }),
+ 'analytics.demographics':op('analytics.read',false,empty,ctx=>query(ctx,sql`select distinct on (social_account_id) social_account_id,platform,state,detail,reporting_on,endpoint,provenance from account_metric_snapshots where org_id=${ctx.orgId} and metric='demographics' order by social_account_id,collected_at desc`)),
  'analytics.detail':op('analytics.read',false,z.object({days:z.number().int().min(1).max(90).default(30),brandId:uuid.optional()}).strict(),(ctx,p)=>analyticsDetail(ctx,{from:new Date(Date.now()-p.days*86400000),brandId:p.brandId},'America/Vancouver')),
  'comments.list':op('comments.read',false,empty,ctx=>listSocialThreads(ctx,{kind:'COMMENT',limit:50})),
  'messages.list':op('messages.read',false,empty,ctx=>listSocialThreads(ctx,{kind:'DM',limit:50})),

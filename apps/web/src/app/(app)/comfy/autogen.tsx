@@ -206,7 +206,15 @@ export function AutoGen({ active }: { active: boolean }) {
         const activeClips = run.clips.filter((clip) => clip.status === 'RUNNING' || clip.status === 'CLAIMED');
         return (
           <Card key={run.id}>
-            <details defaultOpen={run.status !== 'DONE'} className="group">
+            <details
+              className="group"
+              ref={(element) => {
+                if (element && element.dataset.initialized !== 'true') {
+                  element.open = run.status !== 'DONE';
+                  element.dataset.initialized = 'true';
+                }
+              }}
+            >
               <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
                 <ChevronDown className="size-4 shrink-0 text-muted transition-transform group-open:rotate-180" aria-hidden />
                 <span className="min-w-0 font-semibold">{run.title}</span>

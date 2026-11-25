@@ -99,27 +99,12 @@ export function AiProviders() {
         </div>
         {status.data?.lastJob ? <p className="mt-3 text-xs text-muted">Last request: {status.data.lastJob.task} · {status.data.lastJob.status}{status.data.lastJob.error ? ` · ${status.data.lastJob.error}` : ''}</p> : null}
       </Card>
-      <CreatorProfile />
+      <Card>
+        <CardTitle>Creator profiles</CardTitle>
+        <p className="text-sm text-muted">Manage identity, voice, visual references and publishing context separately for each creator.</p>
+        <a className="mt-2 inline-block text-sm underline" href="/settings?tab=creators">Open creator profiles</a>
+      </Card>
     </div>
   );
 }
 
-function CreatorProfile() {
-  const profile = useApi<Record<string, string> | null>('/ai/profile');
-  const [error, setError] = useState<string | null>(null);
-  const row = profile.data ?? {};
-  return (
-    <Card>
-      <CardTitle>Creator voice</CardTitle>
-      <p className="mt-1 text-xs text-muted">Used as context for prompts and captions. It does not describe a face. Reference pictures do that.</p>
-      {error ? <Notice tone="bad">{error}</Notice> : null}
-      {(['name', 'niche', 'tone', 'voice', 'characterName', 'characterNotes', 'avoid', 'links'] as const).map((key) => (
-        <Field key={key} label={key}>
-          <Input defaultValue={row[key] ?? ''} onBlur={(e) => {
-            import('@/lib/api').then(({ put }) => put('/ai/profile', { ...row, [key]: e.target.value })).then(() => profile.mutate()).catch((err: ApiError) => setError(err.message));
-          }} />
-        </Field>
-      ))}
-    </Card>
-  );
-}

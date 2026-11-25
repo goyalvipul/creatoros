@@ -114,6 +114,7 @@ function ChannelsV5({
                   {b.name.slice(0, 1)}
                 </div>
                 <h2 className="font-semibold">{b.name}</h2>
+                <a className="text-sm underline" href={`/settings?tab=creators&brandId=${b.id}`}>Creator profile</a>
                 <p className="mt-0.5 text-sm text-muted">{b.description || (b.type ? titleCase(b.type) : 'Brand')}</p>
                 <p className="mt-3 border-t border-border pt-3 text-xs text-muted">
                   {platforms.length ? platforms.map(platformLabel).join(' · ') : 'No accounts yet'}
@@ -355,6 +356,7 @@ export default function ChannelsPage() {
               <Card key={b.id}>
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <h2 className="text-lg font-semibold">{b.name}</h2>
+                  <a className="text-sm underline" href={`/settings?tab=creators&brandId=${b.id}`}>Creator profile</a>
                   {b.type && <Badge>{titleCase(b.type)}</Badge>}
                   {!b.active && <Badge tone="warn">inactive</Badge>}
                   {b.description && <span className="text-sm text-muted">{b.description}</span>}

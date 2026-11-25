@@ -14,6 +14,7 @@ import { comfyRoutes } from './routes/comfy';
 import { longVideoRoutes } from './routes/long-videos';
 import { liveRoutes } from './routes/live';
 import { aiRoutes } from './routes/ai';
+import { aiGatewayRoutes } from './routes/ai-gateway';
 import { logSerializers } from './log-redact';
 
 export type { AppDeps } from './http';
@@ -83,6 +84,7 @@ export async function buildApp(
       longVideoRoutes(v1, deps);
       await liveRoutes(v1, deps);
       aiRoutes(v1, deps);
+      aiGatewayRoutes(v1, deps);
     },
     { prefix: '/api/v1' },
   );

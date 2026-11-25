@@ -14,6 +14,7 @@ import {
   PageHeader,
   StateBadge,
 } from '@/components/ui';
+import { AiGatewayCard } from '@/components/ai-gateway-card';
 import { IdentityLink } from '@/components/identity-link';
 import { post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
@@ -133,6 +134,7 @@ export default function IntegrationsPage() {
         sent when you press Send on a reply. A video is uploaded only when you press Publish on that file.
         Nothing is paid on its own. Credentials are stored encrypted on your machine.
       </Notice>
+      <AiGatewayCard />
       <div className="mt-4">
         <Async res={res}>
           {(rows) => (

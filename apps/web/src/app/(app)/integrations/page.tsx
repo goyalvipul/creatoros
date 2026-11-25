@@ -134,11 +134,13 @@ export default function IntegrationsPage() {
         sent when you press Send on a reply. A video is uploaded only when you press Publish on that file.
         Nothing is paid on its own. Credentials are stored encrypted on your machine.
       </Notice>
-      <AiGatewayCard />
       <div className="mt-4">
         <Async res={res}>
           {(rows) => (
             <ul className="grid gap-3 md:grid-cols-2">
+              <li id="integration-ai-gateway" className="min-w-0">
+                <AiGatewayCard />
+              </li>
               {rows
                 .filter((p) => p.provider !== 'postiz' && p.provider !== 'meta')
                 .sort(connectedFirst)

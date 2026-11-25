@@ -7,16 +7,16 @@ import { post, useApi } from '@/lib/api';
 import { ago } from '@/lib/format';
 
 const path = '/integrations/ai-gateway';
-const permissions = [
-  ['projects.read', 'Read projects'],
-  ['media.read', 'Read videos and saved analysis'],
-  ['projects.write', 'Create draft projects'],
-] as const;
+type PermissionGroup = { name: string; items: [string, string][] };
+type ReviewRequest = { id: string; mode: Mode; operation: string; scope: string; input: unknown; status: string; expiresAt: string; result: unknown };
 type Mode = 'local' | 'hosted';
 type Settings = {
   enabled: boolean;
   mode: Mode;
   scopes: string[];
+  localScopes: string[];
+  hostedScopes: string[];
+  permissionGroups: PermissionGroup[];
   localConfigured: boolean;
   hostedConfigured: boolean;
   localSeen: string | null;
@@ -30,6 +30,9 @@ export function AiGatewayCard() {
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
   const s = res.data;
+  const requests = useApi<ReviewRequest[]>(expanded ? path + '/requests' : null);
+  const [editMode, setEditMode] = useState<Mode>('hosted');
+  const permissionList = editMode === 'local' ? s?.localScopes ?? [] : s?.hostedScopes ?? [];
   const configured = s && (s.mode === 'local' ? s.localConfigured : s.hostedConfigured);
   const seen = s && (s.mode === 'local' ? s.localSeen : s.hostedSeen);
   const label = s?.mode === 'local' ? 'Local MCP' : 'Hosted MCP';
@@ -53,7 +56,8 @@ export function AiGatewayCard() {
       const updated = await post<Settings>(path + '/settings', {
         enabled: next.enabled,
         mode: next.mode,
-        scopes: next.scopes,
+        localScopes: next.localScopes,
+        hostedScopes: next.hostedScopes,
       });
       await res.mutate(updated, { revalidate: false });
     });
@@ -85,15 +89,13 @@ export function AiGatewayCard() {
             Last authenticated: {seen ? ago(seen) : 'Never'}
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {permissions.filter(([key]) => s.scopes.includes(key)).map(([key, text]) => (
-              <Badge key={key} tone="ok">{text}</Badge>
-            ))}
-            {!s.scopes.length && <Badge>No permissions enabled</Badge>}
+            <Badge>{s.scopes.length} permissions enabled for {label}</Badge>
           </div>
           {!configured && <p className="mt-2 text-xs text-muted">Generate a credential and configure your MCP adapter to connect.</p>}
           <div className="mt-3 flex flex-wrap gap-2">
             <Button variant="primary" disabled={busy} aria-expanded={expanded} onClick={() => {
               setExpanded(!expanded);
+              if (!expanded) setEditMode(s.mode);
               setCredential(null);
             }}>
               {expanded ? 'Close settings' : configured ? 'Edit settings' : 'Configure'}
@@ -120,16 +122,54 @@ export function AiGatewayCard() {
                 <code className="mt-1 block break-all text-xs">/api/v1/ai-gateway/status</code>
               </div>
               <div>
-                <h3 className="text-sm font-medium">Permissions</h3>
-                <div className="mt-2 space-y-1">
-                  {permissions.map(([key, text]) => (
-                    <div key={key} className="flex items-center justify-between gap-2 text-sm">
-                      <span>{text}</span>
-                      <ActionButton size="sm" disabled={busy} onAction={() => save({
-                        scopes: s.scopes.includes(key) ? s.scopes.filter(x => x !== key) : [...s.scopes, key],
-                      })}>{s.scopes.includes(key) ? 'Enabled' : 'Disabled'}</ActionButton>
-                    </div>
+                <h3 className="text-sm font-medium">Permissions · separate for each connector</h3>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(['local', 'hosted'] as const).map(m => (
+                    <Button key={m} size="sm" variant={editMode === m ? 'primary' : 'secondary'} disabled={busy} onClick={() => setEditMode(m)}>{m === 'local' ? 'Local permissions' : 'Hosted permissions'}</Button>
                   ))}
+                </div>
+                <div className="mt-2 space-y-2">
+                  {(s.permissionGroups ?? []).map(group => (
+                    <details key={group.name} className="rounded-lg border border-border p-2">
+                      <summary className="cursor-pointer text-sm font-medium">{group.name} · {group.items.filter(([key]) => permissionList.includes(key)).length}/{group.items.length}</summary>
+                      <div className="mt-2 space-y-2">
+                        {group.items.map(([key, label]) => (
+                          <div key={key} className="flex items-center justify-between gap-2 text-sm">
+                            <span>{label}</span>
+                            <ActionButton size="sm" disabled={busy} onAction={() => {
+                              const next = permissionList.includes(key) ? permissionList.filter(x => x !== key) : [...permissionList, key];
+                              return save(editMode === 'local' ? { localScopes: next } : { hostedScopes: next });
+                            }}>{permissionList.includes(key) ? 'Enabled' : 'Disabled'}</ActionButton>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium">Owner approvals</h3>
+                <p className="mt-1 text-xs text-muted">Every connector write must be reviewed here. Requests expire after 30 minutes. Approved actions cannot be replayed.</p>
+                <ActionButton size="sm" className="mt-2" onAction={async () => { await requests.mutate(); }}>Refresh requests</ActionButton>
+                {requests.error && <p className="mt-1 text-xs text-bad">{requests.error.message}</p>}
+                <div className="mt-2 space-y-2">
+                  {(requests.data ?? []).map(r => (
+                    <details key={r.id} className="rounded-lg border border-border p-2">
+                      <summary className="cursor-pointer text-sm font-medium">{r.operation} · {r.mode} · {r.status}</summary>
+                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(r.input, null, 2)}</pre>
+                      {r.status === 'PENDING' && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <ActionButton size="sm" variant="primary" disabled={busy || Date.parse(r.expiresAt) <= Date.now()} confirm="Execute this exact requested operation?" onAction={() => run(async () => {
+                            try { await post(path + '/requests/' + r.id + '/review', { decision: 'approve' }); } finally { await requests.mutate(); }
+                          })}>Approve and execute</ActionButton>
+                          <ActionButton size="sm" variant="danger" disabled={busy} onAction={() => run(async () => {
+                            await post(path + '/requests/' + r.id + '/review', { decision: 'reject' }); await requests.mutate();
+                          })}>Reject</ActionButton>
+                        </div>
+                      )}
+                    </details>
+                  ))}
+                  {requests.data?.length === 0 && <p className="text-xs text-muted">No requests yet.</p>}
                 </div>
               </div>
               <div>
@@ -181,7 +221,7 @@ export function AiGatewayCard() {
                   </div>
                 </div>
               )}
-              <p className="text-xs text-muted">Video generation, publishing metadata writes and scheduling are not available through this gateway yet.</p>
+              <p className="text-xs text-muted">No connector can publish immediately, delete projects or files, read credentials, or execute arbitrary commands.</p>
             </div>
           )}
         </>

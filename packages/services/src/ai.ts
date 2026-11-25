@@ -680,7 +680,7 @@ async function runVideoJob(ctx: Ctx, job: typeof aiJobs.$inferSelect, fetchImpl:
   const file = await uploadGeminiFile(ctx, bytes, mime, name, fetchImpl);
   const raw = await geminiGenerate(ctx, job.model, {
     systemInstruction: { parts: [{ text: PROMPT_RULE + ' Describe only what is visible or clearly audible. If words are unclear, say so in confidenceNotes. Do not invent lyrics.' }] },
-    contents: [{ role: 'user', parts: [{ file_data: { mime_type: file.mime, file_uri: file.uri } }, { text: 'Analyze this video for the creator. Return JSON with summary, contentType, visualStyle, mood, language, audioSummary, openingHook, keyMoments [{timestamp, description, reason}], sceneSummaries, strongPoints, weakPoints, suggestedImprovements, thumbnailCandidates [{timestamp, concept}], warnings, confidenceNotes.' }] }],
+    contents: [{ role: 'user', parts: [{ file_data: { mime_type: file.mime, file_uri: file.uri } }, { text: 'Analyze this video for the creator. Return JSON with summary, contentType, visualStyle, mood, language, audioSummary, openingHook, keyMoments [{timestamp, description, reason}], sceneSummaries, strongPoints, weakPoints, suggestedImprovements, thumbnailCandidates [{timestamp, concept}], warnings, confidenceNotes, and optional transcript [{timestamp, text}] of only clearly audible speech or lyrics. Use [unclear] for uncertain words. Return an empty array for instrumental or inaudible content. Do not invent words.' }] }],
     generationConfig: { responseMimeType: 'application/json' },
   }, fetchImpl);
   const analysis = parseVideoAnalysis(JSON.parse(geminiText(raw)));

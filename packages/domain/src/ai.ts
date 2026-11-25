@@ -81,6 +81,7 @@ export const videoAnalysisSchema = z.object({
   mood: z.string().max(200),
   language: z.string().max(80),
   audioSummary: z.string().max(1500),
+  transcript: z.array(z.object({ timestamp: z.string().max(20), text: z.string().max(1000) })).max(120).optional(),
   openingHook: z.string().max(800),
   keyMoments: z.array(z.object({ timestamp: z.string().max(20), description: z.string().max(400), reason: z.string().max(300) })).max(12),
   sceneSummaries: z.array(z.string().max(400)).max(12),

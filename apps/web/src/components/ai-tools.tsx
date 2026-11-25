@@ -194,6 +194,7 @@ export function AiImageTools({ projectId, sceneId, prompt }: { projectId: string
 
 export function AiPublishAssistant({
   fileId,
+  accountId,
   platform,
   title,
   caption,
@@ -203,6 +204,7 @@ export function AiPublishAssistant({
   onApplyTags,
 }: {
   fileId?: string | null;
+  accountId?: string;
   platform: string;
   title: string;
   caption: string;
@@ -251,7 +253,7 @@ export function AiPublishAssistant({
         <Button size="sm" disabled={busy} onClick={() => {
           if (!window.confirm('Write publishing text from the saved analysis? This may be billable and will not replace your fields until you apply one.')) return;
           setBusy(true);
-          post<{ draft: NonNullable<typeof draft> }>('/ai/metadata', { fileId, platform, acceptBillable: true })
+          post<{ draft: NonNullable<typeof draft> }>('/ai/metadata', { fileId, accountId, platform, acceptBillable: true })
             .then((row) => setDraft(row.draft))
             .catch((e: ApiError) => setError(e.message))
             .finally(() => setBusy(false));

@@ -627,6 +627,7 @@ function PublishPanel({
       <p className="text-xs text-muted">Account-specific post details. A scheduled video is sent at the time you set. Nothing is sent until you confirm.</p>
       <AiPublishAssistant
         fileId={item.fileInstanceId}
+        accountId={account.id}
         platform={account.platform}
         title={title}
         caption={caption}

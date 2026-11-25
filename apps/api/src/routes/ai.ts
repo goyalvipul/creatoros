@@ -162,6 +162,7 @@ export function aiRoutes(app: FastifyInstance, deps: AppDeps) {
     editor(req, deps);
     const body = z.object({
       fileId: z.string().uuid(),
+      accountId: z.string().uuid().optional(),
       platform: z.string().max(40),
       notes: z.string().max(1000).optional(),
       acceptBillable: z.literal(true),

@@ -170,7 +170,14 @@ export async function updateAiSettings(ctx: Ctx, patch: Record<string, unknown>)
   return row!;
 }
 
+async function assertProfileBrand(ctx: Ctx, brandId: string | null) {
+  if (!brandId) return;
+  const result = await ctx.db.execute(sql`select id from brands where org_id = ${ctx.orgId} and id = ${brandId} and deleted_at is null`);
+  if (!(result as unknown as { rows: unknown[] }).rows.length) throw notFound('Creator');
+}
+
 export async function getAiProfile(ctx: Ctx, brandId: string | null) {
+  await assertProfileBrand(ctx, brandId);
   const where = brandId ? and(eq(aiProfiles.orgId, ctx.orgId), eq(aiProfiles.brandId, brandId)) : and(eq(aiProfiles.orgId, ctx.orgId), sql`${aiProfiles.brandId} is null`);
   const [row] = await ctx.db.select().from(aiProfiles).where(where).limit(1);
   return row ?? null;
@@ -178,8 +185,21 @@ export async function getAiProfile(ctx: Ctx, brandId: string | null) {
 
 export async function saveAiProfile(ctx: Ctx, input: Record<string, unknown> & { brandId?: string | null }) {
   const brandId = input.brandId ?? null;
-  const text = (key: string, max = 1000) => (typeof input[key] === 'string' ? input[key].slice(0, max) : '');
-  const refs = Array.isArray(input.referenceFileIds) ? input.referenceFileIds.filter((id) => typeof id === 'string').slice(0, 8) : [];
+  await assertProfileBrand(ctx, brandId);
+  const existing = await getAiProfile(ctx, brandId);
+  const previous = (existing ?? {}) as Record<string, unknown>;
+  const text = (key: string, max = 1000) => {
+    const value = input[key] ?? previous[key];
+    return typeof value === 'string' ? value.slice(0, max) : '';
+  };
+  const refs = Array.isArray(input.referenceFileIds) ? input.referenceFileIds.filter((id): id is string => typeof id === 'string') : existing?.referenceFileIds ?? [];
+  if (refs.length > 8 || new Set(refs).size !== refs.length) throw badRequest('Choose up to eight unique image references.');
+  if (input.referenceFileIds !== undefined) {
+    for (const id of refs) {
+      const result = await ctx.db.execute(sql`select id from file_instances where org_id = ${ctx.orgId} and id = ${id} and archived_at is null and file_type::text = 'IMAGE'`);
+      if (!(result as unknown as { rows: unknown[] }).rows.length) throw badRequest('Reference must be an image in this workspace.');
+    }
+  }
   const values = {
     name: text('name', 120),
     niche: text('niche'),
@@ -197,7 +217,6 @@ export async function saveAiProfile(ctx: Ctx, input: Record<string, unknown> & {
     referenceFileIds: refs,
     updatedAt: new Date(),
   };
-  const existing = await getAiProfile(ctx, brandId);
   if (existing) {
     const [row] = await ctx.db.update(aiProfiles).set(values).where(eq(aiProfiles.id, existing.id)).returning();
     return row!;
@@ -487,13 +506,23 @@ export async function queueVideoAnalysis(ctx: Ctx, input: { fileId?: string | nu
   return job!;
 }
 
-export async function createMetadataDraft(ctx: Ctx, input: { fileId: string; platform: string; acceptBillable: boolean; notes?: string }, fetchImpl: FetchLike = fetch) {
+export async function createMetadataDraft(ctx: Ctx, input: { fileId: string; accountId?: string; platform: string; acceptBillable: boolean; notes?: string }, fetchImpl: FetchLike = fetch) {
   if (!input.acceptBillable) throw badRequest(`${BILLING_NOTE} Confirm the request to continue.`);
   const settings = await assertAllowance(ctx, 'metadata');
   if (!settings.geminiEnabled) throw badRequest('Gemini is turned off in Settings → AI.');
   const [analysis] = await ctx.db.select().from(aiJobs).where(and(eq(aiJobs.orgId, ctx.orgId), eq(aiJobs.task, 'video_analyze'), eq(aiJobs.targetId, input.fileId), eq(aiJobs.status, 'COMPLETED'))).orderBy(sql`${aiJobs.finishedAt} desc`).limit(1);
   if (!analysis?.output) throw badRequest('Analyze this video before writing titles. Kemokem will not invent a description from the file name.');
-  const profile = await getAiProfile(ctx, null);
+  let brandId: string | null = null;
+  if (input.accountId) {
+    const result = await ctx.db.execute(sql`
+      select c.brand_id from social_accounts a join channels c on c.id = a.channel_id and c.org_id = a.org_id
+      where a.org_id = ${ctx.orgId} and a.id = ${input.accountId} and a.deleted_at is null and c.deleted_at is null
+    `);
+    const account = (result as unknown as { rows: { brand_id: string }[] }).rows[0];
+    if (!account) throw notFound('Publishing account');
+    brandId = account.brand_id;
+  }
+  const profile = await getAiProfile(ctx, brandId);
   const model = assertModel(settings.metadataModel, AI_TEXT_MODELS, 'Metadata model');
   const body = {
     systemInstruction: { parts: [{ text: PROMPT_RULE }] },
@@ -513,6 +542,7 @@ export async function createMetadataDraft(ctx: Ctx, input: { fileId: string; pla
     orgId: ctx.orgId,
     userId: ctx.userId,
     task: 'publishing_metadata_generate',
+    brandId,
     provider: 'gemini',
     model,
     status: 'COMPLETED',

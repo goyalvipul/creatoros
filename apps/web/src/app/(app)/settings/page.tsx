@@ -32,10 +32,12 @@ import { useWorkspace, WorkspaceMark } from '@/lib/workspace';
 import { ago, bytes, copy, title as titleCase, when } from '@/lib/format';
 import { defaultDelivery, NOTIFICATION_CATALOG, NOTIFICATION_CATEGORIES } from '@creatoros/domain';
 import { AiProviders } from './ai-providers';
+import { CreatorProfiles } from './creator-profiles';
 
-type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system' | 'ai';
+type Tab = 'workspace' | 'team' | 'reminders' | 'security' | 'backups' | 'demo' | 'system' | 'ai' | 'creators';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'ai', label: 'AI' },
+  { id: 'creators', label: 'Creator profiles' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'team', label: 'Team' },
   { id: 'reminders', label: 'Notifications' },
@@ -76,6 +78,7 @@ function Settings() {
       {tab === 'demo' && <Demo />}
       {tab === 'system' && <System />}
       {tab === 'ai' && <AiProviders />}
+      {tab === 'creators' && <CreatorProfiles initialBrandId={sp.get('brandId')} />}
     </>
   );
 }

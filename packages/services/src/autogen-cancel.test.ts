@@ -50,7 +50,10 @@ describe('AutoGen targeted cancellation', () => {
     await cancelAutogenClip(ctx, clipId);
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(String((fetcher.mock.calls[1] as unknown as [URL, RequestInit])[0])).toContain('/queue');
-    expect(JSON.parse((fetcher.mock.calls[1] as unknown as [URL, RequestInit])[1].body)).toEqual({ delete: [promptId] });
+    const body = (fetcher.mock.calls[1] as unknown as [URL, RequestInit])[1].body;
+    expect(typeof body).toBe('string');
+    if (typeof body !== 'string') throw new Error('Expected JSON request body');
+    expect(JSON.parse(body)).toEqual({ delete: [promptId] });
   });
 
   it('interrupts only the selected running prompt and never issues a global interrupt', async () => {

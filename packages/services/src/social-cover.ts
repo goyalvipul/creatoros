@@ -46,7 +46,7 @@ export async function saveSocialCoverBytes(
   if (!ext) throw badRequest('Upload a JPG, PNG, or WebP thumbnail.');
   await mkdir(join(ctx.env.mediaPreviewDir, 'social-covers'), { recursive: true });
   await writeFile(pathOf(ctx.env, itemId, accountId, ext), bytes);
-  for (const other of ['jpg', 'png', 'webp'])
+  for (const other of ['jpg', 'png', 'webp'] as const)
     if (other !== ext) await rm(pathOf(ctx.env, itemId, accountId, other), { force: true });
   return { saved: true, itemId, accountId };
 }
@@ -66,7 +66,7 @@ export async function deleteSocialCover(ctx: Ctx, projectId: string, itemId: str
       and v.org_id=${ctx.orgId} and v.project_id=${projectId}
   `));
   if (!row) throw notFound('Video and social account in project');
-  for (const ext of ['jpg', 'png', 'webp']) {
+  for (const ext of ['jpg', 'png', 'webp'] as const) {
     await rm(pathOf(ctx.env, itemId, accountId, ext), { force: true });
   }
   return { removed: true, itemId, accountId };

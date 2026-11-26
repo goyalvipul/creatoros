@@ -119,9 +119,9 @@ export const permissionGroups = [
 ] as const;
 export const scopes=permissionGroups.flatMap(g=>g.items.map(item=>item[0]));
 type Scope=(typeof permissionGroups)[number]['items'][number][0];
-type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknown,requestId:string)=>Promise<unknown>};
-function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string)=>Promise<unknown>):Operation {
-  return {scope,write,schema,run:(ctx,p,r)=>run(ctx,schema.parse(p),r)};
+type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknown,requestId:string,trusted?:boolean)=>Promise<unknown>};
+function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string,trusted?:boolean)=>Promise<unknown>):Operation {
+  return {scope,write,schema,run:(ctx,p,r,trusted)=>run(ctx,schema.parse(p),r,trusted)};
 }
 const uploadSchema=z.object({rootId:uuid,brandId:uuid,projectId:uuid.nullable().optional(),fileName:z.string().min(1).max(120),mime:z.string().max(40),base64:z.string().min(4).max(Math.ceil(MAX_MEDIA_BYTES/3)*4).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict();
 const projectPatch=z.object({title:title.optional(),brief:text.optional(),concept:text.optional(),songTitle:z.string().max(300).optional(),hook:text.optional(),narrative:text.optional(),distributionPlan:text.optional()}).strict();
@@ -163,7 +163,7 @@ export const operations:Record<string,Operation>={
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
  'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,finished_at from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
- 'generation.h3':op('generation.submit',true,h3Form,async(ctx,p)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p);return {id:r.job.id};}),
+ 'generation.h3':op('generation.submit',true,h3Form,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateH3(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p)=>{await validateForm(ctx,p);const r=await generateLtx(ctx,p);return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),
  'generation.autogen':op('generation.submit',true,z.object({prompt:text,timestamps:z.string().max(2000),songName:z.string().min(1).max(300),audioLengthSec:z.number().positive().max(7200).optional(),audioFileId:uuid,imageFileId:uuid}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.audioFileId);await owned(ctx,'file',p.imageFileId);const r=await createAutogenRun(ctx,p);return {id:r.id};}),

@@ -458,7 +458,7 @@ function checkForm(form: H3Form) {
   });
 }
 
-export async function generateH3(ctx: Ctx, form: H3Form) {
+export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: boolean } = {}) {
   if (!h3Workflow()) throw badRequest(MISSING);
   checkForm(form);
   if (form.projectId) {
@@ -467,7 +467,7 @@ export async function generateH3(ctx: Ctx, form: H3Form) {
     )[0];
     if (!found) throw badRequest('That project is not in this workspace.');
   }
-  await saveH3Draft(ctx, form);
+  if (!options.skipDraft) await saveH3Draft(ctx, form);
   const [worker] = await ctx.db
     .select()
     .from(gpuWorkers)

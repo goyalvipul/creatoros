@@ -5,6 +5,7 @@ import { sql, type Executor } from '@creatoros/db';
 import { audit, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
+import { decodeMedia } from './ai-gateway-media';
 
 const mode = z.enum(['local', 'hosted']);
 const scope = z.string().refine(s => (scopes as readonly string[]).includes(s), 'Unknown permission');
@@ -79,6 +80,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     if(!auth.scopes.includes(operation.scope))throw forbidden('Gateway permission not enabled.');
     const input=operation.schema.parse(body.input);
     if(!operation.write)return operation.run(auth.ctx,input,'read-only');
+    if(body.operation==='media.uploadImage'||body.operation==='media.uploadAudio') decodeMedia(input as {fileName:string;mime:string;base64:string},body.operation==='media.uploadImage'?'IMAGE':'AUDIO');
     if(!body.requestId)throw badRequest('A unique UUID requestId is required for writes.');
     const json=JSON.stringify(input);
     if(json.length>3000000)throw badRequest('Request too large.');

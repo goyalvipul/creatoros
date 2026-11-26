@@ -1,0 +1,10 @@
+# MCP media ingestion (draft rollout)
+New scopes: media.upload.image, media.upload.audio. Disabled unless owner enables them per connector mode. Existing approval rules remain unchanged.
+New operations (catalogue is authoritative):
+- media.roots {} lists indexed storage destinations and scanner state.
+- media.uploadImage / media.uploadAudio: {rootId,brandId,projectId?,fileName,mime,base64}. Canonical base64, decoded max 2 MiB; png/jpeg/webp or wav/mp3/flac. POST /invoke with stable UUID requestId; returns PENDING. Approve in owner UI; GET /requests/:id returns result with fileId, assetId, versionId, sha256, size, tech. Use fileId in H3 library references, not worker filenames. Upload uses existing signed scanner endpoint, unique name, active indexed root, online paired scanner and brand/project validation. No arbitrary URL or filesystem path accepted. Do not retry uncertain uploads. If disk write succeeded but indexing failed, inspect destination manually. Existing request records retain immutable base64 input; review list suppresses base64. Keep payloads out of logs. 
+- media.search {q?,kind?,brandId?,limit?=50,offset?=0}; brand filter matches linked logical assets; older untagged files need unfiltered search.
+- media.detail {id}; metadata and recorded device/root states.
+- gpu.queue {id}; existing live workerQueue service, returns free/busy/offline or other existing queue state. Read is advisory, not an atomic reservation.
+No unattended authorization, atomic GPU reservation, output linking or assembly in this PR. Existing H3 queue and approvals remain unchanged. Existing H3 global draft can be replaced by generation; do not run unattended.
+Hosted connector: add exact typed tools based on live authorized /tools. Accept native file handles only if supported by host, retrieve bytes server-side through documented authorized mechanisms, or use explicit bounded base64 fallback (never invent file IDs or claim transfer support). No arbitrary URL fetch. No token changes. Test image/audio upload and H3 file resolution on an authorized scanner after deployment. No production writes during CI.

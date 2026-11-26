@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliveryChoice, lockScreenText, safeNotificationPath } from './notification-events';
+import { defaultDelivery, deliveryChoice, lockScreenText, safeNotificationPath } from './notification-events';
 
 describe('notification delivery', () => {
   it('keeps push off until the user turns browser push on', () => {

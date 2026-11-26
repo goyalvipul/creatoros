@@ -1,7 +1,7 @@
 import { sql } from '@creatoros/db';
 import { listGpuWorkers } from './comfy';
 import { listWindowsTasks, requestWindowsTaskRestart } from './windows-tasks';
-import { badRequest, conflict, notFound, type Ctx } from './types';
+import { badRequest, notFound, type Ctx } from './types';
 
 const rows = <T>(result: unknown) => (result as { rows: T[] }).rows;
 const FRESH_MS = 180_000;
@@ -25,6 +25,15 @@ export function matchMachine(workerUrl:string, devices:Device[]) {
   if(!h||['localhost','127.0.0.1','[::1]','0.0.0.0'].includes(h))return null;
   const matches=devices.filter(d=>[d.tailscale,d.hostname,...d.urls].some(v=>host(v)===h));
   return matches.length===1?matches[0]!:null;
+}
+type RestartTask = Awaited<ReturnType<typeof listWindowsTasks>>['tasks'][number];
+/** Both dashboard and Studio operate on the same configured Windows task.
+ * A known worker/task mapping is required, not a reachable ComfyUI server. */
+export function resolveComfyRestartTask(workerUrl:string,devices:Device[],tasks:RestartTask[]){
+  const device=matchMachine(workerUrl,devices);
+  if(!device)return null;
+  const candidates=tasks.filter(t=>t.deviceId===device.id&&/comfy\s*ui/i.test(t.label+' '+t.taskName));
+  return candidates.length===1?candidates[0]!:null;
 }
 function online(d:Device,now:Date) {
   const age=d.seenAt?now.getTime()-new Date(d.seenAt).getTime():Infinity;
@@ -107,29 +116,27 @@ export async function machineMonitor(ctx:Ctx) {
     const workerJobs=jobs.filter(j=>j.workerId===w.id);
     const snapshot=await inspectWorker(w,workerJobs);
     const hardware=d&&online(d,now)?hardwareReading(d.hardware,w.label,w.deviceName,now):null;
-    const candidates=d?taskList.tasks.filter(t=>t.deviceId===d.id&&/comfy\s*ui/i.test(t.label+' '+t.taskName)):[];
-    const task=candidates.length===1?candidates[0]!:null;
-    const restarting=task?.restartStatus==='PENDING'||task?.restartStatus==='RUNNING';
-    const canRestart=!!(w.enabled&&d&&online(d,now)&&task&&task.checkedAt&&now.getTime()-new Date(task.checkedAt).getTime()<=FRESH_MS&&!restarting&&!['DISABLED','NOT_FOUND','UNKNOWN'].includes(task.status)&&!workerJobs.length&&snapshot.state==='available'&&jobs.every(j=>!!j.workerId));
+    const task=resolveComfyRestartTask(w.baseUrl,devices,taskList.tasks);
     return {id:w.id,label:w.label,role:w.role,expectedVramGb:w.expectedVramGb,...snapshot,
       ram:hardware?.ram??snapshot.ram,vram:hardware?.vram??snapshot.vram,
       hardware:hardware?{sampledAt:hardware.sampledAt,cpuPct:hardware.cpuPct,gpuPct:hardware.gpuPct,gpuTempC:hardware.gpuTempC}:null,
       agent:d?{name:d.name,online:online(d,now),seenAt:d.seenAt,cpuPct:online(d,now)&&numberValue(d.cpu)!==null&&Number(d.cpu)<=100?Number(d.cpu):null}:null,
       jobs:workerJobs.slice(0,3).map(cleanJob),jobCount:workerJobs.length,
-      restart:task?{taskId:task.id,label:task.label,deviceName:task.deviceName,status:task.restartStatus,canRestart}:null};
+      restart:task?{taskId:task.id,label:task.label,deviceName:task.deviceName,status:task.restartStatus,error:task.restartError,taskStatus:task.status,canRestart:true}:null};
   }));
   return {machines,unassignedJobCount:jobs.filter(j=>!j.workerId||!workers.some(w=>w.id===j.workerId)).length,
     storageAgents:devices.filter(d=>!assigned.has(d.id)).map(d=>({id:d.id,name:d.name,online:online(d,now),seenAt:d.seenAt,scanning:online(d,now)&&d.scanning===true})),
     sampledAt:new Date().toISOString()};
 }
-/** Dashboard restart: exact unique host match, known idle queue, fresh paired agent,
- * configured ComfyUI task, and a second server-side check. No arbitrary commands. */
+/** Resolve the registered Windows task again, then use exactly the same request
+ * service as Studio. Do not fetch /queue or /system_stats here: recovery must
+ * work while ComfyUI is stopped or unresponsive. Existing PENDING/RUNNING
+ * requests are reused by the shared service, not duplicated. */
 export async function restartMonitoredComfy(ctx:Ctx,workerId:string,taskId:string) {
-  const monitor=await machineMonitor(ctx);
-  const machine=monitor.machines.find(m=>m.id===workerId);
-  if(!machine)throw notFound('Machine');
-  if(!machine.restart||machine.restart.taskId!==taskId)throw badRequest('Configure a uniquely matched ComfyUI scheduled task in Studio settings.');
-  if(!machine.restart.canRestart||monitor.unassignedJobCount)throw conflict('Restart blocked: queue must be empty, agent fresh, and no active or unassigned generation jobs for the target.');
-  // Existing agent request is asynchronous. Never report a completed restart from this response.
-  return requestWindowsTaskRestart(ctx,taskId);
+  const [workers,devices,taskList]=await Promise.all([listGpuWorkers(ctx),devicesFor(ctx),listWindowsTasks(ctx)]);
+  const worker=workers.find(w=>w.id===workerId);
+  if(!worker)throw notFound('Machine');
+  const task=resolveComfyRestartTask(worker.baseUrl,devices,taskList.tasks);
+  if(!task||task.id!==taskId)throw badRequest('Configure a uniquely matched ComfyUI scheduled task in Studio settings.');
+  return requestWindowsTaskRestart(ctx,task.id);
 }

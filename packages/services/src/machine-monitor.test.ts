@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { memoryReading, queueCounts, matchMachine, hardwareReading } from './machine-monitor';
+import { memoryReading, queueCounts, matchMachine, hardwareReading, resolveComfyRestartTask } from './machine-monitor';
 const device=(id:string,hostname:string,tailscale:string)=>({id,name:id,hostname,tailscale,os:'windows',state:'ONLINE',seenAt:new Date(),urls:[],cpu:null,scanning:false});
 describe('machine monitor',()=>{
   it('does not turn missing or malformed readings into zero usage',()=>{
@@ -29,5 +29,22 @@ describe('hardware telemetry',()=>{
     expect(hardwareReading({...h,gpus:[...h.gpus,...h.gpus]},'RTX 3090',null,now)?.gpuPct).toBeNull();
     expect(hardwareReading(h,'RTX 3090',null,new Date(now.getTime()+91_000))).toBeNull();
     expect(hardwareReading({...h,cpuPct:101},'RTX 3090',null,now)?.cpuPct).toBeNull();
+  });
+});
+
+describe('dashboard Windows task recovery',()=>{
+  const pc=device('a','PC24','100.64.1.2');
+  const task={id:'task',deviceId:'a',deviceName:'PC24',deviceState:'ONLINE',label:'ComfyUI',taskName:'ComfyUI',status:'READY',detail:null,checkedAt:null,restartStatus:null,restartError:null};
+  it('resolves the same configured task even with a stopped service or in-flight restart',()=>{
+    const url='http://100.64.1.2:8188';
+    expect(resolveComfyRestartTask(url,[pc],[task])?.id).toBe('task');
+    expect(resolveComfyRestartTask(url,[pc],[{...task,status:'UNKNOWN',restartStatus:'PENDING'}])?.id).toBe('task');
+    expect(resolveComfyRestartTask(url,[{...pc,state:'OFFLINE'}],[{...task,deviceState:'OFFLINE',restartStatus:'RUNNING'}])?.id).toBe('task');
+  });
+  it('never falls back to another machine or an ambiguous task',()=>{
+    const url='http://100.64.1.2:8188';
+    expect(resolveComfyRestartTask(url,[pc],[{...task,deviceId:'b'}])).toBeNull();
+    expect(resolveComfyRestartTask(url,[pc],[task,{...task,id:'other'}])).toBeNull();
+    expect(resolveComfyRestartTask(url,[pc],[{...task,label:'Telegram',taskName:'Telegram'}])).toBeNull();
   });
 });

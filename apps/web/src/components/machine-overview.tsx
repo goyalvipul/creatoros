@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { Activity, ChevronDown, Cpu, RefreshCw, RotateCcw, Server, HardDrive, Thermometer } from 'lucide-react';
-import { useApi, post } from '@/lib/api';
+import { useApi, post, refresh } from '@/lib/api';
 import { ActionButton } from '@/components/ui';
 
 type Memory = {usedBytes:number;totalBytes:number};
 type Job = {id:string;projectId:string|null;title:string|null;provider:string;status:string;phase:string|null;detail:string|null;progress:{value:number;max:number}|null;startedAt:string|null;createdAt:string};
-type Machine = {id:string;label:string;role:string;expectedVramGb:number|null;state:'available'|'busy'|'unreachable'|'unknown'|'disabled';counts:{running:number;pending:number}|null;vram:Memory|null;ram:Memory|null;checkedAt:string;hardware?:{sampledAt:string;cpuPct:number|null;gpuPct:number|null;gpuTempC:number|null}|null;agent:{name:string;online:boolean;seenAt:string|null;cpuPct:number|null}|null;jobs:Job[];jobCount:number;restart:{taskId:string;label:string;deviceName:string;status:string|null;canRestart:boolean}|null};
+type Machine = {id:string;label:string;role:string;expectedVramGb:number|null;state:'available'|'busy'|'unreachable'|'unknown'|'disabled';counts:{running:number;pending:number}|null;vram:Memory|null;ram:Memory|null;checkedAt:string;hardware?:{sampledAt:string;cpuPct:number|null;gpuPct:number|null;gpuTempC:number|null}|null;agent:{name:string;online:boolean;seenAt:string|null;cpuPct:number|null}|null;jobs:Job[];jobCount:number;restart:{taskId:string;label:string;deviceName:string;status:string|null;error?:string|null;taskStatus?:string;canRestart:boolean}|null};
 type Monitor = {machines:Machine[];storageAgents:{id:string;name:string;online:boolean;seenAt:string|null;scanning:boolean}[];unassignedJobCount:number;sampledAt:string};
 const path='/comfy/machine-monitor';
 const labels={available:'Queue free',busy:'Busy',unreachable:'ComfyUI unreachable',unknown:'Status unknown',disabled:'Disabled'};
@@ -53,7 +53,7 @@ export function MachineOverview({enabled}:{enabled:boolean}){
       <div className="flex min-w-0 items-center gap-3"><div className="grid size-10 shrink-0 place-items-center rounded-xl bg-panel2 text-accent"><Cpu className="size-5" aria-hidden/></div><div><h2 className="font-semibold">Production machines</h2><p className="text-xs text-muted">{d&&!stale?active+' active Kemokem job'+(active===1?'':'s')+' · live queue & memory':stale?'Live readings unavailable':'Checking worker availability…'}</p></div></div>
       <div className="flex items-center gap-2"><ActionButton variant="ghost" size="sm" aria-label="Refresh machine readings" onAction={async()=>{await monitor.mutate();}}><RefreshCw className="size-4" aria-hidden/></ActionButton><Link href="/comfy" className="inline-flex min-h-10 items-center text-xs font-semibold text-accent hover:underline">Open studio</Link></div>
     </div>
-    {stale&&<p role="status" className="mt-3 rounded-lg border border-border px-3 py-2 text-xs text-muted">Readings are stale. Restart actions are disabled until a fresh check succeeds.</p>}
+    {stale&&<p role="status" className="mt-3 rounded-lg border border-border px-3 py-2 text-xs text-muted">Readings are stale. A registered task can still be restarted; check for active work before confirming.</p>}
     {!d&&!monitor.error&&<div className="mt-4 grid gap-3 sm:grid-cols-2">{[0,1].map(i=><div key={i} className="h-32 animate-pulse rounded-xl bg-panel2"/>)}</div>}
     {!d&&monitor.error&&<p className="mt-3 text-sm text-muted">{monitor.error.message}</p>}
     {d&&d.machines.length===0&&<p className="mt-3 text-sm text-muted">No GPU workers configured. <Link href="/comfy" className="text-accent underline">Configure in studio</Link>.</p>}
@@ -62,11 +62,13 @@ export function MachineOverview({enabled}:{enabled:boolean}){
         const restarting=m.restart?.status==='PENDING'||m.restart?.status==='RUNNING';
         const hardware=!stale&&m.hardware&&Date.now()-Date.parse(m.hardware.sampledAt)<=90000?m.hardware:null;
         const temp=hardware?.gpuTempC??null;
-        const restartLabel=restarting?'Restart requested':m.restart?.status==='FAILED'?'Retry restart':'Restart ComfyUI';
+        const restartLabel='Restart ComfyUI';
+        const queueRisk=stale||!m.counts||m.state==='busy'||m.jobCount>0||d.unassignedJobCount>0;
+        const restartStatus=restarting?(m.restart?.status==='RUNNING'?'Restart in progress':'Restart queued'):m.restart?.status==='SUCCEEDED'?'Last restart reported successful':m.restart?.status==='FAILED'?'Last restart failed':'Managed Windows task';
         return <article key={m.id} className="min-w-0 rounded-xl border border-border bg-panel p-3.5 md:p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0"><h3 className="font-semibold">{m.label}</h3><p className="mt-0.5 text-xs text-muted">{m.expectedVramGb?m.expectedVramGb+' GB · ':''}{m.agent?m.agent.name+' · agent '+(m.agent.online?'online':'offline'):'No verified agent match'}</p></div>
-            <span className={'rounded-full px-2.5 py-1 text-[11px] font-semibold '+(stale?tones.unknown:tones[m.state])}>{stale?'Stale':restarting?'Restart requested':labels[m.state]}</span>
+            <span className={'rounded-full px-2.5 py-1 text-[11px] font-semibold '+(restarting?tones.busy:stale?tones.unknown:tones[m.state])}>{restarting?'Restarting':stale?'Stale':labels[m.state]}</span>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
             <Utilization label="CPU" value={hardware?.cpuPct??null}/>
@@ -80,10 +82,12 @@ export function MachineOverview({enabled}:{enabled:boolean}){
             {stale?<p className="text-xs text-muted">Awaiting fresh readings</p>:m.jobs[0]?<><JobRow job={m.jobs[0]}/>{m.jobCount>1&&<p className="mt-1 text-xs text-muted">+{m.jobCount-1} additional active jobs</p>}</>:<p className="text-xs text-muted">{m.state==='busy'?'ComfyUI queue contains work outside a known Kemokem job.':m.state==='available'?'No active generation in the queue.':'Current activity unavailable.'}</p>}
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[11px] text-muted">{m.restart?.status==='SUCCEEDED'?'Last restart reported successful':m.restart?.status==='FAILED'?'Last restart failed':m.restart?'Managed Windows task':'Restart task not matched'}</span>
-            {m.restart?<ActionButton variant="ghost" size="sm" disabled={stale||!m.restart.canRestart||!!d.unassignedJobCount||restarting} confirm={'Restart '+m.restart.label+' on '+m.restart.deviceName+'? The live ComfyUI queue must be empty. This stops and starts the configured Windows task.'} onAction={async()=>{await post(path+'/'+m.id+'/restart',{taskId:m.restart!.taskId});await monitor.mutate();}} success="Restart requested. Waiting for the agent."><RotateCcw className="mr-1.5 size-3.5" aria-hidden/>{restartLabel}</ActionButton>:<Link href="/comfy" className="text-xs font-semibold text-accent hover:underline">Set up restart</Link>}
+            <span className={'text-[11px] '+(m.restart?.status==='FAILED'?'text-bad':'text-muted')}>{m.restart?restartStatus:'Restart task not matched'}</span>
+            {m.restart?<ActionButton variant="ghost" size="sm" confirm={'Stop and start '+m.restart.label+' on '+m.restart.deviceName+'?'+(queueRisk?' The queue is busy or cannot be verified. Restart may interrupt running or queued work.':'')+(restarting?' A restart is already pending; the existing request will be reused.':'')} onAction={async()=>{await post(path+'/'+m.id+'/restart',{taskId:m.restart!.taskId});await Promise.all([monitor.mutate(),refresh('/comfy/windows-tasks')]);}} success="Restart request accepted. Waiting for the Windows agent."><RotateCcw className="mr-1.5 size-3.5" aria-hidden/>{restartLabel}</ActionButton>:<Link href="/comfy" className="text-xs font-semibold text-accent hover:underline">Set up restart</Link>}
           </div>
-          {m.restart&&!m.restart.canRestart&&!restarting&&<p className="mt-1 text-[11px] text-muted">Restart requires a fresh agent and a verified empty queue. Recovery from an unreachable ComfyUI remains in Studio settings.</p>}
+          {m.restart?.error&&<p role="status" className="mt-1 text-[11px] text-bad">{m.restart.error}</p>}
+          {m.restart&&!m.agent?.online&&<p className="mt-1 text-[11px] text-muted">Agent offline · restart waits for the PC to reconnect.</p>}
+          {m.restart&&!stale&&m.state==='unreachable'&&!restarting&&m.agent?.online&&<p className="mt-1 text-[11px] text-muted">ComfyUI is unreachable. Restart through the Windows task.</p>}
         </article>;
       })}
     </div>}

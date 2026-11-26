@@ -141,7 +141,22 @@ export const heartbeatSchema = z.object({
   os: z.string().max(100).optional(),
   listenUrls: z.array(z.string().url()).max(10).default([]),
   tailscaleIp: z.string().max(100).optional(),
-  load: z.object({ cpuPct: z.number().optional(), scanning: z.boolean().optional() }).optional(),
+  load: z.object({
+    cpuPct: z.number().optional(), scanning: z.boolean().optional(),
+    hardware: z.object({
+      sampledAt: z.iso.datetime(),
+      cpuPct: z.number().min(0).max(100).optional(),
+      ramTotalBytes: z.number().int().positive().max(2 ** 50).optional(),
+      ramUsedBytes: z.number().int().nonnegative().max(2 ** 50).optional(),
+      gpus: z.array(z.object({
+        name: z.string().min(1).max(160),
+        utilPct: z.number().min(0).max(100).optional(),
+        tempC: z.number().min(0).max(150).optional(),
+        memoryTotalBytes: z.number().int().positive().max(2 ** 40).optional(),
+        memoryUsedBytes: z.number().int().nonnegative().max(2 ** 40).optional(),
+      })).max(16),
+    }).optional(),
+  }).optional(),
   roots: z
     .array(
       z.object({

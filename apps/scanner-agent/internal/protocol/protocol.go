@@ -107,9 +107,26 @@ type RootHealth struct {
 	Scanning   bool    `json:"scanning"`
 }
 
+type GPUReading struct {
+	Name string `json:"name"`
+	UtilPct *float64 `json:"utilPct,omitempty"`
+	TempC *float64 `json:"tempC,omitempty"`
+	MemoryTotalBytes *uint64 `json:"memoryTotalBytes,omitempty"`
+	MemoryUsedBytes *uint64 `json:"memoryUsedBytes,omitempty"`
+}
+
+type HardwareReading struct {
+	SampledAt string `json:"sampledAt"`
+	CPUPct *float64 `json:"cpuPct,omitempty"`
+	RAMTotalBytes *uint64 `json:"ramTotalBytes,omitempty"`
+	RAMUsedBytes *uint64 `json:"ramUsedBytes,omitempty"`
+	GPUs []GPUReading `json:"gpus"`
+}
+
 type Load struct {
-	CPUPct   float64 `json:"cpuPct,omitempty"`
-	Scanning bool    `json:"scanning"`
+	CPUPct float64 `json:"cpuPct,omitempty"`
+	Scanning bool `json:"scanning"`
+	Hardware *HardwareReading `json:"hardware,omitempty"`
 }
 
 type Heartbeat struct {

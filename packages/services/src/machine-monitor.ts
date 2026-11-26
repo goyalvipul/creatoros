@@ -7,7 +7,7 @@ const rows = <T>(result: unknown) => (result as { rows: T[] }).rows;
 const FRESH_MS = 180_000;
 type QueueState = 'available' | 'busy' | 'unreachable' | 'unknown' | 'disabled';
 type Worker = Awaited<ReturnType<typeof listGpuWorkers>>[number];
-type Device = { id: string; name: string; hostname: string | null; os: string | null; state: string; seenAt: Date | null; tailscale: string | null; urls: string[]; cpu: unknown; scanning: unknown };
+type Device = { id: string; name: string; hostname: string | null; os: string | null; state: string; seenAt: Date | null; tailscale: string | null; urls: string[]; cpu: unknown; scanning: unknown; hardware?: unknown };
 type Job = { id:string; workerId:string|null; projectId:string|null; title:string|null; provider:string; status:string; startedAt:Date|null; createdAt:Date; phase:unknown; detail:unknown; value:unknown; max:unknown };
 function textValue(value:unknown,max=160) { return typeof value==='string'?value.slice(0,max):null; }
 function numberValue(value:unknown) { return typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null; }
@@ -55,7 +55,7 @@ async function inspectWorker(w:Worker,jobs:Job[]) {
 }
 async function devicesFor(ctx:Ctx) {
   return rows<Device>(await ctx.db.execute(sql`
-    select id,display_name as name,hostname,os,state,last_seen_at as "seenAt",tailscale_hint as tailscale,listen_urls as urls,load->'cpuPct' as cpu,load->'scanning' as scanning
+    select id,display_name as name,hostname,os,state,last_seen_at as "seenAt",tailscale_hint as tailscale,listen_urls as urls,load->'cpuPct' as cpu,load->'scanning' as scanning,load->'hardware' as hardware
     from devices where org_id=${ctx.orgId} and state<>'REVOKED' order by display_name
   `));
 }
@@ -67,6 +67,30 @@ async function activeJobs(ctx:Ctx) {
     where j.org_id=${ctx.orgId} and j.status in ('QUEUED','RUNNING')
     order by case when j.status='RUNNING' then 0 else 1 end,j.created_at
   `));
+}
+function asObject(v:unknown):Record<string,unknown>|null {
+  return v!==null&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:null;
+}
+function bounded(v:unknown,max:number){const n=numberValue(v);return n!==null&&n<=max?n:null;}
+function usedMemory(total:unknown,used:unknown){
+  const t=numberValue(total),u=numberValue(used);
+  return t!==null&&u!==null&&t>0&&u<=t?{usedBytes:u,totalBytes:t}:null;
+}
+function gpuModel(value:unknown){
+  return typeof value==='string'?value.match(/\b(?:RTX|GTX)\s*\d{3,4}(?:\s+(?:Ti|SUPER))?\b/i)?.[0]?.toUpperCase().replace(/\s+/g,' ')??null:null;
+}
+export function hardwareReading(raw:unknown,workerLabel:string,deviceName:string|null,now:Date){
+  const h=asObject(raw);
+  if(!h||typeof h.sampledAt!=='string')return null;
+  const age=now.getTime()-Date.parse(h.sampledAt);
+  if(!Number.isFinite(age)||age < -5000||age > 90000)return null;
+  const model=gpuModel(deviceName)??gpuModel(workerLabel);
+  const gpus=Array.isArray(h.gpus)?h.gpus.map(asObject).filter(g=>g!==null):[];
+  // Never assign another GPU's readings by capacity or list position.
+  const matches=model?gpus.filter(g=>gpuModel(g.name)===model):[];
+  const gpu=matches.length===1?matches[0]:null;
+  return {sampledAt:h.sampledAt,cpuPct:bounded(h.cpuPct,100),gpuPct:bounded(gpu?.utilPct,100),gpuTempC:bounded(gpu?.tempC,150),
+    ram:usedMemory(h.ramTotalBytes,h.ramUsedBytes),vram:usedMemory(gpu?.memoryTotalBytes,gpu?.memoryUsedBytes)};
 }
 function cleanJob(j:Job) {
   const value=numberValue(j.value),max=numberValue(j.max);
@@ -82,11 +106,14 @@ export async function machineMonitor(ctx:Ctx) {
     if(d)assigned.add(d.id);
     const workerJobs=jobs.filter(j=>j.workerId===w.id);
     const snapshot=await inspectWorker(w,workerJobs);
+    const hardware=d&&online(d,now)?hardwareReading(d.hardware,w.label,w.deviceName,now):null;
     const candidates=d?taskList.tasks.filter(t=>t.deviceId===d.id&&/comfy\s*ui/i.test(t.label+' '+t.taskName)):[];
     const task=candidates.length===1?candidates[0]!:null;
     const restarting=task?.restartStatus==='PENDING'||task?.restartStatus==='RUNNING';
     const canRestart=!!(w.enabled&&d&&online(d,now)&&task&&task.checkedAt&&now.getTime()-new Date(task.checkedAt).getTime()<=FRESH_MS&&!restarting&&!['DISABLED','NOT_FOUND','UNKNOWN'].includes(task.status)&&!workerJobs.length&&snapshot.state==='available'&&jobs.every(j=>!!j.workerId));
     return {id:w.id,label:w.label,role:w.role,expectedVramGb:w.expectedVramGb,...snapshot,
+      ram:hardware?.ram??snapshot.ram,vram:hardware?.vram??snapshot.vram,
+      hardware:hardware?{sampledAt:hardware.sampledAt,cpuPct:hardware.cpuPct,gpuPct:hardware.gpuPct,gpuTempC:hardware.gpuTempC}:null,
       agent:d?{name:d.name,online:online(d,now),seenAt:d.seenAt,cpuPct:online(d,now)&&numberValue(d.cpu)!==null&&Number(d.cpu)<=100?Number(d.cpu):null}:null,
       jobs:workerJobs.slice(0,3).map(cleanJob),jobCount:workerJobs.length,
       restart:task?{taskId:task.id,label:task.label,deviceName:task.deviceName,status:task.restartStatus,canRestart}:null};

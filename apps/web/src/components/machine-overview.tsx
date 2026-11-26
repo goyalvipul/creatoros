@@ -1,13 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { Activity, ChevronDown, Cpu, RefreshCw, RotateCcw, Server, HardDrive } from 'lucide-react';
+import { Activity, ChevronDown, Cpu, RefreshCw, RotateCcw, Server, HardDrive, Thermometer } from 'lucide-react';
 import { useApi, post } from '@/lib/api';
 import { ActionButton } from '@/components/ui';
 
 type Memory = {usedBytes:number;totalBytes:number};
 type Job = {id:string;projectId:string|null;title:string|null;provider:string;status:string;phase:string|null;detail:string|null;progress:{value:number;max:number}|null;startedAt:string|null;createdAt:string};
-type Machine = {id:string;label:string;role:string;expectedVramGb:number|null;state:'available'|'busy'|'unreachable'|'unknown'|'disabled';counts:{running:number;pending:number}|null;vram:Memory|null;ram:Memory|null;checkedAt:string;agent:{name:string;online:boolean;seenAt:string|null;cpuPct:number|null}|null;jobs:Job[];jobCount:number;restart:{taskId:string;label:string;deviceName:string;status:string|null;canRestart:boolean}|null};
+type Machine = {id:string;label:string;role:string;expectedVramGb:number|null;state:'available'|'busy'|'unreachable'|'unknown'|'disabled';counts:{running:number;pending:number}|null;vram:Memory|null;ram:Memory|null;checkedAt:string;hardware?:{sampledAt:string;cpuPct:number|null;gpuPct:number|null;gpuTempC:number|null}|null;agent:{name:string;online:boolean;seenAt:string|null;cpuPct:number|null}|null;jobs:Job[];jobCount:number;restart:{taskId:string;label:string;deviceName:string;status:string|null;canRestart:boolean}|null};
 type Monitor = {machines:Machine[];storageAgents:{id:string;name:string;online:boolean;seenAt:string|null;scanning:boolean}[];unassignedJobCount:number;sampledAt:string};
 const path='/comfy/machine-monitor';
 const labels={available:'Queue free',busy:'Busy',unreachable:'ComfyUI unreachable',unknown:'Status unknown',disabled:'Disabled'};
@@ -19,6 +19,14 @@ function Meter({label,memory}:{label:string;memory:Memory|null}){
     <div className="flex items-center justify-between gap-2 text-[11px]"><span className="text-muted">{label}</span><span className="font-semibold tabular-nums">{memory?gb(memory.usedBytes)+' / '+gb(memory.totalBytes)+' GB':'—'}</span></div>
     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel2" role={pct===null?undefined:'meter'} aria-label={label+' used'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct??undefined}>
       {pct!==null&&<div className={'h-full rounded-full transition-[width] duration-500 '+(pct>=90?'bg-warn':'bg-ok')} style={{width:pct+'%'}}/>}
+    </div>
+  </div>;
+}
+function Utilization({label,value}:{label:string;value:number|null}){
+  return <div className="min-w-0">
+    <div className="flex items-center justify-between gap-2 text-[11px]"><span className="text-muted">{label}</span><span className="font-semibold tabular-nums">{value===null?'—':Math.round(value)+'%'}</span></div>
+    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-panel2" role={value===null?undefined:'meter'} aria-label={label+' utilization'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value??undefined}>
+      {value!==null&&<div className={'h-full rounded-full transition-[width] duration-500 '+(value>=90?'bg-warn':'bg-ok')} style={{width:value+'%'}}/>}
     </div>
   </div>;
 }
@@ -52,14 +60,22 @@ export function MachineOverview({enabled}:{enabled:boolean}){
     {d&&<div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-2">
       {d.machines.map(m=>{
         const restarting=m.restart?.status==='PENDING'||m.restart?.status==='RUNNING';
+        const hardware=!stale&&m.hardware&&Date.now()-Date.parse(m.hardware.sampledAt)<=90000?m.hardware:null;
+        const temp=hardware?.gpuTempC??null;
         const restartLabel=restarting?'Restart requested':m.restart?.status==='FAILED'?'Retry restart':'Restart ComfyUI';
         return <article key={m.id} className="min-w-0 rounded-xl border border-border bg-panel p-3.5 md:p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0"><h3 className="font-semibold">{m.label}</h3><p className="mt-0.5 text-xs text-muted">{m.expectedVramGb?m.expectedVramGb+' GB · ':''}{m.agent?m.agent.name+' · agent '+(m.agent.online?'online':'offline'):'No verified agent match'}</p></div>
             <span className={'rounded-full px-2.5 py-1 text-[11px] font-semibold '+(stale?tones.unknown:tones[m.state])}>{stale?'Stale':restarting?'Restart requested':labels[m.state]}</span>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-3"><Meter label="VRAM used" memory={stale?null:m.vram}/><Meter label="RAM used" memory={stale?null:m.ram}/></div>
-          <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted"><span>{!stale&&m.counts?m.counts.running+' running · '+m.counts.pending+' queued':'Queue counts unavailable'}</span>{!stale&&m.agent?.cpuPct!=null&&<span className="tabular-nums">CPU {m.agent.cpuPct.toFixed(0)}%</span>}</div>
+          <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
+            <Utilization label="CPU" value={hardware?.cpuPct??null}/>
+            <Utilization label="GPU" value={hardware?.gpuPct??null}/>
+            <Meter label="RAM used" memory={stale?null:m.ram}/>
+            <Meter label="VRAM used" memory={stale?null:m.vram}/>
+          </div>
+          <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted"><span>{!stale&&m.counts?m.counts.running+' running · '+m.counts.pending+' queued':'Queue counts unavailable'}</span><span className={'inline-flex items-center gap-1 tabular-nums '+(temp!==null&&temp>=85?'text-warn':'text-muted')} title="NVIDIA GPU core temperature"><Thermometer className="size-3.5" aria-hidden/> GPU {temp===null?'—':Math.round(temp)+'°C'}</span></div>
+          {!stale&&!hardware&&<p className="mt-1 text-[11px] text-muted">Hardware telemetry unavailable · update or reconnect scanner agent.</p>}
           <div className="mt-3 min-h-[56px] rounded-lg bg-panel2 px-3 py-2.5">
             {stale?<p className="text-xs text-muted">Awaiting fresh readings</p>:m.jobs[0]?<><JobRow job={m.jobs[0]}/>{m.jobCount>1&&<p className="mt-1 text-xs text-muted">+{m.jobCount-1} additional active jobs</p>}</>:<p className="text-xs text-muted">{m.state==='busy'?'ComfyUI queue contains work outside a known Kemokem job.':m.state==='available'?'No active generation in the queue.':'Current activity unavailable.'}</p>}
           </div>
@@ -76,6 +92,6 @@ export function MachineOverview({enabled}:{enabled:boolean}){
       <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-xs font-medium text-muted"><HardDrive className="size-3.5" aria-hidden/>Storage & scanner agents<span className="ml-auto">{stale?'Stale':d.storageAgents.filter(a=>a.online).length+'/'+d.storageAgents.length+' online'}</span><ChevronDown className="size-3.5" aria-hidden/></summary>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">{d.storageAgents.map(a=><div key={a.id} className="flex items-center justify-between gap-2 rounded-lg bg-panel2 px-3 py-2 text-xs"><span className="flex min-w-0 items-center gap-2"><Server className="size-3.5 shrink-0" aria-hidden/><span className="truncate">{a.name}</span></span><span className={!stale&&a.online?'text-ok':'text-muted'}>{stale?'Unknown':a.online?(a.scanning?'Scanning':'Online'):'Offline'}</span></div>)}</div>
     </details>}
-    <p className="mt-2 text-[10px] text-muted">Queue and memory update every 10 seconds while this page is visible. Queue free does not guarantee that other GPU applications are idle.</p>
+    <p className="mt-2 text-[10px] text-muted">Queue refreshes every 10 seconds; hardware samples arrive with agent heartbeats (normally 30 seconds). GPU temperature is core temperature. Queue free does not guarantee system idle.</p>
   </section>;
 }

@@ -1,6 +1,7 @@
 import {sql,type Db,type Executor} from '@creatoros/db';
 import {audit} from './audit';
-import {badRequest,conflict,notFound,type Ctx} from './types';
+import {notify} from './notifications';
+import {badRequest,conflict,notFound,type Ctx,type ServiceEnv} from './types';
 
 const rows=<T>(r:unknown)=>(r as {rows:T[]}).rows;
 export type RunState='ACTIVE'|'PAUSED'|'STOPPED';
@@ -63,16 +64,17 @@ export async function assertRunSubmission(ctx:Ctx,runId:string,projectId:string)
 }
 export async function setAutomatedProjectStage(db:Executor,orgId:string,projectId:string|null,stage:'IN_PROGRESS'|'READY',reason:string){
   if(!projectId)return;
-  // Do not regress manually published/archived projects or automatically bypass their checklist.
+  // Automation READY means verified post-production. Leave manual checklist items untouched; never regress published/archived projects.
   const [p]=rows<{stage:string}>(await db.execute(sql`select stage from creative_projects where org_id=${orgId} and id=${projectId} and deleted_at is null for update`));
   if(!p||p.stage===stage||!['DRAFT','IN_PROGRESS'].includes(p.stage))return;
+  if(stage==='READY'&&rows(await db.execute(sql`select id from generation_jobs where org_id=${orgId} and project_id=${projectId} and status in ('QUEUED','RUNNING') limit 1`)).length)return;
   await db.execute(sql`update creative_projects set stage=${stage}::project_stage,updated_at=now() where org_id=${orgId} and id=${projectId}`);
   await db.execute(sql`insert into project_status_events(org_id,project_id,from_stage,to_stage,source,reason) values(${orgId},${projectId},${p.stage}::project_stage,${stage}::project_stage,'production_automation',${reason})`);
 }
 export async function productionRunBoard(ctx:Ctx,runId?:string){
   const runs=rows<Run&{brandName:string}>(await ctx.db.execute(sql`select r.id,r.brand_id as "brandId",b.name as "brandName",r.local_day::text as "localDay",r.target,r.state,r.planning_state as "planningState",r.planning_detail as "planningDetail",r.created_at as "createdAt",r.updated_at as "updatedAt" from production_runs r join brands b on b.id=r.brand_id and b.org_id=r.org_id where r.org_id=${ctx.orgId} ${runId?sql`and r.id=${runId}`:sql``} order by r.local_day desc,r.created_at desc limit 30`));
   if(runId&&!runs.length)throw notFound('Production run');
-  const jobs=rows<Record<string,unknown>>(await ctx.db.execute(sql`select j.id,j.project_id as "projectId",p.title,p.brand_id as "brandId",p.stage,j.status,j.error,j.created_at as "createdAt",j.started_at as "startedAt",j.finished_at as "finishedAt",j.settings->>'workerLabel' as worker,j.settings->>'productionRunId' as "runId",j.settings->'progress' as progress,j.settings->>'outputScanStatus' as "scanStatus",j.settings->'postProduction' as post,coalesce(j.settings->>'dispatchPaused','false')='true' as paused
+  const jobs=rows<Record<string,unknown>>(await ctx.db.execute(sql`select j.id,j.project_id as "projectId",p.title,p.brand_id as "brandId",p.stage,j.status,j.error,j.created_at as "createdAt",j.started_at as "startedAt",j.finished_at as "finishedAt",j.settings->>'workerLabel' as worker,j.settings->>'productionRunId' as "runId",j.settings->'progress' as progress,j.settings->>'outputScanStatus' as "scanStatus",j.settings->'postProduction' as post,${runId?sql`j.settings->>'sourceEvidence' as "sourceEvidence",j.settings->'segments' as segments,`:sql``}coalesce(j.settings->>'dispatchPaused','false')='true' as paused
     from generation_jobs j left join creative_projects p on p.id=j.project_id and p.org_id=j.org_id where j.org_id=${ctx.orgId} and j.provider='comfyui-h3' and j.project_id is not null
     ${runId?sql`and j.settings->>'productionRunId'=${runId}`:sql`and j.created_at>now()-interval '30 days'`} order by j.created_at desc limit 100`));
   const events=rows<Record<string,unknown>>(await ctx.db.execute(sql`select e.id,e.run_id as "runId",e.job_id as "jobId",e.stage,e.detail,e.created_at as "createdAt" from production_run_events e where e.org_id=${ctx.orgId} ${runId?sql`and e.run_id=${runId}`:sql``} order by e.id desc limit 300`));
@@ -91,4 +93,22 @@ export async function controlProductionRun(ctx:Ctx,id:string,action:'pause'|'res
     await audit({...ctx,db:tx},'production.run.'+action,{type:'production_run',id});
     return {state};
   });
+}
+
+
+export async function reconcileProductionRuns(db:Db,_env:ServiceEnv){
+  const stale=rows<{id:string;orgId:string}>(await db.execute(sql`
+    update production_runs r set planning_state='BLOCKED',planning_detail='Planner stopped reporting before submitting the target videos. Resume the existing ChatGPT automation to finish the plan.',updated_at=now()
+    where r.state='ACTIVE' and r.planning_state in ('RESEARCHING','PLANNED') and r.updated_at<now()-interval '30 minutes'
+      and (select count(*) from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text)<r.target
+    returning id,org_id as "orgId"`));
+  for(const r of stale)await runEvent(db,r.orgId,r.id,'BLOCKED','Planning or submission stopped before the daily target was queued.');
+  const runs=rows<{id:string;orgId:string;target:number;brandName:string;ready:number;failed:number}>(await db.execute(sql`select r.id,r.org_id as "orgId",r.target,b.name as "brandName",
+    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and j.settings->'postProduction'->>'phase'='READY') as ready,
+    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and (j.status='FAILED' or j.settings->'postProduction'->>'phase'='FAILED')) as failed
+    from production_runs r join brands b on b.id=r.brand_id and b.org_id=r.org_id where r.state='ACTIVE' and r.created_at>now()-interval '30 days'`));
+  for(const r of runs){
+    if(r.ready>=r.target)await notify(db,{orgId:r.orgId,type:'production.ready',dedupeKey:'production.run.ready:'+r.id,title:r.brandName+' daily production ready',body:r.target+' videos ready for review. Nothing was published or scheduled.',severity:'INFO',deepLink:'/today',sourceType:'production_run',sourceId:r.id}).catch(()=>undefined);
+    if(r.failed)await notify(db,{orgId:r.orgId,type:'production.failed',dedupeKey:'production.run.failed:'+r.id,title:r.brandName+' production needs attention',body:r.failed+' video job(s) failed. Review the run log.',severity:'WARNING',deepLink:'/today',sourceType:'production_run',sourceId:r.id}).catch(()=>undefined);
+  }
 }

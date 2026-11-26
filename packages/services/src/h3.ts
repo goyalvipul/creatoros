@@ -1051,7 +1051,7 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
         returning id`),
     );
     if (!saved.length) return false;
-    await db.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
+    await tx.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
     const ordered = [
       ...entry.outputs.filter((o) => o.node === '25'),
       ...entry.outputs.filter((o) => o.node !== '25'),

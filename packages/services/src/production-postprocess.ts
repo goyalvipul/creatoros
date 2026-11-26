@@ -11,7 +11,7 @@ import {queueVideoAnalysis,createProductionMetadata} from './ai';
 import {readSocialCover,saveSocialCoverBytes} from './social-cover';
 import {notify} from './notifications';
 import {audit} from './audit';
-import {runEvent,runPrefs,runPlatforms,setAutomatedProjectStage} from './production-run';
+import {runEvent,runPrefs,runPlatforms,setAutomatedProjectStage,reconcileProductionRuns} from './production-run';
 import {badRequest,conflict,notFound,systemCtx,type Ctx,type ServiceEnv} from './types';
 
 const exec=promisify(execFile);
@@ -69,6 +69,10 @@ async function loadJob(ctx:Ctx,id:string){
   if(!j)throw notFound('H3 production job');
   return j;
 }
+export async function productionPackageForItem(ctx:Ctx,itemId:string){
+  const [j]=rows<{id:string;post:Post}>(await ctx.db.execute(sql`select j.id,j.settings->'postProduction' as post from generation_jobs j join publish_items i on i.id::text=j.settings->'postProduction'->>'itemId' and i.org_id=j.org_id where j.org_id=${ctx.orgId} and i.id=${itemId} order by j.created_at desc limit 1`));
+  return j??null;
+}
 export async function getProductionCover(ctx:Ctx,id:string,platform:string){
   if(!(runPlatforms as readonly string[]).includes(platform))throw notFound('Cover');
   const j=await loadJob(ctx,id);
@@ -91,6 +95,7 @@ async function applyPublishing(ctx:Ctx,j:Job,post:Post){
     where a.org_id=${ctx.orgId} and c.brand_id=${j.brandId} and a.active and a.deleted_at is null and c.deleted_at is null and a.platform::text in ('youtube','instagram','facebook','tiktok','threads','x')`));
   const prefilled:string[]=[];
   for(const a of accounts){
+    if(post.prefilled?.includes(a.id)){prefilled.push(a.id);continue;}
     const m=post.metadata[a.platform];if(!m)throw badRequest('Missing metadata for '+a.platform);
     const title=m.recommendedTitle.trim().slice(0,a.platform==='youtube'?100:300),caption=(a.platform==='youtube'?m.description:m.caption).trim().slice(0,a.platform==='x'?280:2200);
     const hashtags=m.hashtags.map(h=>h.replace(/^#/,'').trim()).filter(Boolean).slice(0,12);
@@ -136,6 +141,7 @@ async function advance(ctx:Ctx,j:Job){
     const prefs=(await runPrefs(ctx))[j.brandId];
     if(p.phase==='WAIT_INDEX'){
       const f=await findOutput(ctx,j);
+      if(!f){const [age]=rows<{expired:boolean}>(await ctx.db.execute(sql`select greatest(finished_at,coalesce((settings->>'outputScanRetryAt')::timestamptz,finished_at))<now()-interval '1 day' as expired from generation_jobs where id=${j.id} and org_id=${ctx.orgId}`));if(age?.expired)throw conflict('Final output has not been indexed. Check the worker output root.');}
       next=f?{...p,...f,phase:'ANALYSIS',detail:'Final file indexed and linked to publishing.'}:{...p,detail:'Waiting for final output to be indexed and linked. Scanner requests are automatic.'};
     }else if(p.phase==='ANALYSIS'||p.phase==='BLOCKED_BILLING'){
       if(!p.fileId)throw badRequest('Final output is missing.');
@@ -160,7 +166,7 @@ async function advance(ctx:Ctx,j:Job){
       const [analysis]=rows<{output:{analysis?:{thumbnailCandidates?:{timestamp:string}[]}}}>(await ctx.db.execute(sql`select output from ai_jobs where id=${p.analysisId} and org_id=${ctx.orgId} and status='COMPLETED'`));
       const timestamp=coverSeconds(analysis?.output?.analysis?.thumbnailCandidates?.[0]?.timestamp);
       next={...p,covers:await makeCovers(ctx,j,p,timestamp),phase:'PREFILL',detail:'Original video-frame cover images generated for all six platforms.'};
-    }else if(p.phase==='PREFILL'||p.phase==='AWAITING_ACCOUNTS'){
+    }else if(p.phase==='PREFILL'||p.phase==='AWAITING_ACCOUNTS'||p.phase==='READY'){
       const applied=await applyPublishing(ctx,j,p);
       next={...p,...applied,phase:applied.prefilled.length?'READY':'AWAITING_ACCOUNTS',detail:applied.prefilled.length?'Verified '+applied.prefilled.length+' connected publishing drafts. Unconnected platforms retain their packages.':'Platform packages and covers are saved; connect a social account for this creator to prefill.'};
     }
@@ -169,21 +175,22 @@ async function advance(ctx:Ctx,j:Job){
   }catch(e){
     const message=redactSecrets(e instanceof Error?e.message:String(e));
     await finish(ctx,j,lease,{...p,phase:'FAILED',failedPhase:p.phase,detail:message});
-    await notify(ctx.db,{orgId:ctx.orgId,type:'production.failed',dedupeKey:'production.failed:'+j.id+':'+p.phase+':'+(p.attempt??1),title:'Production needs attention',body:j.title+': '+message,severity:'WARN',deepLink:'/today',sourceType:'generation_job',sourceId:j.id}).catch(()=>undefined);
+    await notify(ctx.db,{orgId:ctx.orgId,type:'production.failed',dedupeKey:'production.failed:'+j.id+':'+p.phase+':'+(p.attempt??1),title:'Production needs attention',body:j.title+': '+message,severity:'WARNING',deepLink:'/today',sourceType:'generation_job',sourceId:j.id}).catch(()=>undefined);
   }
 }
 export async function runDueProduction(db:Db,env:ServiceEnv){
+  await reconcileProductionRuns(db,env);
   // A killed worker cannot safely repeat an uncertain provider request.
   await db.execute(sql`update generation_jobs set settings=jsonb_set(settings,'{postProduction}',(settings->'postProduction')||jsonb_build_object('phase','FAILED','failedPhase',settings->'postProduction'->>'phase','detail','Worker stopped during this stage. Review and explicitly retry; paid requests may have been charged.','lease',null,'leaseAt',null)),updated_at=now()
     where provider='comfyui-h3' and settings->'postProduction'->>'lease' is not null and (settings->'postProduction'->>'leaseAt')::timestamptz<now()-interval '12 minutes'`);
   const jobs=rows<Job>(await db.execute(sql`select j.id,j.org_id as "orgId",j.project_id as "projectId",p.brand_id as "brandId",p.title,j.status,j.settings,j.settings->>'productionRunId' as "runId",j.settings->'postProduction' as post
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
-    where j.provider='comfyui-h3' and j.status='SUCCEEDED' and p.deleted_at is null and p.brand_id is not null and p.stage in ('DRAFT','IN_PROGRESS')
+    where j.provider='comfyui-h3' and j.status='SUCCEEDED' and p.deleted_at is null and p.brand_id is not null and p.stage in ('DRAFT','IN_PROGRESS','READY')
       and (r.id is not null or j.settings->>'productionAdopted'='true') and (r.id is null or r.state='ACTIVE')
       and coalesce(j.settings->>'dispatchPaused','false')<>'true'
       and j.settings->'postProduction'->>'lease' is null
-      and coalesce(j.settings->'postProduction'->>'phase','WAIT_INDEX') not in ('READY','FAILED','STOPPED')
+      and (coalesce(j.settings->'postProduction'->>'phase','WAIT_INDEX') not in ('READY','FAILED','STOPPED') or (j.settings->'postProduction'->>'phase'='READY' and exists(select 1 from social_accounts a join channels c on c.id=a.channel_id and c.org_id=a.org_id where a.org_id=j.org_id and c.brand_id=p.brand_id and a.active and a.deleted_at is null and c.deleted_at is null and a.platform::text in ('youtube','instagram','facebook','tiktok','threads','x') and not (coalesce(j.settings->'postProduction'->'prefilled','[]'::jsonb) ? a.id::text))))
     order by j.updated_at,j.id limit 10`));
   for(const j of jobs){
     const ctx=systemCtx({db,env},j.orgId);
@@ -196,8 +203,17 @@ export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pau
   const j=await loadJob(ctx,id);
   if(action==='adopt'){
     if(!j.brandId||j.status!=='SUCCEEDED')throw badRequest('Adopt a completed creator video.');
+    if(j.settings.productionAdopted===true||j.runId)return {accepted:true};
     await ctx.db.transaction(async tx=>{
-      await tx.execute(sql`update generation_jobs set settings=settings||'{"productionAdopted":true}'::jsonb,updated_at=now() where id=${id} and org_id=${ctx.orgId}`);
+      const [date]=rows<{day:string}>(await tx.execute(sql`select to_char(created_at at time zone 'America/Vancouver','YYYY-MM-DD') as day from generation_jobs where id=${id} and org_id=${ctx.orgId}`));
+      if(!date)throw notFound('Job');
+      await tx.execute(sql`insert into production_runs(org_id,brand_id,local_day,target,planning_state,planning_detail) values(${ctx.orgId},${j.brandId},${date.day}::date,2,'PLANNED','Owner adopted an existing completed render; source evidence predates run tracking.') on conflict(org_id,brand_id,local_day) do nothing`);
+      const [run]=rows<{id:string;state:string}>(await tx.execute(sql`select id,state from production_runs where org_id=${ctx.orgId} and brand_id=${j.brandId} and local_day=${date.day}::date for update`));
+      if(!run||run.state==='STOPPED')throw conflict('That daily run is stopped.');
+      const [count]=rows<{n:number}>(await tx.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${run.id}`));
+      if((count?.n??0)>=2)throw conflict('This daily run already has two videos.');
+      await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({productionAdopted:true,productionRunId:run.id,postProduction:{phase:'WAIT_INDEX',attempt:1}})}::jsonb,updated_at=now() where id=${id} and org_id=${ctx.orgId}`);
+      await runEvent(tx,ctx.orgId,run.id,'ADOPTED','Existing render adopted without regenerating.',id);
       await setAutomatedProjectStage(tx,ctx.orgId,j.projectId,'IN_PROGRESS','Existing rendered video adopted for post-production.');
     });
   }else if(action==='retry'){
@@ -206,6 +222,7 @@ export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pau
     if(terminal.includes(phase))throw conflict('Cannot retry this stage.');
     const next:Post={...j.post,phase,detail:'Owner requested stage retry.',attempt:(j.post.attempt??1)+1,lease:null};
     if(phase==='ANALYSIS'||phase==='BLOCKED_BILLING')delete next.analysisId;
+    if(phase==='WAIT_INDEX')await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({outputScanRequestedAt:null,outputScanRetryAt:new Date().toISOString()})}::jsonb where id=${id} and org_id=${ctx.orgId}`);
     await ctx.db.execute(sql`update generation_jobs set settings=jsonb_set(settings,'{postProduction}',${JSON.stringify(next)}::jsonb,true),updated_at=now() where id=${id} and org_id=${ctx.orgId} and settings->'postProduction'->>'phase'='FAILED'`);
   }else if(action==='cancel_render'){
     // Cancel queued work atomically. For a running job only interrupt if the exact prompt is the sole running prompt.

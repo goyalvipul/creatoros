@@ -19,7 +19,7 @@ export async function requestH3OutputScan(db:Db){
   const jobs=rows<{id:string;orgId:string;workerUrl:string}>(await db.execute(sql`
     select j.id,j.org_id as "orgId",w.base_url as "workerUrl"
     from generation_jobs j join gpu_workers w on w.org_id=j.org_id and w.id::text=j.settings->>'workerId'
-    where j.provider='comfyui-h3' and j.status='SUCCEEDED' and j.finished_at>now()-interval '1 day'
+    where j.provider='comfyui-h3' and j.status='SUCCEEDED' and (j.finished_at>now()-interval '1 day' or (j.settings->>'outputScanRetryAt')::timestamptz>now()-interval '1 day')
       and exists(select 1 from generation_outputs o where o.job_id=j.id and o.org_id=j.org_id and o.output_role='final' and o.file_instance_id is null)
       and (j.settings->>'outputScanRequestedAt' is null or (j.settings->>'outputScanRequestedAt')::timestamptz<now()-interval '3 minutes')
     order by j.finished_at limit 20`));

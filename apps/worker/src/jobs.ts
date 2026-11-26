@@ -332,6 +332,7 @@ export const JOB_TABLE = {
   'drive-sync': jobDriveSync,
   'publish-due': jobDuePublishes,
   ltx: jobLtx,
+  production: async (d:WorkerDeps) => (await import('@creatoros/services')).runDueProduction(d.db,d.env),
   live: jobLive,
   events: jobEvents,
   actions: jobActions,

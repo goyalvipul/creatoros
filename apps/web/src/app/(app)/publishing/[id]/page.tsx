@@ -28,6 +28,7 @@ import {
 import { post, refresh, useApi } from '@/lib/api';
 import { bytes, title as titleCase, when } from '@/lib/format';
 import { AiPublishAssistant } from '@/components/ai-tools';
+import { ProductionPackage } from '@/components/production-package';
 import { PlatformLogo, platformLabel } from '@/components/platform-logo';
 import { threadsTextUnits, tiktokPrivacy } from '@creatoros/domain';
 
@@ -77,6 +78,7 @@ function Title() {
                 <span> / </span>
                 <span>{data.title}</span>
               </p>
+              <ProductionPackage itemId={current?.id} enabled={me.data?.user?.role === 'OWNER'} />
               <div className="flex gap-1 xl:hidden" role="tablist">
                 {(
                   [

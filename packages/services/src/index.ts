@@ -45,6 +45,8 @@ export * from './comfy';
 export * from './autogen';
 export * from './qwen';
 export * from './h3';
+export * from './production-run';
+export * from './production-postprocess';
 export * from './long-videos';
 export * from './ai';
 export * from './windows-tasks';

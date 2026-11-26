@@ -19,8 +19,10 @@ import {
 import { h3AspectRatio } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
-import { fileForWorker, linkRecentGeneratedOutputs, machineQueue, readComfyInputCopy } from './comfy';
+import { fileForWorker, linkRecentGeneratedOutputs, machineQueue, readComfyInputCopy, readWorkerQueue } from './comfy';
 import { notifyGenerationReady } from './notifications';
+import { requestH3OutputScan } from './h3-output-scan';
+import { assertRunSubmission,runEvent,setAutomatedProjectStage } from './production-run';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
 const PROVIDER = 'comfyui-h3';
@@ -458,7 +460,24 @@ function checkForm(form: H3Form) {
   });
 }
 
-export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: boolean } = {}) {
+type H3Options={skipDraft?:boolean;serialDispatch?:boolean;runId?:string;sourceEvidence?:string};
+export async function generateH3(ctx:Ctx,form:H3Form,options:H3Options={}):Promise<{job:{id:string;status:string}}> {
+  if(options.runId){
+    if(!form.projectId||!options.sourceEvidence?.trim())throw badRequest('Run submission needs project and source-footage evidence.');
+    return ctx.db.transaction(async tx=>{
+      const scoped={...ctx,db:tx};
+      const existing=await assertRunSubmission(scoped,options.runId!,form.projectId!);
+      if(existing)return {job:existing};
+      await tx.execute(sql`update creative_projects set content_format=case when content_format='OTHER' then 'SHORTS'::content_format else content_format end,type=case when type='OTHER' then 'SHORT_FORM'::project_type else type end,updated_at=now() where id=${form.projectId} and org_id=${ctx.orgId}`);
+      const result=await generateH3Internal(scoped,form,{...options,skipDraft:true});
+      await setAutomatedProjectStage(tx,ctx.orgId,form.projectId,'IN_PROGRESS','H3 production job queued.');
+      await runEvent(tx,ctx.orgId,options.runId,'QUEUED','Detailed H3 plan and source evidence saved; waiting for GPU.',result.job.id);
+      return result;
+    });
+  }
+  return generateH3Internal(ctx,form,options);
+}
+async function generateH3Internal(ctx: Ctx, form: H3Form, options:H3Options) {
   if (!h3Workflow()) throw badRequest(MISSING);
   checkForm(form);
   if (form.projectId) {
@@ -484,6 +503,9 @@ export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: 
       settings: {
         workerId: worker.id,
         workerLabel: worker.label,
+        serialDispatch: options.serialDispatch === true,
+        ...(options.runId?{productionRunId:options.runId,sourceEvidence:options.sourceEvidence,postProduction:{phase:'WAIT_INDEX',attempt:1}}:{}),
+        progress: { phase: 'waiting', detail: 'Waiting for the selected GPU.' },
         imageFileId: form.imageFileId,
         imageUploadName: form.imageUploadName,
         prompt: form.prompt,
@@ -669,6 +691,8 @@ interface H3Job {
   promptId: string | null;
   settings: {
     workerId?: string;
+    productionRunId?: string;
+    cancelRequested?: boolean;
     imageFileId?: string | null;
     imageUploadName?: string | null;
     prompt?: string;
@@ -685,7 +709,7 @@ interface H3Job {
   startedAt: Date | null;
 }
 
-async function failJob(db: Db, id: string, message: string) {
+async function failJob(db: import('@creatoros/db').Executor, id: string, message: string) {
   await db.execute(sql`
     update generation_jobs
     set status = 'FAILED', error = ${message.slice(0, 2000)}, finished_at = now(), updated_at = now()
@@ -693,15 +717,48 @@ async function failJob(db: Db, id: string, message: string) {
 }
 
 export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
-  const claimed = rowsOf<H3Job>(
-    await db.execute(sql`
+  const claimed = await db.transaction(async tx => {
+    const candidate = rowsOf<{orgId:string;workerId:string|null;status:string}>(await tx.execute(sql`
+      select org_id as "orgId",settings->>'workerId' as "workerId",status
+      from generation_jobs where id=${jobId} and provider=${PROVIDER}`))[0];
+    if (!candidate || candidate.status !== 'QUEUED') return null;
+    const [blocked]=rowsOf<{id:string}>(await tx.execute(sql`select j.id from generation_jobs j join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id join organizations o on o.id=r.org_id where j.id=${jobId} and (r.state<>'ACTIVE' or o.settings->'productionAutomation'->(r.brand_id::text)->>'paused'='true')`));
+    if(blocked)return null;
+    // All H3 dispatch paths (periodic and on-demand) take the same worker lock.
+    const worker = rowsOf<{id:string;baseUrl:string;enabled:boolean}>(await tx.execute(sql`
+      select id,base_url as "baseUrl",enabled from gpu_workers
+      where org_id=${candidate.orgId} and id::text=${candidate.workerId} for update`))[0];
+    if (!worker?.enabled) {
+      await failJob(tx,jobId,'The selected GPU is disabled or removed.');
+      return null;
+    }
+    const queued = rowsOf<{id:string;settings:Record<string,unknown>}>(await tx.execute(sql`
+      select id,settings from generation_jobs where org_id=${candidate.orgId} and provider=${PROVIDER}
+        and settings->>'workerId'=${worker.id} and status='QUEUED'
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+        and not exists(select 1 from production_runs r join organizations o on o.id=r.org_id where r.id::text=generation_jobs.settings->>'productionRunId' and r.org_id=generation_jobs.org_id and (r.state<>'ACTIVE' or o.settings->'productionAutomation'->(r.brand_id::text)->>'paused'='true'))
+      order by created_at,id limit 1`))[0];
+    if (queued?.id!==jobId) return null;
+    const running=rowsOf<{id:string}>(await tx.execute(sql`
+      select id from generation_jobs where org_id=${candidate.orgId}
+        and settings->>'workerId'=${worker.id} and status='RUNNING' limit 1`))[0];
+    const queue=running?'busy':await readWorkerQueue(worker.baseUrl);
+    if(queue!=='free'){
+      await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({progress:{phase:'waiting',detail:queue==='offline'?'Waiting for ComfyUI to reconnect.':'Waiting for the selected GPU to finish existing work.'}})}::jsonb,updated_at=now()
+        where id=${jobId} and status='QUEUED'`);
+      return null;
+    }
+    return rowsOf<H3Job>(await tx.execute(sql`
       update generation_jobs
-      set status = 'RUNNING', started_at = now(), updated_at = now(), error = null
-      where id = ${jobId} and provider = ${PROVIDER} and status = 'QUEUED'
-      returning id, org_id as "orgId", prompt_id as "promptId", settings, started_at as "startedAt"`),
-  )[0];
+      set status='RUNNING',started_at=now(),updated_at=now(),error=null,
+        settings=settings||${JSON.stringify({progress:{phase:'sending',detail:'Transferring reference media to the selected GPU.'}})}::jsonb
+      where id=${jobId} and provider=${PROVIDER} and status='QUEUED'
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+      returning id,org_id as "orgId",prompt_id as "promptId",settings,started_at as "startedAt"`))[0]??null;
+  });
   if (!claimed) return { skipped: true };
   try {
+    await runEvent(db,claimed.orgId,claimed.settings?.productionRunId,'RENDERING','Reference transfer started.',claimed.id);
     const workflow = h3Workflow();
     if (!workflow) throw badRequest(MISSING);
     const settings = claimed.settings ?? {};
@@ -852,11 +909,17 @@ export async function submitQueuedH3(db: Db, env: ServiceEnv) {
     await db.execute(sql`
       select id from generation_jobs
       where provider = ${PROVIDER} and status = 'QUEUED'
-      order by created_at asc
-      limit 1`),
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+      order by created_at asc,id
+      limit 20`),
   );
   const out = [];
-  for (const job of waiting) out.push(await submitH3Job(db, env, job.id));
+  for (const job of waiting) {
+    const result=await submitH3Job(db,env,job.id);
+    out.push(result);
+    // Limit one actual transfer/submission per worker tick; blocked queues do not starve other workers.
+    if (!('skipped' in result)) break;
+  }
   return out;
 }
 
@@ -909,8 +972,9 @@ async function loadHistory(baseUrl: string, promptId: string) {
 async function stillQueued(baseUrl: string, promptId: string) {
   try {
     const res = await fetch(new URL('/queue', baseUrl), { signal: AbortSignal.timeout(8_000) });
-    if (!res.ok) return false;
+    if (!res.ok) return true;
     const body = (await res.json()) as { queue_running?: unknown; queue_pending?: unknown };
+    if(!Array.isArray(body.queue_running)||!Array.isArray(body.queue_pending))return true;
     const text = JSON.stringify(body.queue_running ?? []) + JSON.stringify(body.queue_pending ?? []);
     return text.includes(promptId);
   } catch {
@@ -954,7 +1018,10 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
     if (entry === null) continue;
     if (!entry) {
       const queued = await stillQueued(worker.baseUrl, job.promptId);
-      if (age > 3 * 60 * 60_000) await failJob(db, job.id, 'This video has been running for over three hours.');
+      if (job.settings?.cancelRequested && !queued) {
+        await db.execute(sql`update generation_jobs set status='CANCELLED',error='Owner requested render interruption; prompt no longer in queue.',finished_at=now(),updated_at=now() where id=${job.id} and status='RUNNING'`);
+        await runEvent(db,job.orgId,job.settings.productionRunId,'CANCELLED','Interrupted prompt left the verified queue.',job.id);
+      } else if (age > 3 * 60 * 60_000) await failJob(db, job.id, 'This video has been running for over three hours.');
       else
         await db.execute(sql`
           update generation_jobs
@@ -964,7 +1031,8 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
       continue;
     }
     if (entry.status === 'error' || (entry.completed && entry.error && !entry.outputs.length)) {
-      await failJob(db, job.id, entry.error || 'ComfyUI stopped this video.');
+      if(job.settings?.cancelRequested)await db.execute(sql`update generation_jobs set status='CANCELLED',error='Owner interrupted render.',finished_at=now(),updated_at=now() where id=${job.id} and status='RUNNING'`);
+      else await failJob(db, job.id, entry.error || 'ComfyUI stopped this video.');
       updated += 1;
       continue;
     }
@@ -974,25 +1042,23 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
       continue;
     }
     if (!entry.completed || !entry.outputs.length) continue;
+    const completed = await db.transaction(async tx=>{
     const saved = rowsOf<{ id: string }>(
-      await db.execute(sql`
+      await tx.execute(sql`
         update generation_jobs
         set status = 'SUCCEEDED', finished_at = now(), updated_at = now(), error = null,
             settings = settings || ${JSON.stringify({ outputs: entry.outputs, progress: { phase: 'done', detail: 'Video is ready.' } })}::jsonb
         where id = ${job.id} and status = 'RUNNING'
         returning id`),
     );
-    if (!saved.length) continue;
-    await notifyGenerationReady(db, { id: job.id, orgId: job.orgId, provider: PROVIDER, settings: job.settings }).catch(
-      () => undefined,
-    );
-    await db.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
+    if (!saved.length) return false;
+    await tx.execute(sql`delete from generation_outputs where job_id = ${job.id}`);
     const ordered = [
       ...entry.outputs.filter((o) => o.node === '25'),
       ...entry.outputs.filter((o) => o.node !== '25'),
     ];
     for (const output of ordered) {
-      await db.insert(generationOutputs).values({
+      await tx.insert(generationOutputs).values({
         orgId: job.orgId,
         jobId: job.id,
         node: output.node,
@@ -1000,8 +1066,14 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
         expectedPath: output.subfolder ? `${output.subfolder}/${output.filename}` : output.filename,
       });
     }
+    await runEvent(tx,job.orgId,job.settings?.productionRunId,'RENDERED','Render complete; awaiting output indexing and analysis.',job.id);
+    return true;
+    });
+    if(!completed)continue;
+    if(!job.settings?.productionRunId)await notifyGenerationReady(db,{id:job.id,orgId:job.orgId,provider:PROVIDER,settings:job.settings}).catch(()=>undefined);
     updated += 1;
   }
-  await linkRecentGeneratedOutputs(db).catch(() => undefined);
+  await requestH3OutputScan(db).catch(error=>console.warn('H3 output scan request failed',String(error)));
+  await linkRecentGeneratedOutputs(db).catch(error=>console.warn('H3 output linking failed',String(error)));
   return { checked: running.length, updated };
 }

@@ -58,7 +58,7 @@ export async function authorizeProduction(ctx:Ctx,p:ProductionPolicy,operation:s
 // Explicit allowlist: new operations are review-only until classified.
 export const creativeExecutionScope='production.execute';
 export const creativeQuotas:Readonly<Record<string,number>>=Object.freeze({
-  'projects.create':20,'projects.update':40,'scenes.upsert':20,
+  'projects.create':20,'projects.update':40,'scenes.upsert':20,'production.runStart':4,'production.runEvent':40,
   'media.uploadImage':24,'media.uploadAudio':4,
   'h3.save':20,'ltx.save':20,
   'longvideo.create':10,'longvideo.update':20,'longvideo.scene':40,

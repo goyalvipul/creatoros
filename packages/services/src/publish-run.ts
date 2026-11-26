@@ -96,8 +96,8 @@ export async function unlinkPublishFile(ctx: Ctx, variantId: string, itemId: str
 export async function getPublishTitle(ctx: Ctx, variantId: string) {
   const [v] = rowsOf<any>(
     await ctx.db.execute(sql`
-      select v.id, v.title_master as title, v.project_id as "projectId", v.asset_id as "assetId", a.title as "assetTitle"
-      from distribution_variants v join logical_assets a on a.id = v.asset_id
+      select v.id, v.title_master as title, v.project_id as "projectId", v.asset_id as "assetId", a.title as "assetTitle", coalesce(p.brand_id,v.brand_id,a.brand_id) as "brandId"
+      from distribution_variants v join logical_assets a on a.id = v.asset_id and a.org_id=v.org_id left join creative_projects p on p.id=v.project_id and p.org_id=v.org_id
       where v.id = ${variantId} and v.org_id = ${ctx.orgId}`),
   );
   if (!v) throw notFound('Title');
@@ -137,18 +137,19 @@ export async function getPublishTitle(ctx: Ctx, variantId: string) {
     }
     return { ...draft, sentPosts: posts };
   });
-  const accounts = await publishAccounts(ctx);
-  return { ...v, items, drafts, accounts };
+  const accounts = await publishAccounts(ctx,v.brandId??null);
+  return { ...v, items, drafts: drafts.filter(d=>accounts.some(a=>a.id===d.accountId)), accounts };
 }
 
-async function publishAccounts(ctx: Ctx) {
+async function publishAccounts(ctx: Ctx,brandId:string|null=null) {
   const rows = rowsOf<any>(
     await ctx.db.execute(sql`
       select sa.id, sa.platform, sa.handle, sa.provider_connection_id as "connectionId",
              pc.scopes, pc.state as "connectionState", pc.provider
       from social_accounts sa
-      left join provider_connections pc on pc.id = sa.provider_connection_id
-      where sa.org_id = ${ctx.orgId} and sa.deleted_at is null and sa.active
+      join channels c on c.id=sa.channel_id and c.org_id=sa.org_id and c.deleted_at is null
+      left join provider_connections pc on pc.id = sa.provider_connection_id and pc.org_id=sa.org_id
+      where sa.org_id = ${ctx.orgId} and sa.deleted_at is null and sa.active and (${brandId}::uuid is null or c.brand_id=${brandId}::uuid)
       order by sa.platform, sa.handle`),
   );
   return rows.map((a) => {

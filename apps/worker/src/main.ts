@@ -15,6 +15,7 @@ const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }
   { name: 'drive-sync', every: 15_000 },
   { name: 'publish-due', every: 60_000 },
   { name: 'ltx', every: 15_000 },
+  { name: 'production', every: 30_000 },
   { name: 'live', every: 30_000 },
   { name: 'events', every: 15_000 },
   { name: 'actions', every: 60_000 },

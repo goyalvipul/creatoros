@@ -3,7 +3,7 @@ import { attachmentHeaders } from '../attachment';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { machineMonitor, restartMonitoredComfy, AppError, checkGpuWorker, createAutogenRun, cancelAutogenClip, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
+import { productionRunBoard, controlProductionRun, setProductionPreference, controlProductionJob, productionPackageForItem, getProductionCover, machineMonitor, restartMonitoredComfy, AppError, checkGpuWorker, createAutogenRun, cancelAutogenClip, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
 import { ctxFor, makeRouter, originAllowed } from '../http';
 
@@ -39,6 +39,19 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
   await app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024, files: 41 } });
   const route = makeRouter(app, deps);
   const idParam = z.object({ id: uuid });
+  route({method:'GET',url:'/comfy/production-runs',tag:'ComfyUI',summary:'Production runs and execution history',role:'OWNER'},({ctx})=>productionRunBoard(ctx));
+  route({method:'GET',url:'/comfy/production-runs/:id',tag:'ComfyUI',summary:'Detailed production run',role:'OWNER',params:idParam},({ctx,params})=>productionRunBoard(ctx,params.id));
+  route({method:'POST',url:'/comfy/production-runs/:id/control',tag:'ComfyUI',summary:'Pause, resume or stop a daily run',role:'OWNER',params:idParam,body:z.object({action:z.enum(['pause','resume','stop'])}).strict()},({ctx,params,body})=>controlProductionRun(ctx,params.id,body.action));
+  route({method:'POST',url:'/comfy/production-preferences/:id',tag:'ComfyUI',summary:'Authorize bounded billable postprocessing or pause future runs',role:'OWNER',params:idParam,body:z.object({paused:z.boolean().optional(),billablePostprocess:z.boolean().optional()}).strict()},({ctx,params,body})=>setProductionPreference(ctx,params.id,body));
+  route({method:'POST',url:'/comfy/production-jobs/:id/control',tag:'ComfyUI',summary:'Manage a specific production job',role:'OWNER',params:idParam,body:z.object({action:z.enum(['adopt','pause','resume','stop','retry','cancel_render'])}).strict()},({ctx,params,body})=>controlProductionJob(ctx,params.id,body.action));
+  route({method:'GET',url:'/comfy/production-package/:id',tag:'ComfyUI',summary:'Review SEO and cover package for a publishing item',role:'OWNER',params:idParam},({ctx,params})=>productionPackageForItem(ctx,params.id));
+  app.get('/comfy/production-covers/:id/:platform',async(req,reply)=>{
+    if(!req.session)throw unauthorized();
+    if(req.session.role!=='OWNER')throw forbidden();
+    const p=z.object({id:uuid,platform:z.enum(['youtube','instagram','facebook','tiktok','threads','x'])}).parse(req.params);
+    const bytes=await getProductionCover(ctxFor(deps,req),p.id,p.platform);
+    return reply.header('cache-control','private, no-store').header('x-content-type-options','nosniff').type('image/jpeg').send(bytes);
+  });
   route({method:'GET',url:'/comfy/machine-monitor',tag:'ComfyUI',summary:'Read live queues, memory and current machine work',role:'OWNER'},async({ctx,reply})=>{reply.header('cache-control','no-store');return machineMonitor(ctx);});
   route({method:'POST',url:'/comfy/machine-monitor/:id/restart',tag:'ComfyUI',summary:'Request an idle ComfyUI task restart',role:'OWNER',params:idParam,body:z.object({taskId:uuid}).strict()},({ctx,params,body})=>restartMonitoredComfy(ctx,params.id,body.taskId));
 

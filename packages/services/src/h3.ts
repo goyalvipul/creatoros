@@ -468,6 +468,7 @@ export async function generateH3(ctx:Ctx,form:H3Form,options:H3Options={}):Promi
       const scoped={...ctx,db:tx};
       const existing=await assertRunSubmission(scoped,options.runId!,form.projectId!);
       if(existing)return {job:existing};
+      await tx.execute(sql`update creative_projects set content_format=case when content_format='OTHER' then 'SHORTS'::content_format else content_format end,type=case when type='OTHER' then 'SHORT_FORM'::project_type else type end,updated_at=now() where id=${form.projectId} and org_id=${ctx.orgId}`);
       const result=await generateH3Internal(scoped,form,{...options,skipDraft:true});
       await setAutomatedProjectStage(tx,ctx.orgId,form.projectId,'IN_PROGRESS','H3 production job queued.');
       await runEvent(tx,ctx.orgId,options.runId,'QUEUED','Detailed H3 plan and source evidence saved; waiting for GPU.',result.job.id);
@@ -756,8 +757,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
       returning id,org_id as "orgId",prompt_id as "promptId",settings,started_at as "startedAt"`))[0]??null;
   });
   if (!claimed) return { skipped: true };
-  await runEvent(db,claimed.orgId,claimed.settings?.productionRunId,'RENDERING','Reference transfer started.',claimed.id);
   try {
+    await runEvent(db,claimed.orgId,claimed.settings?.productionRunId,'RENDERING','Reference transfer started.',claimed.id);
     const workflow = h3Workflow();
     if (!workflow) throw badRequest(MISSING);
     const settings = claimed.settings ?? {};

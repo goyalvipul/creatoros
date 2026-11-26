@@ -97,8 +97,9 @@ async function applyPublishing(ctx:Ctx,j:Job,post:Post){
   for(const a of accounts){
     if(post.prefilled?.includes(a.id)){prefilled.push(a.id);continue;}
     const m=post.metadata[a.platform];if(!m)throw badRequest('Missing metadata for '+a.platform);
-    const title=m.recommendedTitle.trim().slice(0,a.platform==='youtube'?100:300),caption=(a.platform==='youtube'?m.description:m.caption).trim().slice(0,a.platform==='x'?280:2200);
-    const hashtags=m.hashtags.map(h=>h.replace(/^#/,'').trim()).filter(Boolean).slice(0,12);
+    const title=m.recommendedTitle.trim().slice(0,a.platform==='youtube'?100:300),caption=(a.platform==='youtube'?m.description:m.caption).trim().slice(0,a.platform==='youtube'?5000:a.platform==='x'?280:2200);
+    // The existing YouTube draft field named hashtags is actually used for comma-delimited video tags.
+    const hashtags=(a.platform==='youtube'?m.tags:m.hashtags).map(h=>h.replace(/^#/,'').trim()).filter(Boolean).slice(0,a.platform==='youtube'?15:12);
     await ctx.db.insert(publishDrafts).values({orgId:ctx.orgId,itemId:f.itemId,socialAccountId:a.id,title,caption,hashtags,privacy:a.platform==='youtube'?'PRIVATE':null,contentForm:a.platform==='youtube'?'SHORT':a.platform==='instagram'?'REEL':null,aiUse:'YES'}).onConflictDoNothing();
     // Fill empty fields only; never overwrite manual edits or modify sent/scheduled drafts.
     await ctx.db.execute(sql`update publish_drafts set title=coalesce(nullif(trim(title),''),${title}),caption=coalesce(nullif(trim(caption),''),${caption}),hashtags=case when cardinality(hashtags)=0 then ARRAY(select jsonb_array_elements_text(${JSON.stringify(hashtags)}::jsonb)) else hashtags end,ai_use=coalesce(ai_use,'YES'),updated_at=now()
@@ -133,7 +134,7 @@ async function advance(ctx:Ctx,j:Job){
     where id=${j.id} and org_id=${ctx.orgId} and status='SUCCEEDED' and coalesce(settings->>'dispatchPaused','false')<>'true'
       and settings->'postProduction'->>'lease' is null
       and coalesce(settings->'postProduction'->>'phase','WAIT_INDEX')=${p.phase}
-      and not exists(select 1 from production_runs r where r.id::text=settings->>'productionRunId' and r.state<>'ACTIVE')
+      and not exists(select 1 from production_runs r join organizations o on o.id=r.org_id where r.id::text=generation_jobs.settings->>'productionRunId' and r.org_id=generation_jobs.org_id and (r.state<>'ACTIVE' or o.settings->'productionAutomation'->(r.brand_id::text)->>'paused'='true'))
     returning id`));
   if(!claimed.length)return;
   let next:Post={...p};
@@ -218,6 +219,7 @@ export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pau
     });
   }else if(action==='retry'){
     if(j.post?.phase!=='FAILED'||j.post.lease)throw conflict('Only an unsuccessful finished stage may be retried.');
+    if(j.settings.productionStopped===true)throw conflict('This job was stopped.');
     const phase=j.post.failedPhase??'WAIT_INDEX';
     if(terminal.includes(phase))throw conflict('Cannot retry this stage.');
     const next:Post={...j.post,phase,detail:'Owner requested stage retry.',attempt:(j.post.attempt??1)+1,lease:null};
@@ -243,9 +245,10 @@ export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pau
       await ctx.db.execute(sql`update generation_jobs set settings=settings||'{"cancelRequested":true,"dispatchPaused":true}'::jsonb,updated_at=now() where id=${id} and org_id=${ctx.orgId} and status='RUNNING'`);
     }
   }else{
+    if(action==='resume'&&j.settings.productionStopped===true)throw conflict('Stopped stages cannot be resumed.');
     const paused=action!=='resume';
     await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({dispatchPaused:paused,...(action==='stop'?{productionStopped:true}:{})})}::jsonb,
-      status=case when ${action==='stop'} and status='QUEUED' then 'CANCELLED'::generation_status else status end,updated_at=now()
+      status=case when ${action==='stop'} and status='QUEUED' then 'CANCELLED'::generation_status else status end,finished_at=case when ${action==='stop'} and status='QUEUED' then now() else finished_at end,updated_at=now()
       where id=${id} and org_id=${ctx.orgId} and (${action!=='resume'} or coalesce(settings->>'productionStopped','false')<>'true')`);
   }
   await runEvent(ctx.db,ctx.orgId,j.runId,'OWNER_'+action.toUpperCase(),'Owner requested '+action+'.',j.id);

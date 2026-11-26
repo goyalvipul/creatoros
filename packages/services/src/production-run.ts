@@ -97,6 +97,7 @@ export async function controlProductionRun(ctx:Ctx,id:string,action:'pause'|'res
 
 
 export async function reconcileProductionRuns(db:Db,_env:ServiceEnv){
+  await db.execute(sql`insert into production_run_events(org_id,run_id,job_id,stage,detail) select j.org_id,r.id,j.id,j.status::text,coalesce(j.error,'Render '+lower(j.status::text)) from generation_jobs j join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id where j.status in ('FAILED','CANCELLED') and not exists(select 1 from production_run_events e where e.run_id=r.id and e.job_id=j.id and e.stage=j.status::text)`);
   const stale=rows<{id:string;orgId:string}>(await db.execute(sql`
     update production_runs r set planning_state='BLOCKED',planning_detail='Planner stopped reporting before submitting the target videos. Resume the existing ChatGPT automation to finish the plan.',updated_at=now()
     where r.state='ACTIVE' and r.planning_state in ('RESEARCHING','PLANNED') and r.updated_at<now()-interval '30 minutes'

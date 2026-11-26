@@ -48,6 +48,7 @@ export * from './h3';
 export * from './long-videos';
 export * from './ai';
 export * from './windows-tasks';
+export * from './machine-monitor';
 export * from './socials-ops';
 export * from './instagram-diagnostics';
 export * from './identity';

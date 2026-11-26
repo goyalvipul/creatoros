@@ -10,6 +10,7 @@ import { useWorkspace } from '@/lib/workspace';
 import { useToast } from '@/components/ui';
 import { localDate, addDays } from '@creatoros/domain';
 import { BannerEditor, blobToDataUrl } from './today-command';
+import { MachineOverview } from '@/components/machine-overview';
 
 type Board = {
   today: string;
@@ -73,14 +74,6 @@ function money(minor: string, currency: string) {
   return new Intl.NumberFormat('en-CA', { style: 'currency', currency: currency || 'CAD' }).format(amount);
 }
 
-function fresh(seenAt: string | null, kind: string) {
-  if (!seenAt) return kind === 'comfy' ? 'Not checked' : 'No heartbeat';
-  const age = Date.now() - new Date(seenAt).getTime();
-  if (kind === 'agent' && age > 180_000) return 'Heartbeat stale';
-  if (kind === 'comfy' && age > 15 * 60_000) return 'Check is stale';
-  const mins = Math.max(0, Math.round(age / 60000));
-  return mins < 1 ? 'Just now' : `${mins} min ago`;
-}
 
 export function TodayHome({ onPlan }: { onPlan: () => void }) {
   const me = useMe();
@@ -283,6 +276,8 @@ export function TodayHome({ onPlan }: { onPlan: () => void }) {
         <Kpi n={data?.counts.scheduledToday} label="Scheduled today" hint="On the publishing calendar" href="/calendar" />
       </div>
 
+      <MachineOverview enabled={me.data?.user?.role === 'OWNER'} />
+
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(16rem,0.8fr)_minmax(16rem,0.8fr)]">
         <div className="space-y-4">
           <Panel title="Needs your decision" href="/today" link="All notifications">
@@ -448,20 +443,6 @@ export function TodayHome({ onPlan }: { onPlan: () => void }) {
               Latest stored account totals. They are not added across platforms.
               {data?.metrics[0] ? ` Last sync ${when(data.metrics[0].collectedAt, tz)}.` : ''}
             </p>
-          </Panel>
-          <Panel title="Studio & workers" href="/comfy" link="Open studio">
-            <ul className="divide-y divide-border text-sm">
-              {(data?.machines ?? []).map((machine) => (
-                <li key={`${machine.kind}-${machine.name}`} className="flex items-center justify-between gap-3 py-2">
-                  <span>
-                    <span className="block font-medium">{machine.name}</span>
-                    <span className="text-xs text-muted">{machine.kind === 'agent' ? 'Scanner agent' : 'ComfyUI'} · {fresh(machine.seenAt, machine.kind)}</span>
-                  </span>
-                  <span className="text-xs font-semibold">{machine.state === 'ONLINE' ? 'Online' : machine.state === 'UNKNOWN' ? 'Not checked' : 'Offline'}</span>
-                </li>
-              ))}
-              {(data?.machines.length ?? 0) === 0 ? <li className="py-2 text-muted">No scanner or ComfyUI machine is saved.</li> : null}
-            </ul>
           </Panel>
           <button type="button" className="text-sm font-semibold text-muted underline" onClick={onPlan}>
             Open the day plan, focus timer, and review

@@ -3,7 +3,7 @@ import { attachmentHeaders } from '../attachment';
 import multipart from '@fastify/multipart';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { AppError, checkGpuWorker, createAutogenRun, cancelAutogenClip, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
+import { machineMonitor, restartMonitoredComfy, AppError, checkGpuWorker, createAutogenRun, cancelAutogenClip, forbidden, generateH3, generateLtx, generateQwen, getH3Studio, getLtxStudio, getQwenStudio, listAutogen, listWorkerLoras, openLtxVideo, openQwenAudio, sliceAudioRange, toPlayableAudio, openWorkerInput, workerQueue, removeGpuWorker, saveGpuWorker, saveH3Draft, saveLtxDraft, saveQwenDraft, unauthorized, uploadLtxInput, validateLtx, listWindowsTasks, addWindowsTask, removeWindowsTask, requestWindowsTaskRestart } from '@creatoros/services';
 import type { AppDeps } from '../http';
 import { ctxFor, makeRouter, originAllowed } from '../http';
 
@@ -39,6 +39,8 @@ export async function comfyRoutes(app: FastifyInstance, deps: AppDeps): Promise<
   await app.register(multipart, { limits: { fileSize: 250 * 1024 * 1024, files: 41 } });
   const route = makeRouter(app, deps);
   const idParam = z.object({ id: uuid });
+  route({method:'GET',url:'/comfy/machine-monitor',tag:'ComfyUI',summary:'Read live queues, memory and current machine work',role:'OWNER'},async({ctx,reply})=>{reply.header('cache-control','no-store');return machineMonitor(ctx);});
+  route({method:'POST',url:'/comfy/machine-monitor/:id/restart',tag:'ComfyUI',summary:'Request an idle ComfyUI task restart',role:'OWNER',params:idParam,body:z.object({taskId:uuid}).strict()},({ctx,params,body})=>restartMonitoredComfy(ctx,params.id,body.taskId));
 
   route(
     { method: 'GET', url: '/comfy/ltx', tag: 'ComfyUI', summary: 'LTX studio: saved graph, machines, draft and jobs', role: 'OWNER' },

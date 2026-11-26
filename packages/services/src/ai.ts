@@ -35,6 +35,7 @@ import {
   type ScenePrompt,
 } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
+import { runPlatforms } from './production-run';
 import { addLongVideoRef } from './long-videos';
 import { notify } from './notifications';
 import { badRequest, notFound, systemCtx, tooMany, type Ctx, type ServiceEnv } from './types';
@@ -699,7 +700,7 @@ async function runVideoJob(ctx: Ctx, job: typeof aiJobs.$inferSelect, fetchImpl:
     const opened = await openAgentFile(ctx.db, ctx.env, ctx.orgId, input.fileId);
     if (opened.size > 200 * 1024 * 1024) throw badRequest('That video is over 200 MB. Analyze a shorter export. Nothing was uploaded.');
     bytes = await readLimited(opened.body, 200 * 1024 * 1024);
-    mime = opened.mime || mime;
+    mime = opened.mime.startsWith('video/') ? opened.mime : /\.mp4$/i.test(opened.name) ? 'video/mp4' : opened.mime || mime;
     name = opened.name;
   } else if (input.projectId) {
     const [project] = await ctx.db.select().from(longVideoProjects).where(and(eq(longVideoProjects.id, input.projectId), eq(longVideoProjects.orgId, ctx.orgId))).limit(1);
@@ -759,4 +760,36 @@ export async function runDueAiJobs(db: Ctx['db'], env: ServiceEnv, fetchImpl: Fe
 
 export function aiCredentialPresence(env: Record<string, string | undefined>) {
   return { openai: Boolean(env.OPENAI_API_KEY?.trim()), gemini: Boolean(env.GEMINI_API_KEY?.trim()) };
+}
+
+
+/** One bounded metadata call for all platforms, independent of connected accounts. */
+export async function createProductionMetadata(ctx:Ctx,input:{fileId:string;brandId:string;jobId:string;notes:string},fetchImpl:FetchLike=fetch){
+  const [existing]=await ctx.db.select().from(aiJobs).where(and(eq(aiJobs.orgId,ctx.orgId),eq(aiJobs.idempotencyKey,'production-metadata:'+input.jobId),eq(aiJobs.status,'COMPLETED'))).limit(1);
+  if(existing?.output)return existing.output as {platforms:Record<string,MetadataDraft>};
+  const settings=await assertAllowance(ctx,'metadata');
+  if(!settings.geminiEnabled)throw badRequest('Gemini is disabled.');
+  const [analysis]=await ctx.db.select().from(aiJobs).where(and(eq(aiJobs.orgId,ctx.orgId),eq(aiJobs.task,'video_analyze'),eq(aiJobs.targetId,input.fileId),eq(aiJobs.status,'COMPLETED'))).orderBy(sql`${aiJobs.finishedAt} desc`).limit(1);
+  if(!analysis?.output)throw badRequest('Completed video analysis is required.');
+  const profile=await getAiProfile(ctx,input.brandId);
+  const model=assertModel(settings.metadataModel,AI_TEXT_MODELS,'Metadata model');
+  const raw=await geminiGenerate(ctx,model,{
+    systemInstruction:{parts:[{text:PROMPT_RULE+' Write only accurate original descriptions based on the observed video. Do not invent health benefits or credentials. Each platform must have its own complete metadata. Keep required synthetic-media disclosure separate from visible marketing copy.'}]},
+    contents:[{role:'user',parts:[{text:JSON.stringify({platforms:runPlatforms,analysis:analysis.output,creator:profile,notes:input.notes.slice(0,2000),instructions:'Return an object keyed by each platform. Each value contains titles, recommendedTitle, description, tags, hashtags, caption, hook, cta, thumbnailText, thumbnailConcept, chapters, pinnedComment, onScreenText, warnings. Use concise nonempty titles, descriptions, captions and short thumbnail text, 100 chars max YouTube title; X caption <=280 chars; no unverified claims.'})}]}],
+    generationConfig:{responseMimeType:'application/json'},
+  },fetchImpl).catch(async error=>{await recordUsage(ctx,{provider:'gemini',taskGroup:'metadata',status:'FAILED'});throw error;});
+  let output:{platforms:Record<string,MetadataDraft>};
+  try{
+    const rawObject=JSON.parse(geminiText(raw)) as Record<string,unknown>;
+    const platforms:Record<string,MetadataDraft>={};
+    for(const platform of runPlatforms){
+      const draft=parseMetadataDraft(rawObject[platform]);
+      if(!draft.recommendedTitle.trim()||!draft.description.trim()||!draft.caption.trim()||!draft.thumbnailText.trim())throw badRequest('Incomplete '+platform+' metadata.');
+      platforms[platform]=draft;
+    }
+    output={platforms};
+  }catch(e){await recordUsage(ctx,{provider:'gemini',taskGroup:'metadata',status:'FAILED'});throw e;}
+  const [job]=await ctx.db.insert(aiJobs).values({orgId:ctx.orgId,userId:ctx.userId,brandId:input.brandId,provider:'gemini',model,task:'publishing_metadata_generate',status:'COMPLETED',targetType:'publish',targetId:input.fileId,idempotencyKey:'production-metadata:'+input.jobId,input:{analysisJobId:analysis.id},output,finishedAt:new Date()}).returning();
+  await recordUsage(ctx,{jobId:job!.id,provider:'gemini',taskGroup:'metadata',status:'COMPLETED'});
+  return output;
 }

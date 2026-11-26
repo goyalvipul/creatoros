@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
 import { conflict, forbidden, type Ctx } from '@creatoros/services';
-import { h3Form } from './ai-gateway-forms';
+import { h3Form, ltxForm } from './ai-gateway-forms';
+import { parseAutogenTimestamps, planGenerationGroups } from '@creatoros/domain';
 
 export const productionPolicySchema=z.object({
   brandId:z.uuid(),rootId:z.uuid(),workerIds:z.array(z.uuid()).min(1).max(2),
@@ -49,5 +50,72 @@ export async function authorizeProduction(ctx:Ctx,p:ProductionPolicy,operation:s
   const cap=operation==='generation.h3'||operation==='projects.create'?p.dailyVideos:quotas[operation]!;
   const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests where org_id=${ctx.orgId} and policy_authorized and operation=${operation} and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
   if((count?.n??0)>=cap)throw conflict('Daily trusted production limit reached.');
+  return true;
+}
+
+
+// Opt-in execution permission is separate from the operation's own scope.
+// Explicit allowlist: new operations are review-only until classified.
+export const creativeExecutionScope='production.execute';
+export const creativeQuotas:Readonly<Record<string,number>>=Object.freeze({
+  'projects.create':20,'projects.update':40,'scenes.upsert':20,
+  'media.uploadImage':24,'media.uploadAudio':4,
+  'h3.save':20,'ltx.save':20,
+  'longvideo.create':10,'longvideo.update':20,'longvideo.scene':40,
+  'longvideo.split':20,'longvideo.rebalance':10,'longvideo.attach':24,
+  'generation.h3':2,'generation.ltx':2,'generation.longscene':2,'generation.autogen':2,
+  'publishing.draft':20,'publishing.thumbnail':20,'replies.draft':20,
+});
+export const creativeOperations=Object.keys(creativeQuotas);
+export function canExecuteCreative(scopes:readonly string[],operation:string) {
+  return scopes.includes(creativeExecutionScope)&&Object.hasOwn(creativeQuotas,operation);
+}
+export const generationOperations=['generation.h3','generation.ltx','generation.longscene','generation.autogen'] as const;
+
+// Call only after locking the connector row, authenticating the owner and checking the operation scope.
+export async function authorizeCreative(ctx:Ctx,operation:string,input:unknown) {
+  if(!Object.hasOwn(creativeQuotas,operation))return false;
+  const v=input as Record<string,unknown>;
+  if(operation==='generation.h3'){
+    const f=h3Form.parse(input);
+    if(!f.projectId||!f.workerId||!f.segments.length||f.segments.some(s=>!s.durationSec)||f.segments.reduce((n,s)=>n+(s.durationSec??0),0)>30||f.megapixels>1.5)
+      throw forbidden('Creative H3 needs a project, an enabled worker and explicit segment durations totaling at most 30 seconds.');
+  }
+  if(operation==='generation.ltx'){
+    const f=ltxForm.parse(input);
+    if(!f.projectId||!f.workerId||f.durationSec>30||f.width*f.height>2097152||f.fps>30)
+      throw forbidden('Creative LTX needs a project, worker, at most 30 seconds, 2 MP and 30 fps.');
+  }
+  if(operation==='generation.autogen'){
+    const starts=parseAutogenTimestamps(String(v.timestamps??''));
+    if(starts.length!==1)throw forbidden('Creative AutoGen accepts one clip per request; use individual requests within the daily quota.');
+  }
+  if(operation==='generation.longscene'){
+    const [projectRow]=rows<{id:string}>(await ctx.db.execute(sql`select id from long_video_projects where id=${v.projectId} and org_id=${ctx.orgId} and archived_at is null`));
+    if(!projectRow)throw forbidden('Select an active long-video project.');
+    const scenes=rows<{id:string;continuity:string;status:string;start_ms:number;end_ms:number;render_ms:number|null}>(await ctx.db.execute(sql`select id,continuity,status,start_ms,end_ms,render_ms from long_video_scenes where project_id=${projectRow.id} order by position`));
+    const group=planGenerationGroups(scenes.map(s=>({id:s.id,continuity:s.continuity==='context'?'context':'shot',status:s.status})), 'one',String(v.sceneId))[0];
+    const selected=scenes.filter(s=>group?.includes(s.id));
+    if(!group?.length||selected.length!==group.length||selected.reduce((n,s)=>n+Math.max(s.end_ms-s.start_ms,s.render_ms??0),0)>30000)
+      throw forbidden('Creative long-video generation requires an available group totaling at most 30 seconds.');
+  }
+  if(operation==='publishing.draft'||operation==='publishing.thumbnail'){
+    const [target]=rows<{ok:boolean}>(await ctx.db.execute(sql`select exists(
+      select 1 from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id
+      join creative_projects p on p.id=v.project_id and p.org_id=v.org_id
+      join social_accounts a on a.id=${v.socialAccountId} and a.org_id=i.org_id
+      join channels c on c.id=a.channel_id and c.org_id=a.org_id
+      where i.id=${v.itemId} and i.org_id=${ctx.orgId} and p.deleted_at is null and c.deleted_at is null
+      and p.brand_id is not null and c.brand_id=p.brand_id and a.active and a.deleted_at is null
+      and not exists(select 1 from publish_drafts d where d.org_id=i.org_id and d.item_id=i.id and d.social_account_id=a.id and d.upload_state<>'DRAFT')
+    ) as ok`));
+    if(!target?.ok)throw forbidden('Use an unscheduled draft and the social account belonging to its creator.');
+  }
+  const isGeneration=(generationOperations as readonly string[]).includes(operation);
+  const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests
+    where org_id=${ctx.orgId} and policy_authorized
+    and (case when ${isGeneration} then operation=any(ARRAY['generation.h3','generation.ltx','generation.longscene','generation.autogen']::text[]) else operation=${operation} end)
+    and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
+  if((count?.n??0)>=creativeQuotas[operation]!)throw conflict('Daily creative execution limit reached. No approval request was created.');
   return true;
 }

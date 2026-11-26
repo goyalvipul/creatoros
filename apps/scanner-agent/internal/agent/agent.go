@@ -383,7 +383,7 @@ func (a *Agent) buildHeartbeat() protocol.Heartbeat {
 		anyScan = anyScan || h.Scanning
 		hb.Roots = append(hb.Roots, h)
 	}
-	hb.Load = &protocol.Load{Scanning: anyScan}
+	hb.Load = &protocol.Load{Scanning: anyScan, Hardware: collectHardware()}
 	return hb
 }
 

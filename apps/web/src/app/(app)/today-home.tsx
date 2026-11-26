@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui';
 import { localDate, addDays } from '@creatoros/domain';
 import { BannerEditor, blobToDataUrl } from './today-command';
 import { MachineOverview } from '@/components/machine-overview';
+import { ProductionRuns } from '@/components/production-runs';
 
 type Board = {
   today: string;
@@ -277,6 +278,7 @@ export function TodayHome({ onPlan }: { onPlan: () => void }) {
       </div>
 
       <MachineOverview enabled={me.data?.user?.role === 'OWNER'} />
+      <ProductionRuns enabled={me.data?.user?.role === 'OWNER'} compact />
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(16rem,0.8fr)_minmax(16rem,0.8fr)]">
         <div className="space-y-4">

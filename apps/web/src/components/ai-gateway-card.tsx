@@ -92,6 +92,7 @@ export function AiGatewayCard() {
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Badge>{s.scopes.length} permissions enabled for {label}</Badge>
+            <Badge tone={s.scopes.includes('production.execute')?'ok':'warn'}>{s.scopes.includes('production.execute')?'Creative execution authorized':'Creative execution requires review unless limited policy applies'}</Badge>
           </div>
           {!configured && <p className="mt-2 text-xs text-muted">Generate a credential and configure your MCP adapter to connect.</p>}
           <div className="mt-3 flex flex-wrap gap-2">
@@ -125,6 +126,7 @@ export function AiGatewayCard() {
               </div>
               <div>
                 <h3 className="text-sm font-medium">Permissions · separate for each connector</h3>
+                <p className="mt-1 text-xs text-muted">Enable Creative execution once for the desired connector to run internal creation without repeated approval. Individual operation permissions are still required. External scheduling and sending always require review.</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {(['local', 'hosted'] as const).map(m => (
                     <Button key={m} size="sm" variant={editMode === m ? 'primary' : 'secondary'} disabled={busy} onClick={() => setEditMode(m)}>{m === 'local' ? 'Local permissions' : 'Hosted permissions'}</Button>
@@ -138,7 +140,7 @@ export function AiGatewayCard() {
                         {group.items.map(([key, label]) => (
                           <div key={key} className="flex items-center justify-between gap-2 text-sm">
                             <span>{label}</span>
-                            <ActionButton size="sm" disabled={busy} onAction={() => {
+                            <ActionButton size="sm" disabled={busy} confirm={key==='production.execute'&&!permissionList.includes(key)?'Authorize enabled internal creative operations across this organization without individual review? Daily limits apply; external actions still need approval.':undefined} onAction={() => {
                               const next = permissionList.includes(key) ? permissionList.filter(x => x !== key) : [...permissionList, key];
                               return save(editMode === 'local' ? { localScopes: next } : { hostedScopes: next });
                             }}>{permissionList.includes(key) ? 'Enabled' : 'Disabled'}</ActionButton>
@@ -150,8 +152,8 @@ export function AiGatewayCard() {
                 </div>
               </div>
               <div className="rounded-lg border border-border p-3 space-y-2">
-                <h3 className="text-sm font-medium">Trusted production · Hosted MCP</h3>
-                <p className="text-xs text-muted">Optional owner authorization for one creator: up to two projects and H3 submissions per Vancouver day, bounded media uploads and publishing drafts only. Publishing, scheduling, shared editor saves and unrelated actions still require review.</p>
+                <h3 className="text-sm font-medium">Limited trusted production · Hosted MCP (optional legacy policy)</h3>
+                <p className="text-xs text-muted">Use this narrower policy only if the active connector does not have Creative execution enabled. Creative execution authorizes scoped internal operations across creators, with bounded daily limits. Scheduling, sending replies, cancellation and billable analysis still require review.</p>
                 <Badge tone={s.productionPolicy ? 'info' : 'neutral'}>{s.productionPolicy ? 'Enabled' : 'Disabled'}</Badge>
                 {productionOptions.error && <p className="text-xs text-bad">{productionOptions.error.message}</p>}
                 {(() => {

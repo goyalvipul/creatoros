@@ -33,24 +33,28 @@ async function owned(ctx: Ctx, kind: 'project'|'brand'|'file'|'worker'|'long', v
   const extra = kind==='project'||kind==='brand' ? sql`and deleted_at is null` : kind==='file'||kind==='long' ? sql`and archived_at is null` : sql`and enabled`;
   if (!(await query(ctx,sql`select id from ${sql.identifier(table)} where org_id=${ctx.orgId} and id=${value} ${extra}`)).length) throw notFound(kind);
 }
+async function availableMedia(ctx:Ctx,id:string|null|undefined,kind:'IMAGE'|'AUDIO'|'VIDEO') {
+  if(!id)return;
+  if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${id} and archived_at is null and availability='AVAILABLE' and file_type::text=${kind}`)).length)throw badRequest('Choose available library media of the requested type.');
+}
 async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeof ltxForm>) {
   await owned(ctx,'project',form.projectId);
   await owned(ctx,'worker',form.workerId);
-  await owned(ctx,'file',form.imageFileId);
+  await availableMedia(ctx,form.imageFileId,'IMAGE');
   // Uploaded worker filenames are intentionally unsupported; use owned library IDs.
   if (form.imageUploadName || form.imageUploadWorkerId) throw badRequest('Use a library image ID, not a worker upload path.');
   if ('segments' in form) {
     for (const s of form.segments) {
       if(s.audioUploadName||s.audioUploadWorkerId||s.videoUploadName||s.videoUploadWorkerId) throw badRequest('Use library media IDs.');
-      await owned(ctx,'file',s.audioFileId); await owned(ctx,'file',s.videoFileId);
+      await availableMedia(ctx,s.audioFileId,'AUDIO'); await availableMedia(ctx,s.videoFileId,'VIDEO');
       for(const image of s.images) {
         if(image.uploadName||image.uploadWorkerId) throw badRequest('Use library image IDs.');
-        await owned(ctx,'file',image.fileId);
+        await availableMedia(ctx,image.fileId,'IMAGE');
       }
     }
   } else {
     if(form.audioUploadName||form.audioUploadWorkerId) throw badRequest('Use a library audio ID.');
-    await owned(ctx,'file',form.audioFileId);
+    await availableMedia(ctx,form.audioFileId,'AUDIO');
   }
 }
 const draftSchema=z.object({
@@ -90,6 +94,28 @@ async function mediaBytes(ctx:Ctx,id:string,kind:'IMAGE'|'VIDEO',max:number) {
   try { for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>max)throw badRequest('File exceeds gateway media size limit.');chunks.push(Buffer.from(value));} } finally { await reader.cancel().catch(()=>{}); }
   return Buffer.concat(chunks);
 }
+function referenceMime(bytes:Buffer) {
+  return bytes[0]===255&&bytes[1]===216?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'?'image/webp':null;
+}
+async function referenceImage(ctx:Ctx,id:string) {
+  const max=2*1024*1024;
+  const bytes=await mediaBytes(ctx,id,'IMAGE',16*1024*1024);
+  const mime=referenceMime(bytes);
+  if(!mime)throw badRequest('Unsupported image type.');
+  if(bytes.length<=max)return {mime,base64:bytes.toString('base64')};
+  // Return a bounded preview, never modify the original library asset.
+  const dir=await mkdtemp(join(tmpdir(),'kk-reference-'));
+  try{
+    const input=join(dir,'input');
+    const out=join(dir,'preview.jpg');
+    await writeFile(input,bytes,{mode:0o600});
+    const format=mime==='image/png'?'png_pipe':mime==='image/webp'?'webp_pipe':'jpeg_pipe';
+    await exec('ffmpeg',['-nostdin','-v','error','-y','-threads','1','-max_alloc','67108864','-protocol_whitelist','file,pipe','-f',format,'-i',input,'-frames:v','1','-vf','scale=1536:1536:force_original_aspect_ratio=decrease','-q:v','4',out],{timeout:15000,maxBuffer:65536});
+    const preview=await readFile(out);
+    if(!preview.length||preview.length>max||referenceMime(preview)!=='image/jpeg')throw badRequest('Reference preview exceeds media limit.');
+    return {mime:'image/jpeg',base64:preview.toString('base64')};
+  } finally {await rm(dir,{recursive:true,force:true});}
+}
 async function keyframes(ctx:Ctx,p:{id:string;seconds:number[]}) {
   const dir=await mkdtemp(join(tmpdir(),'kk-gateway-'));
   try {
@@ -109,7 +135,7 @@ async function keyframes(ctx:Ctx,p:{id:string;seconds:number[]}) {
 
 export const permissionGroups = [
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
-  {name:'Production',items:[['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
+  {name:'Production',items:[['production.execute','Execute authorized creative work without individual approval'],['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},
   {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
   {name:'GPU and generation',items:[['gpu.read','Read GPU availability'],['generation.read','Read generation jobs and output IDs'],['generation.submit','Queue generation jobs'],['generation.cancel','Cancel specific generation jobs']]},
@@ -131,7 +157,7 @@ const replySchema=z.object({id:uuid,connectionId:uuid,text:requestText}).strict(
 export const operations:Record<string,Operation>={
  'creators.list':op('creators.read',false,empty,ctx=>query(ctx,sql`select id,name,description,content_pillars from brands where org_id=${ctx.orgId} and deleted_at is null order by name limit 100`)),
  'creators.profile':op('creators.read',false,z.object({brandId:uuid.nullable()}).strict(),async(ctx,p)=>{await owned(ctx,'brand',p.brandId);return query(ctx,sql`select name,niche,languages,tone,voice,themes,visual_notes,avoid,hashtags,links,disclosure,character_name,character_notes,reference_file_ids from ai_profiles where org_id=${ctx.orgId} and brand_id is not distinct from ${p.brandId}::uuid limit 1`);}),
- 'references.image':op('references.read',false,id,async(ctx,p)=>{const bytes=await mediaBytes(ctx,p.id,'IMAGE',2*1024*1024);const mime=bytes[0]===255&&bytes[1]===216?'image/jpeg':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png':bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'?'image/webp':null;if(!mime)throw badRequest('Unsupported image type.');return {mime,base64:bytes.toString('base64')};}),
+ 'references.image':op('references.read',false,id,(ctx,p)=>referenceImage(ctx,p.id)),
  'projects.list':op('projects.read',false,empty,ctx=>query(ctx,sql`select id,title,stage,brief,brand_id from creative_projects where org_id=${ctx.orgId} and deleted_at is null order by created_at desc limit 100`)),
  'projects.detail':op('projects.read',false,id,async(ctx,p)=>{await owned(ctx,'project',p.id);return {project:(await query(ctx,sql`select id,title,stage,brief,concept,song_title,hook,narrative,distribution_plan from creative_projects where org_id=${ctx.orgId} and id=${p.id}`))[0],scenes:await query(ctx,sql`select id,ordinal,title,narration,direction,shot_prompt,timecode_start_ms,timecode_end_ms,status from production_scenes where org_id=${ctx.orgId} and project_id=${p.id} order by ordinal`)};}),
  'projects.create':op('projects.write',true,z.object({title,brief:text.optional(),brandId:uuid.nullable().optional()}).strict(),async(ctx,p)=>{await owned(ctx,'brand',p.brandId);return createProject(ctx,{...p,type:'OTHER',contentFormat:'OTHER'});}),
@@ -164,16 +190,16 @@ export const operations:Record<string,Operation>={
  'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,finished_at from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
  'generation.h3':op('generation.submit',true,h3Form,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateH3(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
- 'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p)=>{await validateForm(ctx,p);const r=await generateLtx(ctx,p);return {id:r.job.id};}),
+ 'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateLtx(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),
- 'generation.autogen':op('generation.submit',true,z.object({prompt:text,timestamps:z.string().max(2000),songName:z.string().min(1).max(300),audioLengthSec:z.number().positive().max(7200).optional(),audioFileId:uuid,imageFileId:uuid}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.audioFileId);await owned(ctx,'file',p.imageFileId);const r=await createAutogenRun(ctx,p);return {id:r.id};}),
+ 'generation.autogen':op('generation.submit',true,z.object({prompt:text,timestamps:z.string().max(2000),songName:z.string().min(1).max(300),audioLengthSec:z.number().positive().max(7200).optional(),audioFileId:uuid,imageFileId:uuid}).strict(),async(ctx,p)=>{await availableMedia(ctx,p.audioFileId,'AUDIO');await availableMedia(ctx,p.imageFileId,'IMAGE');const r=await createAutogenRun(ctx,p);return {id:r.id};}),
  'generation.cancelClip':op('generation.cancel',true,id,(ctx,p)=>cancelAutogenClip(ctx,p.id)),
  'generation.cancelScene':op('generation.cancel',true,scenePair,async(ctx,p)=>{await cancelLongVideoScene(ctx,p.projectId,p.sceneId);return {cancelled:true};}),
  'publishing.accounts':op('publishing.read',false,empty,ctx=>query(ctx,sql`select id,platform,handle from social_accounts where org_id=${ctx.orgId} and active and deleted_at is null order by platform,handle`)),
  'publishing.queue':op('publishing.read',false,empty,ctx=>query(ctx,sql`select i.id as item_id,v.project_id,f.file_name,d.id as draft_id,d.social_account_id,d.title,d.caption,d.hashtags,d.upload_state,d.scheduled_at from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id join file_instances f on f.id=i.file_instance_id and f.org_id=i.org_id left join publish_drafts d on d.item_id=i.id and d.org_id=i.org_id where i.org_id=${ctx.orgId} order by i.created_at desc limit 200`)),
  'publishing.preview':op('publishing.read',false,id,(ctx,p)=>getProjectScheduleRows(ctx,p.id)),
  'publishing.draft':op('publishing.write',true,draftSchema,saveDraft),
- 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(2700000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),async(ctx,p)=>{const t=await draftTarget(ctx,p.itemId,p.socialAccountId);if(!t.project_id)throw badRequest('Link a project first.');return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,Buffer.from(p.base64,'base64'));}),
+ 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(2700000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),async(ctx,p)=>{const t=await draftTarget(ctx,p.itemId,p.socialAccountId);if((await query(ctx,sql`select id from publish_drafts where org_id=${ctx.orgId} and item_id=${p.itemId} and social_account_id=${p.socialAccountId} and upload_state<>'DRAFT'`)).length)throw conflict('Only unscheduled draft thumbnails may be changed.');if(!t.project_id)throw badRequest('Link a project first.');return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,Buffer.from(p.base64,'base64'));}),
  'publishing.schedule':op('schedule.write',true,scheduleSchema,async(ctx,p,r)=>{await draftTarget(ctx,p.itemId,p.socialAccountId);await schedulePublish(ctx,{...p,requestId:r});return {scheduled:true};}),
  'publishing.cancel':op('schedule.manage',true,id,async(ctx,p)=>ctx.db.transaction(async tx=>{const [d]=rows<{publication_id:string|null}>(await tx.execute(sql`update publish_drafts set upload_state='DRAFT',scheduled_at=null,request_id=null,updated_at=now() where org_id=${ctx.orgId} and id=${p.id} and upload_state='SCHEDULED' returning publication_id`));if(!d)throw conflict('Only pending scheduled uploads can be cancelled.');if(d.publication_id)await tx.execute(sql`update publication_records set state='PLANNED',planned_at=null,updated_at=now() where org_id=${ctx.orgId} and id=${d.publication_id} and state='SCHEDULED'`);return {cancelled:true};})),
  'publishing.reschedule':op('schedule.manage',true,z.object({id:uuid,plannedLocal:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),timezone:z.string().max(64)}).strict(),async(ctx,p)=>{

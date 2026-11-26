@@ -279,13 +279,14 @@ async function ensureDefaultMachines(ctx: Ctx) {
 }
 
 /** One look at ComfyUI’s queue. The LTX page asks again when that PC is chosen. */
-async function readWorkerQueue(baseUrl: string): Promise<'busy' | 'free' | 'offline'> {
+export async function readWorkerQueue(baseUrl: string): Promise<'busy' | 'free' | 'offline'> {
   try {
     const res = await fetch(new URL('/queue', baseUrl), { signal: AbortSignal.timeout(5_000) });
     if (!res.ok) return 'offline';
     const body = (await res.json()) as { queue_running?: unknown[]; queue_pending?: unknown[] };
-    const running = Array.isArray(body.queue_running) ? body.queue_running.length : 0;
-    const pending = Array.isArray(body.queue_pending) ? body.queue_pending.length : 0;
+    if (!Array.isArray(body.queue_running) || !Array.isArray(body.queue_pending)) return 'offline';
+    const running = body.queue_running.length;
+    const pending = body.queue_pending.length;
     return running + pending > 0 ? 'busy' : 'free';
   } catch {
     return 'offline';

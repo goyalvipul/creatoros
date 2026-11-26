@@ -514,7 +514,9 @@ export async function getProjectScheduleRows(ctx: Ctx, projectId: string) {
            coalesce(d.playlist_ids,'{}'::text[]) as "playlistIds", d.ai_use as "aiUse", coalesce(d.upload_state,'MISSING') as "uploadState"
     from publish_items i join distribution_variants v on v.id=i.variant_id
     join file_instances f on f.id=i.file_instance_id
+    join creative_projects p on p.id=v.project_id and p.org_id=v.org_id
     join social_accounts a on a.org_id=v.org_id and a.active=true and a.deleted_at is null
+    join channels c on c.id=a.channel_id and c.org_id=a.org_id and c.deleted_at is null and (p.brand_id is null or c.brand_id=p.brand_id)
     left join publish_drafts d on d.item_id=i.id and d.social_account_id=a.id
     where v.org_id=${ctx.orgId} and v.project_id=${projectId}
       and a.platform::text in ('youtube','instagram','facebook','tiktok','threads')

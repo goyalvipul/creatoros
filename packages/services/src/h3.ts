@@ -19,8 +19,9 @@ import {
 import { h3AspectRatio } from '@creatoros/domain';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
-import { fileForWorker, linkRecentGeneratedOutputs, machineQueue, readComfyInputCopy } from './comfy';
+import { fileForWorker, linkRecentGeneratedOutputs, machineQueue, readComfyInputCopy, readWorkerQueue } from './comfy';
 import { notifyGenerationReady } from './notifications';
+import { requestH3OutputScan } from './h3-output-scan';
 import { AppError, badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
 const PROVIDER = 'comfyui-h3';
@@ -458,7 +459,7 @@ function checkForm(form: H3Form) {
   });
 }
 
-export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: boolean } = {}) {
+export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: boolean; serialDispatch?: boolean } = {}) {
   if (!h3Workflow()) throw badRequest(MISSING);
   checkForm(form);
   if (form.projectId) {
@@ -484,6 +485,8 @@ export async function generateH3(ctx: Ctx, form: H3Form, options: { skipDraft?: 
       settings: {
         workerId: worker.id,
         workerLabel: worker.label,
+        serialDispatch: options.serialDispatch === true,
+        progress: { phase: 'waiting', detail: 'Waiting for the selected GPU.' },
         imageFileId: form.imageFileId,
         imageUploadName: form.imageUploadName,
         prompt: form.prompt,
@@ -693,13 +696,42 @@ async function failJob(db: Db, id: string, message: string) {
 }
 
 export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
-  const claimed = rowsOf<H3Job>(
-    await db.execute(sql`
+  const claimed = await db.transaction(async tx => {
+    const candidate = rowsOf<{orgId:string;workerId:string|null;status:string}>(await tx.execute(sql`
+      select org_id as "orgId",settings->>'workerId' as "workerId",status
+      from generation_jobs where id=${jobId} and provider=${PROVIDER}`))[0];
+    if (!candidate || candidate.status !== 'QUEUED') return null;
+    // All H3 dispatch paths (periodic and on-demand) take the same worker lock.
+    const worker = rowsOf<{id:string;baseUrl:string;enabled:boolean}>(await tx.execute(sql`
+      select id,base_url as "baseUrl",enabled from gpu_workers
+      where org_id=${candidate.orgId} and id::text=${candidate.workerId} for update`))[0];
+    if (!worker?.enabled) {
+      await failJob(tx,jobId,'The selected GPU is disabled or removed.');
+      return null;
+    }
+    const queued = rowsOf<{id:string;settings:Record<string,unknown>}>(await tx.execute(sql`
+      select id,settings from generation_jobs where org_id=${candidate.orgId} and provider=${PROVIDER}
+        and settings->>'workerId'=${worker.id} and status='QUEUED'
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+      order by created_at,id limit 1`))[0];
+    if (queued?.id!==jobId) return null;
+    const running=rowsOf<{id:string}>(await tx.execute(sql`
+      select id from generation_jobs where org_id=${candidate.orgId}
+        and settings->>'workerId'=${worker.id} and status='RUNNING' limit 1`))[0];
+    const queue=running?'busy':await readWorkerQueue(worker.baseUrl);
+    if(queue!=='free'){
+      await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({progress:{phase:'waiting',detail:queue==='offline'?'Waiting for ComfyUI to reconnect.':'Waiting for the selected GPU to finish existing work.'}})}::jsonb,updated_at=now()
+        where id=${jobId} and status='QUEUED'`);
+      return null;
+    }
+    return rowsOf<H3Job>(await tx.execute(sql`
       update generation_jobs
-      set status = 'RUNNING', started_at = now(), updated_at = now(), error = null
-      where id = ${jobId} and provider = ${PROVIDER} and status = 'QUEUED'
-      returning id, org_id as "orgId", prompt_id as "promptId", settings, started_at as "startedAt"`),
-  )[0];
+      set status='RUNNING',started_at=now(),updated_at=now(),error=null,
+        settings=settings||${JSON.stringify({progress:{phase:'sending',detail:'Transferring reference media to the selected GPU.'}})}::jsonb
+      where id=${jobId} and provider=${PROVIDER} and status='QUEUED'
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+      returning id,org_id as "orgId",prompt_id as "promptId",settings,started_at as "startedAt"`))[0]??null;
+  });
   if (!claimed) return { skipped: true };
   try {
     const workflow = h3Workflow();
@@ -852,11 +884,17 @@ export async function submitQueuedH3(db: Db, env: ServiceEnv) {
     await db.execute(sql`
       select id from generation_jobs
       where provider = ${PROVIDER} and status = 'QUEUED'
-      order by created_at asc
-      limit 1`),
+        and coalesce(settings->>'dispatchPaused','false')<>'true'
+      order by created_at asc,id
+      limit 20`),
   );
   const out = [];
-  for (const job of waiting) out.push(await submitH3Job(db, env, job.id));
+  for (const job of waiting) {
+    const result=await submitH3Job(db,env,job.id);
+    out.push(result);
+    // Limit one actual transfer/submission per worker tick; blocked queues do not starve other workers.
+    if (!('skipped' in result)) break;
+  }
   return out;
 }
 
@@ -1002,6 +1040,7 @@ export async function pollRunningH3(db: Db, env: ServiceEnv) {
     }
     updated += 1;
   }
-  await linkRecentGeneratedOutputs(db).catch(() => undefined);
+  await requestH3OutputScan(db).catch(error=>console.warn('H3 output scan request failed',String(error)));
+  await linkRecentGeneratedOutputs(db).catch(error=>console.warn('H3 output linking failed',String(error)));
   return { checked: running.length, updated };
 }

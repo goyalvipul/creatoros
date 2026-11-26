@@ -8,7 +8,6 @@ import { ago } from '@/lib/format';
 
 const path = '/integrations/ai-gateway';
 type PermissionGroup = { name: string; items: [string, string][] };
-type ReviewRequest = { id: string; mode: Mode; operation: string; scope: string; input: unknown; status: string; expiresAt: string; result: unknown };
 type Mode = 'local' | 'hosted';
 type ProductionPolicy = { brandId: string; rootId: string; workerIds: string[]; dailyVideos: number };
 type Settings = {
@@ -32,7 +31,6 @@ export function AiGatewayCard() {
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
   const s = res.data;
-  const requests = useApi<ReviewRequest[]>(expanded ? path + '/requests' : null);
   const productionOptions = useApi<{ brands: {id:string;name:string}[]; roots:{id:string;name:string}[]; workers:{id:string;name:string}[] }>(expanded ? path + '/production-options' : null);
   const [policyDraft,setPolicyDraft] = useState<ProductionPolicy | null>(null);
   const [editMode, setEditMode] = useState<Mode>('hosted');
@@ -168,31 +166,6 @@ export function AiGatewayCard() {
                     {s.productionPolicy&&<ActionButton variant="danger" disabled={busy} onAction={()=>run(async()=>{const updated=await post<Settings>(path+'/production-policy',{policy:null});await res.mutate(updated,{revalidate:false});setPolicyDraft(null);})}>Disable trusted production</ActionButton>}
                   </>;
                 })()}
-              </div>
-              <div>
-                <h3 className="text-sm font-medium">Owner approvals</h3>
-                <p className="mt-1 text-xs text-muted">Connector writes outside the trusted production policy must be reviewed here. Requests expire after 30 minutes. Approved actions cannot be replayed.</p>
-                <ActionButton size="sm" className="mt-2" onAction={async () => { await requests.mutate(); }}>Refresh requests</ActionButton>
-                {requests.error && <p className="mt-1 text-xs text-bad">{requests.error.message}</p>}
-                <div className="mt-2 space-y-2">
-                  {(requests.data ?? []).map(r => (
-                    <details key={r.id} className="rounded-lg border border-border p-2">
-                      <summary className="cursor-pointer text-sm font-medium">{r.operation} · {r.mode} · {r.status}</summary>
-                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(r.input, null, 2)}</pre>
-                      {r.status === 'PENDING' && (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <ActionButton size="sm" variant="primary" disabled={busy || Date.parse(r.expiresAt) <= Date.now()} confirm="Execute this exact requested operation?" onAction={() => run(async () => {
-                            try { await post(path + '/requests/' + r.id + '/review', { decision: 'approve' }); } finally { await requests.mutate(); }
-                          })}>Approve and execute</ActionButton>
-                          <ActionButton size="sm" variant="danger" disabled={busy} onAction={() => run(async () => {
-                            await post(path + '/requests/' + r.id + '/review', { decision: 'reject' }); await requests.mutate();
-                          })}>Reject</ActionButton>
-                        </div>
-                      )}
-                    </details>
-                  ))}
-                  {requests.data?.length === 0 && <p className="text-xs text-muted">No requests yet.</p>}
-                </div>
               </div>
               <div>
                 <h3 className="text-sm font-medium">Connector credentials</h3>

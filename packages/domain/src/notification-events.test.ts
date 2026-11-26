@@ -40,3 +40,11 @@ describe('notification delivery', () => {
     expect(deliveryChoice({ type: 'publish.failed', channels: { publishing: 'off' }, browserPush: true })).toBe('off');
   });
 });
+
+describe('ChatGPT approval alerts', () => {
+  it('uses an urgent, private, push-enabled event', () => {
+    expect(defaultDelivery('gateway.approval')).toBe('push');
+    expect(lockScreenText('gateway.approval')).toContain('approval');
+    expect(safeNotificationPath('/integrations?approval=example')).toBe('/integrations?approval=example');
+  });
+});

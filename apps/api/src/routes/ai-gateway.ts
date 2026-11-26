@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
-import { audit, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
+import { audit, notify, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
 import { decodeMedia } from './ai-gateway-media';
@@ -110,6 +110,13 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       const [created]=rows<{id:string;status:string;result:unknown}>(await tx.execute(sql`insert into ai_gateway_requests(id,org_id,mode,credential_hash,operation,scope,input,status,policy_authorized) values(${body.requestId},${auth.ctx.orgId},${auth.mode},${auth.hash},${body.operation},${operation.scope},${json}::jsonb,${trusted?'RUNNING':'PENDING'},${trusted}) on conflict do nothing returning id,status,result`));
       if(!created)throw conflict('Request ID already used.');
       await audit({...auth.ctx,db:tx},trusted?'ai_gateway.policy_authorized':'ai_gateway.proposed',{type:'ai_gateway_request',id:created.id},undefined,{operation:body.operation,mode:auth.mode});
+      if(!trusted)await notify(tx,{
+        orgId:auth.ctx.orgId,userId:auth.ctx.userId,type:'gateway.approval',
+        dedupeKey:'gateway.approval:'+created.id,title:'ChatGPT approval required',
+        body:'A connector request needs your review within 30 minutes.',
+        severity:'CRITICAL',deepLink:'/integrations?approval='+created.id,
+        sourceType:'ai_gateway_request',sourceId:created.id,
+      });
       return {row:created,execute:trusted};
     });
     if(!claimed.execute)return {...claimed.row,approvalRequired:claimed.row.status==='PENDING'};
@@ -126,19 +133,21 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   route({method:'GET',url:'/integrations/ai-gateway/requests',tag:'AI Gateway',summary:'Review requested operations',role:'OWNER'},async({ctx,reply})=>{
     reply.header('cache-control','no-store');
     // Avoid transmitting base64 thumbnails in the review list; the immutable input stays on the server.
-    return rows(await ctx.db.execute(sql`select id,mode,operation,scope,input-'base64' as input,case when status='PENDING' and expires_at<=now() then 'EXPIRED' else status end as status,result,created_at,expires_at,finished_at from ai_gateway_requests where org_id=${ctx.orgId} order by created_at desc limit 50`));
+    return rows(await ctx.db.execute(sql`select id,mode,operation,scope,input-'base64' as input,case when status='PENDING' and expires_at<=now() then 'EXPIRED' else status end as status,result,created_at,expires_at,finished_at from ai_gateway_requests where org_id=${ctx.orgId} order by (status='PENDING' and expires_at>now()) desc,created_at desc limit 200`));
   });
   route({method:'POST',url:'/integrations/ai-gateway/requests/:id/review',tag:'AI Gateway',summary:'Owner approves or rejects one immutable request',role:'OWNER',params:z.object({id:z.uuid()}),body:z.object({decision:z.enum(['approve','reject'])}).strict()},async({ctx,params,body,reply})=>{
     reply.header('cache-control','no-store');
     if(body.decision==='reject'){
       const [r]=rows(await ctx.db.execute(sql`update ai_gateway_requests set status='REJECTED',finished_at=now() where org_id=${ctx.orgId} and id=${params.id} and status='PENDING' returning id,status`));
       if(!r)throw conflict('Request is no longer pending.');
+      await ctx.db.execute(sql`update notifications set read_at=coalesce(read_at,now()),archived_at=now() where org_id=${ctx.orgId} and source_type='ai_gateway_request' and source_id=${params.id}`);
       await audit(ctx,'ai_gateway.rejected',{type:'ai_gateway_request',id:params.id});
       return r;
     }
     // Claim once; the approved payload, active credential, scope and original owner must still match.
     const [r]=rows<RequestRow>(await ctx.db.execute(sql`update ai_gateway_requests q set status='RUNNING' from ai_gateway_connections g, organization_memberships m, users u where q.id=${params.id} and q.org_id=${ctx.orgId} and q.status='PENDING' and q.expires_at>now() and g.org_id=q.org_id and g.enabled and g.mode=q.mode and q.credential_hash=case when q.mode='local' then g.local_hash else g.hosted_hash end and q.scope=any(case when q.mode='local' then g.local_scopes else g.hosted_scopes end) and m.org_id=q.org_id and m.user_id=case when q.mode='local' then g.local_owner else g.hosted_owner end and m.role='OWNER' and m.status='ACTIVE' and u.id=m.user_id and u.status='ACTIVE' returning q.id,q.mode,q.operation,q.scope,q.input,q.status,q.result,q.created_at,q.expires_at,q.finished_at`));
     if(!r)throw conflict('Request expired, already reviewed, or connector authorization changed.');
+    await ctx.db.execute(sql`update notifications set read_at=coalesce(read_at,now()),archived_at=now() where org_id=${ctx.orgId} and source_type='ai_gateway_request' and source_id=${r.id}`);
     try{
       const op=lookup(r.operation);
       if(!op.write||op.scope!==r.scope)throw forbidden('Operation changed.');

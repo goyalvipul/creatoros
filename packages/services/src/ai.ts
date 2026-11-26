@@ -483,7 +483,7 @@ export async function queueMissingSceneImages(ctx: Ctx, projectId: string, accep
   return { queued: queued.length, skippedBecauseNoRoom: missing.length - queued.length };
 }
 
-export async function queueVideoAnalysis(ctx: Ctx, input: { fileId?: string | null; projectId?: string | null; acceptBillable: boolean; idempotencyKey?: string | null }) {
+export async function queueVideoAnalysis(ctx: Ctx, input: { fileId?: string | null; projectId?: string | null; acceptBillable: boolean; idempotencyKey?: string | null; productionJobId?: string }) {
   if (!input.acceptBillable) throw badRequest(`${BILLING_NOTE} Confirm the request to continue.`);
   if (!input.fileId && !input.projectId) throw badRequest('Choose a video first.');
   const settings = await assertAllowance(ctx, 'video');
@@ -502,7 +502,7 @@ export async function queueVideoAnalysis(ctx: Ctx, input: { fileId?: string | nu
     idempotencyKey: input.idempotencyKey ?? null,
     targetType: input.fileId ? 'library_file' : 'long_export',
     targetId: input.fileId || input.projectId || '',
-    input: { fileId: input.fileId ?? null, projectId: input.projectId ?? null },
+    input: { fileId: input.fileId ?? null, projectId: input.projectId ?? null, productionJobId: input.productionJobId ?? null },
   }).returning();
   return job!;
 }
@@ -735,8 +735,9 @@ export async function runDueAiJobs(db: Ctx['db'], env: ServiceEnv, fetchImpl: Fe
     update ai_jobs set status = 'RUNNING', started_at = now(), attempts = attempts + 1
     where id = (
       select id from ai_jobs where status = 'QUEUED' and task in ('scene_image_generate','scene_image_edit','video_analyze')
-      order by created_at limit 1
-    )
+      and (input->>'productionJobId' is null or exists(select 1 from generation_jobs g join creative_projects p on p.id=g.project_id and p.org_id=g.org_id join organizations o on o.id=g.org_id left join production_runs r on r.id::text=g.settings->>'productionRunId' and r.org_id=g.org_id where g.id::text=ai_jobs.input->>'productionJobId' and g.org_id=ai_jobs.org_id and coalesce(g.settings->>'dispatchPaused','false')<>'true' and (r.id is null or r.state='ACTIVE') and coalesce(o.settings->'productionAutomation'->(p.brand_id::text)->>'paused','false')<>'true' and o.settings->'productionAutomation'->(p.brand_id::text)->>'billablePostprocess'='true'))
+      order by created_at limit 1 for update skip locked
+    ) and status='QUEUED'
     returning id
   `);
   const id = (claimed as unknown as { rows: { id: string }[] }).rows[0]?.id;

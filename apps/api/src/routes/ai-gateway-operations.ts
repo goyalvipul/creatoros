@@ -7,7 +7,7 @@ import {
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
   queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
-  workerQueue, type Ctx,
+  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, type Ctx,
 } from '@creatoros/services';
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
@@ -189,7 +189,11 @@ export const operations:Record<string,Operation>={
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
  'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,started_at,finished_at,error,settings->>'workerId' as worker_id,settings->'progress' as progress,settings->>'outputScanStatus' as output_scan_status,settings->>'outputScanRequestedAt' as output_scan_requested_at,coalesce(settings->>'dispatchPaused','false')='true' as paused from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
- 'generation.h3':op('generation.submit',true,h3Form,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p,{skipDraft:trusted===true,serialDispatch:trusted===true});return {id:r.job.id,status:r.job.status};}),
+ 'production.runStart':op('projects.write',true,z.object({brandId:uuid,localDay:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),target:z.number().int().min(1).max(2)}).strict(),(ctx,p)=>startProductionRun(ctx,p)),
+ 'production.runEvent':op('projects.update',true,z.object({runId:uuid,stage:z.enum(['RESEARCHING','PLANNED','BLOCKED','FAILED']),detail:z.string().min(1).max(4000)}).strict(),(ctx,p)=>recordProductionPlanning(ctx,p)),
+ 'production.runs':op('generation.read',false,empty,ctx=>productionRunBoard(ctx)),
+ 'production.runDetail':op('generation.read',false,id,(ctx,p)=>productionRunBoard(ctx,p.id)),
+ 'generation.h3':op('generation.submit',true,h3Form.extend({runId:uuid.optional(),sourceEvidence:z.string().min(1).max(20000).optional()}),async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p,{skipDraft:trusted===true,serialDispatch:trusted===true,runId:p.runId,sourceEvidence:p.sourceEvidence});return {id:r.job.id,status:r.job.status};}),
  'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateLtx(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),
  'generation.autogen':op('generation.submit',true,z.object({prompt:text,timestamps:z.string().max(2000),songName:z.string().min(1).max(300),audioLengthSec:z.number().positive().max(7200).optional(),audioFileId:uuid,imageFileId:uuid}).strict(),async(ctx,p)=>{await availableMedia(ctx,p.audioFileId,'AUDIO');await availableMedia(ctx,p.imageFileId,'IMAGE');const r=await createAutogenRun(ctx,p);return {id:r.id};}),

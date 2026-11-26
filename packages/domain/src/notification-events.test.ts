@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliveryChoice, lockScreenText, safeNotificationPath } from './notification-events';
+import { defaultDelivery, deliveryChoice, lockScreenText, safeNotificationPath } from './notification-events';
 
 describe('notification delivery', () => {
   it('keeps push off until the user turns browser push on', () => {
@@ -38,5 +38,13 @@ describe('notification delivery', () => {
     expect(deliveryChoice({ ...on, type: 'oauth.expired' })).toBe('push');
     expect(deliveryChoice({ ...on, type: 'briefing.weekly' })).toBe('digest');
     expect(deliveryChoice({ type: 'publish.failed', channels: { publishing: 'off' }, browserPush: true })).toBe('off');
+  });
+});
+
+describe('ChatGPT approval alerts', () => {
+  it('uses an urgent, private, push-enabled event', () => {
+    expect(defaultDelivery('gateway.approval')).toBe('push');
+    expect(lockScreenText('gateway.approval')).toContain('approval');
+    expect(safeNotificationPath('/integrations?approval=example')).toBe('/integrations?approval=example');
   });
 });

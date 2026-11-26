@@ -8,9 +8,10 @@ import { ago } from '@/lib/format';
 
 const path = '/integrations/ai-gateway';
 type PermissionGroup = { name: string; items: [string, string][] };
-type ReviewRequest = { id: string; mode: Mode; operation: string; scope: string; input: unknown; status: string; expiresAt: string; result: unknown };
 type Mode = 'local' | 'hosted';
+type ProductionPolicy = { brandId: string; rootId: string; workerIds: string[]; dailyVideos: number };
 type Settings = {
+  productionPolicy?: ProductionPolicy | null;
   enabled: boolean;
   mode: Mode;
   scopes: string[];
@@ -30,7 +31,8 @@ export function AiGatewayCard() {
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
   const s = res.data;
-  const requests = useApi<ReviewRequest[]>(expanded ? path + '/requests' : null);
+  const productionOptions = useApi<{ brands: {id:string;name:string}[]; roots:{id:string;name:string}[]; workers:{id:string;name:string}[] }>(expanded ? path + '/production-options' : null);
+  const [policyDraft,setPolicyDraft] = useState<ProductionPolicy | null>(null);
   const [editMode, setEditMode] = useState<Mode>('hosted');
   const permissionList = editMode === 'local' ? s?.localScopes ?? [] : s?.hostedScopes ?? [];
   const configured = s && (s.mode === 'local' ? s.localConfigured : s.hostedConfigured);
@@ -147,30 +149,23 @@ export function AiGatewayCard() {
                   ))}
                 </div>
               </div>
-              <div>
-                <h3 className="text-sm font-medium">Owner approvals</h3>
-                <p className="mt-1 text-xs text-muted">Every connector write must be reviewed here. Requests expire after 30 minutes. Approved actions cannot be replayed.</p>
-                <ActionButton size="sm" className="mt-2" onAction={async () => { await requests.mutate(); }}>Refresh requests</ActionButton>
-                {requests.error && <p className="mt-1 text-xs text-bad">{requests.error.message}</p>}
-                <div className="mt-2 space-y-2">
-                  {(requests.data ?? []).map(r => (
-                    <details key={r.id} className="rounded-lg border border-border p-2">
-                      <summary className="cursor-pointer text-sm font-medium">{r.operation} · {r.mode} · {r.status}</summary>
-                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(r.input, null, 2)}</pre>
-                      {r.status === 'PENDING' && (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <ActionButton size="sm" variant="primary" disabled={busy || Date.parse(r.expiresAt) <= Date.now()} confirm="Execute this exact requested operation?" onAction={() => run(async () => {
-                            try { await post(path + '/requests/' + r.id + '/review', { decision: 'approve' }); } finally { await requests.mutate(); }
-                          })}>Approve and execute</ActionButton>
-                          <ActionButton size="sm" variant="danger" disabled={busy} onAction={() => run(async () => {
-                            await post(path + '/requests/' + r.id + '/review', { decision: 'reject' }); await requests.mutate();
-                          })}>Reject</ActionButton>
-                        </div>
-                      )}
-                    </details>
-                  ))}
-                  {requests.data?.length === 0 && <p className="text-xs text-muted">No requests yet.</p>}
-                </div>
+              <div className="rounded-lg border border-border p-3 space-y-2">
+                <h3 className="text-sm font-medium">Trusted production · Hosted MCP</h3>
+                <p className="text-xs text-muted">Optional owner authorization for one creator: up to two projects and H3 submissions per Vancouver day, bounded media uploads and publishing drafts only. Publishing, scheduling, shared editor saves and unrelated actions still require review.</p>
+                <Badge tone={s.productionPolicy ? 'info' : 'neutral'}>{s.productionPolicy ? 'Enabled' : 'Disabled'}</Badge>
+                {productionOptions.error && <p className="text-xs text-bad">{productionOptions.error.message}</p>}
+                {(() => {
+                  const p = policyDraft ?? s.productionPolicy ?? {brandId:'',rootId:'',workerIds:[],dailyVideos:2};
+                  const update = (patch:Partial<ProductionPolicy>)=>setPolicyDraft({...p,...patch});
+                  return <>
+                    <label className="block text-xs">Creator<select className="block w-full rounded border border-border bg-panel p-2" value={p.brandId} onChange={e=>update({brandId:e.target.value})}><option value="">Choose creator</option>{productionOptions.data?.brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+                    <label className="block text-xs">Indexed upload folder<select className="block w-full rounded border border-border bg-panel p-2" value={p.rootId} onChange={e=>update({rootId:e.target.value})}><option value="">Choose folder</option>{productionOptions.data?.roots.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+                    <div className="text-xs">Allowed GPUs{productionOptions.data?.workers.map(w=><label key={w.id} className="block"><input type="checkbox" checked={p.workerIds.includes(w.id)} onChange={e=>update({workerIds:e.target.checked?[...p.workerIds,w.id]:p.workerIds.filter(id=>id!==w.id)})}/> {w.name}</label>)}</div>
+                    <label className="block text-xs">Daily video limit<select value={p.dailyVideos} onChange={e=>update({dailyVideos:Number(e.target.value)})}><option value={1}>1</option><option value={2}>2</option></select></label>
+                    <ActionButton disabled={busy||!p.brandId||!p.rootId||!p.workerIds.length||p.workerIds.length>2} confirm="Authorize this creator's bounded production operations without individual review?" onAction={()=>run(async()=>{const updated=await post<Settings>(path+'/production-policy',{policy:p});await res.mutate(updated,{revalidate:false});setPolicyDraft(null);})}>Save production authorization</ActionButton>
+                    {s.productionPolicy&&<ActionButton variant="danger" disabled={busy} onAction={()=>run(async()=>{const updated=await post<Settings>(path+'/production-policy',{policy:null});await res.mutate(updated,{revalidate:false});setPolicyDraft(null);})}>Disable trusted production</ActionButton>}
+                  </>;
+                })()}
               </div>
               <div>
                 <h3 className="text-sm font-medium">Connector credentials</h3>

@@ -15,6 +15,7 @@ import {
   StateBadge,
 } from '@/components/ui';
 import { AiGatewayCard } from '@/components/ai-gateway-card';
+import { AiGatewayApprovals } from '@/components/ai-gateway-approvals';
 import { IdentityLink } from '@/components/identity-link';
 import { post, refresh, useApi } from '@/lib/api';
 import { ago, title as titleCase } from '@/lib/format';
@@ -119,6 +120,7 @@ export default function IntegrationsPage() {
         title="Integrations"
         subtitle="Everything is optional. A connection only shows as connected after the provider confirms it; missing pieces are listed so you know exactly what to do."
       />
+      <AiGatewayApprovals />
       {result && (
         <Notice
           dismissible

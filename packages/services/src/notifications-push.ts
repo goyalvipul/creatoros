@@ -128,6 +128,22 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
     set state = 'RETRY'
     where state = 'SENDING' and next_attempt_at < now() - interval '10 minutes'
   `);
+  // Retire approval alerts after the request is no longer actionable, even if the phone was offline.
+  await db.execute(sql`
+    update notifications n set read_at=coalesce(n.read_at,now()), archived_at=now()
+    where n.type='gateway.approval' and n.archived_at is null and not exists(
+      select 1 from ai_gateway_requests q join ai_gateway_connections g on g.org_id=q.org_id
+      where q.id=n.source_id and q.org_id=n.org_id and q.status='PENDING' and q.expires_at>now()
+        and g.enabled and g.mode=q.mode
+        and q.credential_hash=case when q.mode='hosted' then g.hosted_hash else g.local_hash end
+        and q.scope=any(case when q.mode='hosted' then g.hosted_scopes else g.local_scopes end)
+    )
+  `);
+  await db.execute(sql`
+    update notification_deliveries d set state='DEAD',last_error='Approval no longer pending'
+    from notifications n where n.id=d.notification_id and n.type='gateway.approval'
+      and n.archived_at is not null and d.state in ('PENDING','RETRY')
+  `);
   const keys = vapid(env);
   if (!keys) return { sent: 0, failed: 0, skipped: 'vapid' };
   webpush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
@@ -186,6 +202,23 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
   let failed = 0;
   const badges = new Map<string, number>();
   for (const row of full) {
+    let approvalTtl:number|undefined;
+    if(row.type==='gateway.approval'){
+      const [live]=rowsOf<{ttl:number}>(await db.execute(sql`
+        select floor(extract(epoch from q.expires_at-now()))::int as ttl
+        from notification_deliveries d join notifications n on n.id=d.notification_id
+        join ai_gateway_requests q on q.id=n.source_id and q.org_id=n.org_id
+        join ai_gateway_connections g on g.org_id=q.org_id
+        join push_subscriptions sub on sub.id=d.subscription_id and sub.org_id=n.org_id
+        join organization_memberships m on m.org_id=n.org_id and m.user_id=sub.user_id
+        where d.id=${row.id} and n.archived_at is null and q.status='PENDING' and q.expires_at>now()
+          and sub.revoked_at is null and m.role='OWNER' and m.status='ACTIVE'
+          and g.enabled and g.mode=q.mode and q.credential_hash=case when q.mode='hosted' then g.hosted_hash else g.local_hash end
+          and q.scope=any(case when q.mode='hosted' then g.hosted_scopes else g.local_scopes end)
+      `));
+      if(!live||live.ttl<=0){await db.execute(sql`update notification_deliveries set state='DEAD',last_error='Approval no longer pending' where id=${row.id}`);continue;}
+      approvalTtl=live.ttl;
+    }
     const important = row.priority === 'high' || row.priority === 'urgent' || row.type === 'system.test';
     if (!important) {
       const routine = rowsOf<{ n: number }>(
@@ -237,7 +270,7 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
       title: row.title.slice(0, 120),
       body: lockScreenText(row.type),
       url: safeNotificationPath(row.deepLink),
-      tag: row.type,
+      tag: row.type==='gateway.approval' ? 'gateway.approval' : row.type,
       badge: badges.get(row.userId) ?? 0,
       id: row.id,
     });
@@ -245,7 +278,7 @@ export async function deliverQueuedPushes(db: Db, env: ServiceEnv): Promise<{ se
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: sub.keys },
         payload,
-        { TTL: urgent ? 60 * 60 * 4 : 60 * 60 * 12, urgency: urgent ? 'high' : 'normal' },
+        { TTL: approvalTtl ?? (urgent ? 60 * 60 * 4 : 60 * 60 * 12), urgency: urgent ? 'high' : 'normal' },
       );
       await db.execute(sql`
         update notification_deliveries set state = 'SENT', sent_at = now(), last_error = null where id = ${row.id}::uuid

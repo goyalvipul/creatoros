@@ -7,10 +7,11 @@ import {
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
   queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
-  type Ctx,
+  workerQueue, type Ctx,
 } from '@creatoros/services';
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
+import { uploadGatewayMedia, MAX_MEDIA_BYTES } from './ai-gateway-media';
 import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -110,7 +111,7 @@ export const permissionGroups = [
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
   {name:'Production',items:[['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},
-  {name:'Media and analysis',items:[['media.read','Read video inventory, analysis and transcripts'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
+  {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
   {name:'GPU and generation',items:[['gpu.read','Read GPU availability'],['generation.read','Read generation jobs and output IDs'],['generation.submit','Queue generation jobs'],['generation.cancel','Cancel specific generation jobs']]},
   {name:'Publishing and SEO',items:[['publishing.read','Read publishing queue and social accounts'],['publishing.write','Save platform publishing drafts'],['thumbnail.write','Attach custom thumbnails'],['schedule.write','Schedule approved videos'],['schedule.manage','Reschedule or cancel pending uploads']]},
   {name:'Analytics',items:[['analytics.read','Read stored analytics, post performance and demographics']]},
@@ -118,10 +119,11 @@ export const permissionGroups = [
 ] as const;
 export const scopes=permissionGroups.flatMap(g=>g.items.map(item=>item[0]));
 type Scope=(typeof permissionGroups)[number]['items'][number][0];
-type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknown,requestId:string)=>Promise<unknown>};
-function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string)=>Promise<unknown>):Operation {
-  return {scope,write,schema,run:(ctx,p,r)=>run(ctx,schema.parse(p),r)};
+type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknown,requestId:string,trusted?:boolean)=>Promise<unknown>};
+function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string,trusted?:boolean)=>Promise<unknown>):Operation {
+  return {scope,write,schema,run:(ctx,p,r,trusted)=>run(ctx,schema.parse(p),r,trusted)};
 }
+const uploadSchema=z.object({rootId:uuid,brandId:uuid,projectId:uuid.nullable().optional(),fileName:z.string().min(1).max(120),mime:z.string().max(40),base64:z.string().min(4).max(Math.ceil(MAX_MEDIA_BYTES/3)*4).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict();
 const projectPatch=z.object({title:title.optional(),brief:text.optional(),concept:text.optional(),songTitle:z.string().max(300).optional(),hook:text.optional(),narrative:text.optional(),distributionPlan:text.optional()}).strict();
 const longScene=z.object({projectId:uuid,sceneId:uuid,prompt:text.optional(),label:z.string().max(160).optional(),mode:z.enum(['vocal','broll']).optional(),continuity:z.enum(['shot','context']).optional(),workerId:uuid.nullable().optional(),durationSec:z.number().min(1).max(120).optional()}).strict();
 const scenePair=z.object({projectId:uuid,sceneId:uuid}).strict();
@@ -148,6 +150,12 @@ export const operations:Record<string,Operation>={
  'longvideo.rebalance':op('longvideo.write',true,z.object({id:uuid,seconds:z.number().min(4).max(15)}).strict(),async(ctx,p)=>{await rebalanceLongVideo(ctx,p.id,p.seconds);return {updated:true};}),
  'longvideo.attach':op('longvideo.write',true,z.object({projectId:uuid,fileId:uuid,sceneId:uuid.nullable()}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.fileId);await addLongVideoFromLibrary(ctx,p.projectId,p.fileId,p.sceneId);return {attached:true};}),
  'media.list':op('media.read',false,z.object({kind:z.enum(['IMAGE','VIDEO','AUDIO']).default('VIDEO')}).strict(),(ctx,p)=>query(ctx,sql`select id,file_name,file_type,tech from file_instances where org_id=${ctx.orgId} and archived_at is null and availability='AVAILABLE' and file_type::text=${p.kind} order by created_at desc limit 100`)),
+ 'media.uploadImage':op('media.upload.image',true,uploadSchema,(ctx,p,r)=>uploadGatewayMedia(ctx,p,r,'IMAGE')),
+ 'media.uploadAudio':op('media.upload.audio',true,uploadSchema,(ctx,p,r)=>uploadGatewayMedia(ctx,p,r,'AUDIO')),
+ 'media.roots':op('media.read',false,empty,ctx=>query(ctx,sql`select r.id,r.display_path,d.display_name as device_name,r.state,d.state as device_state from storage_roots r join devices d on d.id=r.device_id and d.org_id=r.org_id where r.org_id=${ctx.orgId} and r.retired_at is null order by d.display_name,r.display_path limit 100`)),
+ 'media.search':op('media.read',false,z.object({q:z.string().max(200).optional(),kind:z.enum(['IMAGE','VIDEO','AUDIO']).optional(),brandId:uuid.optional(),limit:z.number().int().min(1).max(100).default(50),offset:z.number().int().min(0).max(10000).default(0)}).strict(),async(ctx,p)=>{await owned(ctx,'brand',p.brandId);return query(ctx,sql`select f.id,f.file_name,f.file_type,f.mime,f.tech,f.availability,f.size::float8 as size from file_instances f where f.org_id=${ctx.orgId} and f.archived_at is null and (${p.kind??null}::text is null or f.file_type::text=${p.kind??null}) and (${p.q??null}::text is null or strpos(lower(f.file_name),lower(${p.q??''}))>0) and (${p.brandId??null}::uuid is null or exists(select 1 from asset_file_links l join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id where l.org_id=f.org_id and l.file_instance_id=f.id and a.brand_id=${p.brandId??null} and not a.is_archived)) order by f.created_at desc,f.id limit ${p.limit} offset ${p.offset}`);}),
+ 'media.detail':op('media.read',false,id,async(ctx,p)=>{await owned(ctx,'file',p.id);return (await query(ctx,sql`select f.id,f.file_name,f.file_type,f.mime,f.tech,f.availability,f.size::float8 as size,d.state as device_state,r.state as root_state from file_instances f join devices d on d.id=f.device_id and d.org_id=f.org_id join storage_roots r on r.id=f.root_id and r.org_id=f.org_id where f.org_id=${ctx.orgId} and f.id=${p.id}`))[0];}),
+ 'gpu.queue':op('gpu.read',false,id,async(ctx,p)=>{await owned(ctx,'worker',p.id);return workerQueue(ctx,p.id);}),
  'media.analysis':op('media.read',false,id,(ctx,p)=>query(ctx,sql`select j.id,j.status,j.output,j.finished_at from ai_jobs j join file_instances f on f.id::text=j.target_id and f.org_id=j.org_id where j.org_id=${ctx.orgId} and f.id=${p.id} and j.target_type='library_file' and j.task='video_analyze' order by j.created_at desc limit 5`)),
  'media.transcript':op('media.read',false,id,async(ctx,p)=>{await owned(ctx,'file',p.id);const [r]=rows<{transcript:unknown}>(await ctx.db.execute(sql`select output->'analysis'->'transcript' as transcript from ai_jobs where org_id=${ctx.orgId} and task='video_analyze' and target_type='library_file' and target_id=${p.id} and status='COMPLETED' order by finished_at desc limit 1`));return {available:Array.isArray(r?.transcript),transcript:r?.transcript??null,source:'Gemini video analysis; not a verified verbatim transcript'};}),
  'media.keyframes':op('frames.read',false,z.object({id:uuid,seconds:z.array(z.number().min(0).max(7200)).min(1).max(4)}).strict(),keyframes),
@@ -155,7 +163,7 @@ export const operations:Record<string,Operation>={
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
  'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,finished_at from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
- 'generation.h3':op('generation.submit',true,h3Form,async(ctx,p)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p);return {id:r.job.id};}),
+ 'generation.h3':op('generation.submit',true,h3Form,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateH3(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p)=>{await validateForm(ctx,p);const r=await generateLtx(ctx,p);return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),
  'generation.autogen':op('generation.submit',true,z.object({prompt:text,timestamps:z.string().max(2000),songName:z.string().min(1).max(300),audioLengthSec:z.number().positive().max(7200).optional(),audioFileId:uuid,imageFileId:uuid}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.audioFileId);await owned(ctx,'file',p.imageFileId);const r=await createAutogenRun(ctx,p);return {id:r.id};}),

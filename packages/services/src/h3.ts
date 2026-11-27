@@ -742,7 +742,8 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
     const running=rowsOf<{id:string}>(await tx.execute(sql`
       select id from generation_jobs where org_id=${candidate.orgId}
         and settings->>'workerId'=${worker.id} and status='RUNNING' limit 1`))[0];
-    const queue=running?'busy':await readWorkerQueue(worker.baseUrl);
+    const localImage=rowsOf(await tx.execute(sql`select id from ai_jobs where org_id=${candidate.orgId} and task='project_image_local' and status='RUNNING' and input->>'workerId'=${worker.id} limit 1`))[0];
+    const queue=running||localImage?'busy':await readWorkerQueue(worker.baseUrl);
     if(queue!=='free'){
       await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({progress:{phase:'waiting',detail:queue==='offline'?'Waiting for ComfyUI to reconnect.':'Waiting for the selected GPU to finish existing work.'}})}::jsonb,updated_at=now()
         where id=${jobId} and status='QUEUED'`);

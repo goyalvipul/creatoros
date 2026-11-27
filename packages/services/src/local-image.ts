@@ -1,5 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { z } from 'zod';
 import { sql, type Db } from '@creatoros/db';
 import { readWorkerQueue } from './comfy';
@@ -28,7 +28,8 @@ export const localImageInputSchema = z.object({
   height: z.number().int().min(256).max(2048),
 }).strict().refine(p => p.width % 8 === 0 && p.height % 8 === 0 && p.width*p.height <= 4194304, 'Dimensions must be multiples of 8 and at most 4 MP.');
 export type LocalImageInput = z.infer<typeof localImageInputSchema>;
-type Payload = LocalImageInput & { hash: string; references: string[]; seed: number };
+export type LocalImageSnapshot={hash:string;references:string[]};
+type Payload = LocalImageInput & LocalImageSnapshot & { seed: number };
 type Job = { id:string; orgId:string; projectId:string; brandId:string; runId:string|null; workerId:string; rootId:string; state:string; payload:Payload; promptId:string|null; fileId:string|null; output:unknown; error:string|null; updatedAt:string };
 const columns = sql`id,org_id as "orgId",project_id as "projectId",brand_id as "brandId",run_id as "runId",worker_id as "workerId",root_id as "rootId",state,payload,prompt_id as "promptId",file_id as "fileId",output,error,updated_at as "updatedAt"`;
 
@@ -43,11 +44,15 @@ export function validateTemplate(template: Template) {
   }
   if (template.graph[template.outputNode]?.class_type !== 'SaveImage'||!Object.hasOwn(template.graph[template.outputNode]?.inputs??{},'filename_prefix')) throw badRequest('Workflow output must be an explicit SaveImage node.');
   if (!!template.width !== !!template.height) throw badRequest('Map both dimensions or neither.');
+  for(const mapping of [template.prompt,...template.references])if(typeof template.graph[mapping.node]!.inputs[mapping.input]!=='string')throw badRequest('Prompt and reference mappings must be string inputs.');
+  for(const mapping of [template.seed,template.width,template.height])if(mapping&&typeof template.graph[mapping.node]!.inputs[mapping.input]!=='number')throw badRequest('Seed and dimension mappings must be numeric inputs.');
+  if(Object.values(template.graph).filter(n=>n.class_type==='SaveImage').length!==1)throw badRequest('Configure exactly one SaveImage node.');
   if (Object.keys(template.graph).length > 300) throw badRequest('Local image workflow exceeds the node budget.');
 }
 async function loadTemplates(env: ServiceEnv) {
   const file = env.processEnv.KEMOKEM_LOCAL_IMAGE_WORKFLOWS;
   if (!file) return [];
+  const info=await stat(file);if(!info.isFile()||info.size>2*1024*1024)throw badRequest('Invalid local image workflow configuration file.');
   const bytes = await readFile(file);
   if (bytes.length > 2*1024*1024) throw badRequest('Local workflow configuration exceeds 2 MiB.');
   const templates = z.array(templateSchema).max(12).parse(JSON.parse(bytes.toString('utf8')));
@@ -89,10 +94,11 @@ export async function validateLocalImageInput(ctx:Ctx,input:LocalImageInput) {
   if(!rows(await ctx.db.execute(sql`select id from storage_roots where org_id=${ctx.orgId} and id=${input.rootId} and retired_at is null and state='ACTIVE'`)).length)throw notFound('Active storage root');
   return {brandId:p.brandId, payload:{...input,references,hash:configured.hash,seed:randomInt(0,2147483647)}};
 }
-export async function queueLocalImage(ctx:Ctx,input:LocalImageInput,id:string,runId:string|null=null) {
+export async function queueLocalImage(ctx:Ctx,input:LocalImageInput,id:string,runId:string|null=null,snapshot?:LocalImageSnapshot) {
   const prior=rows<Job>(await ctx.db.execute(sql`select ${columns} from local_image_jobs where id=${id} and org_id=${ctx.orgId}`))[0];
   if(prior){if(prior.projectId!==input.projectId)throw conflict('Image request already used.');return prior;}
   const {brandId,payload}=await validateLocalImageInput(ctx,input);
+  if(snapshot&&(snapshot.hash!==payload.hash||JSON.stringify(snapshot.references)!==JSON.stringify(payload.references)))throw conflict('Approved workflow or creator references changed. Restore the approved configuration or review the plan.');
   return ctx.db.transaction(async tx=>{
     await tx.execute(sql`select id from organizations where id=${ctx.orgId} for update`);
     const existing=rows<Job>(await tx.execute(sql`select ${columns} from local_image_jobs where id=${id} and org_id=${ctx.orgId}`))[0];
@@ -110,6 +116,12 @@ export async function localImageStatus(ctx:Ctx,id:string) {
   const [job]=rows<Job>(await ctx.db.execute(sql`select ${columns} from local_image_jobs where id=${id} and org_id=${ctx.orgId}`));
   if(!job)throw notFound('Local image job');
   return {id:job.id,state:job.state,projectId:job.projectId,workerId:job.workerId,promptId:job.promptId,fileId:job.fileId,error:job.error,output:job.output};
+}
+export async function cancelLocalImage(ctx:Ctx,id:string){
+  const changed=rows(await ctx.db.execute(sql`update local_image_jobs set state='CANCELLED',error='Cancelled before GPU dispatch by owner.',updated_at=now() where id=${id} and org_id=${ctx.orgId} and state='QUEUED' returning id`));
+  if(!changed.length)throw conflict('Only a queued local image can be cancelled. Do not interrupt unrelated GPU work.');
+  await audit(ctx,'production.local_image.cancel',{type:'local_image_job',id});
+  return {id,state:'CANCELLED'};
 }
 async function readBounded(body:ReadableStream<Uint8Array>,limit:number) {
   const reader=body.getReader();const chunks:Buffer[]=[];let size=0;

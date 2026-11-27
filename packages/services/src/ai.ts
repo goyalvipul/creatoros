@@ -434,7 +434,7 @@ export async function projectImageReferences(ctx: Ctx, brandId: string, explicit
 }
 export async function queueProjectImage(ctx: Ctx, input: {
   projectId: string; prompt: string; referenceFileIds: string[]; aspect: string;
-  acceptBillable: boolean; idempotencyKey: string;
+  acceptBillable: boolean; idempotencyKey: string; runId?: string;
 }) {
   if (!input.acceptBillable) throw badRequest(BILLING_NOTE);
   if (!input.prompt.trim() || input.prompt.length > 4000) throw badRequest('Supply a 1–4000 character image prompt.');
@@ -466,7 +466,7 @@ export async function queueProjectImage(ctx: Ctx, input: {
     const [job] = await tx.insert(aiJobs).values({
       orgId:ctx.orgId,userId:ctx.userId,brandId:project.brandId,task:'scene_image_generate',provider:'gemini',model,status:'QUEUED',
       idempotencyKey:input.idempotencyKey,targetType:'creative_project',targetId:input.projectId,
-      input:{projectId:input.projectId,sceneId:null,mode:'generate',prompt:input.prompt,aspect,size:settings.imageSize,referenceFileIds},
+      input:{projectId:input.projectId,sceneId:null,mode:'generate',prompt:input.prompt,aspect,size:settings.imageSize,referenceFileIds,runId:input.runId??null},
     }).returning();
     return job!;
   });
@@ -798,6 +798,7 @@ export async function runDueAiJobs(db: Ctx['db'], env: ServiceEnv, fetchImpl: Fe
     where id = (
       select id from ai_jobs where status = 'QUEUED' and task in ('scene_image_generate','scene_image_edit','video_analyze')
       and (input->>'productionJobId' is null or exists(select 1 from generation_jobs g join creative_projects p on p.id=g.project_id and p.org_id=g.org_id join organizations o on o.id=g.org_id left join production_runs r on r.id::text=g.settings->>'productionRunId' and r.org_id=g.org_id where g.id::text=ai_jobs.input->>'productionJobId' and g.org_id=ai_jobs.org_id and coalesce(g.settings->>'dispatchPaused','false')<>'true' and (r.id is null or r.state='ACTIVE') and coalesce(o.settings->'productionAutomation'->(p.brand_id::text)->>'paused','false')<>'true' and o.settings->'productionAutomation'->(p.brand_id::text)->>'billablePostprocess'='true'))
+      and (input->>'runId' is null or exists(select 1 from production_runs r join organizations o on o.id=r.org_id where r.id::text=ai_jobs.input->>'runId' and r.org_id=ai_jobs.org_id and r.state='ACTIVE' and coalesce(o.settings->'productionAutomation'->(r.brand_id::text)->>'paused','false')<>'true'))
       order by created_at limit 1 for update skip locked
     ) and status='QUEUED'
     returning id

@@ -7,12 +7,12 @@ import {
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
   queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
-  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, type Ctx,
+  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, type Ctx,
 } from '@creatoros/services';
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
-import { uploadGatewayMedia, MAX_MEDIA_BYTES } from './ai-gateway-media';
-import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { uploadGatewayMedia, MAX_MEDIA_BASE64_CHARS, MAX_GENERATED_IMAGE_BYTES, importGeneratedImage } from './ai-gateway-media';
+import { readFile, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -137,7 +137,7 @@ export const permissionGroups = [
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
   {name:'Production',items:[['production.execute','Execute authorized creative work without individual approval'],['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},
-  {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis']]},
+  {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis'],['image.generate','Request billable Gemini project images']]},
   {name:'GPU and generation',items:[['gpu.read','Read GPU availability'],['generation.read','Read generation jobs and output IDs'],['generation.submit','Queue generation jobs'],['generation.cancel','Cancel specific generation jobs']]},
   {name:'Publishing and SEO',items:[['publishing.read','Read publishing queue and social accounts'],['publishing.write','Save platform publishing drafts'],['thumbnail.write','Attach custom thumbnails'],['schedule.write','Schedule approved videos'],['schedule.manage','Reschedule or cancel pending uploads']]},
   {name:'Analytics',items:[['analytics.read','Read stored analytics, post performance and demographics']]},
@@ -149,7 +149,7 @@ type Operation={scope:Scope;write:boolean;schema:z.ZodType;run:(ctx:Ctx,p:unknow
 function op<T extends z.ZodType>(scope:Scope,write:boolean,schema:T,run:(ctx:Ctx,p:z.output<T>,requestId:string,trusted?:boolean)=>Promise<unknown>):Operation {
   return {scope,write,schema,run:(ctx,p,r,trusted)=>run(ctx,schema.parse(p),r,trusted)};
 }
-const uploadSchema=z.object({rootId:uuid,brandId:uuid,projectId:uuid.nullable().optional(),fileName:z.string().min(1).max(120),mime:z.string().max(40),base64:z.string().min(4).max(Math.ceil(MAX_MEDIA_BYTES/3)*4).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict();
+const uploadSchema=z.object({rootId:uuid,brandId:uuid,projectId:uuid.nullable().optional(),fileName:z.string().min(1).max(120),mime:z.string().max(40),base64:z.string().min(4).max(MAX_MEDIA_BASE64_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict();
 const projectPatch=z.object({title:title.optional(),brief:text.optional(),concept:text.optional(),songTitle:z.string().max(300).optional(),hook:text.optional(),narrative:text.optional(),distributionPlan:text.optional()}).strict();
 const longScene=z.object({projectId:uuid,sceneId:uuid,prompt:text.optional(),label:z.string().max(160).optional(),mode:z.enum(['vocal','broll']).optional(),continuity:z.enum(['shot','context']).optional(),workerId:uuid.nullable().optional(),durationSec:z.number().min(1).max(120).optional()}).strict();
 const scenePair=z.object({projectId:uuid,sceneId:uuid}).strict();
@@ -193,6 +193,28 @@ export const operations:Record<string,Operation>={
  'production.runEvent':op('projects.update',true,z.object({runId:uuid,stage:z.enum(['RESEARCHING','PLANNED','BLOCKED','FAILED']),detail:z.string().min(1).max(4000)}).strict(),(ctx,p)=>recordProductionPlanning(ctx,p)),
  'production.runs':op('generation.read',false,empty,ctx=>productionRunBoard(ctx)),
  'production.runDetail':op('generation.read',false,id,(ctx,p)=>productionRunBoard(ctx,p.id)),
+ // These new writes are intentionally owner-reviewed; do not add them to the creative allowlist.
+ 'production.runControl':op('generation.cancel',true,z.object({id:uuid,action:z.enum(['pause','resume','stop'])}).strict(),(ctx,p)=>controlProductionRun(ctx,p.id,p.action)),
+ 'generation.imageCapabilities':op('image.generate',false,empty,async ctx=>{const status=await aiStatus(ctx);return {provider:'gemini',availability:status.gemini,enabled:status.settings.enabled,imageModel:status.settings.imageModel,imageSize:status.settings.imageSize,usage:status.usage.image,billingNote:status.billingNote};}),
+ 'generation.image':op('image.generate',true,z.object({projectId:uuid,prompt:z.string().trim().min(1).max(4000),referenceFileIds:z.array(uuid).max(8),aspect:z.enum(['16:9','9:16','1:1','4:5','3:2','4:3','21:9']),acceptBillable:z.literal(true)}).strict(),async(ctx,p,r)=>{const job=await queueProjectImage(ctx,{...p,idempotencyKey:r});return {id:job.id,status:job.status};}),
+ 'generation.imageStatus':op('generation.read',false,id,async(ctx,p)=>{
+   const [job]=await query(ctx,sql`select id,status,error,target_id as "projectId",brand_id as "brandId",created_at,finished_at from ai_jobs where org_id=${ctx.orgId} and id=${p.id} and target_type='creative_project' and task='scene_image_generate'`);
+   if(!job)throw notFound('Project image job');
+   const assets=job.status==='COMPLETED'?await query(ctx,sql`select id,mime,bytes,width,height,reference_ids from ai_assets where org_id=${ctx.orgId} and job_id=${p.id} and kind='image' and path like 'ai/%'`):[];
+   return {job,assets};
+ }),
+ 'media.importGeneratedImage':op('media.upload.image',true,z.object({assetId:uuid,rootId:uuid,projectId:uuid,brandId:uuid}).strict(),async(ctx,p,r)=>{
+   const [asset]=rows<{mime:string;bytes:number}>(await ctx.db.execute(sql`select a.mime,a.bytes from ai_assets a join ai_jobs j on j.id=a.job_id and j.org_id=a.org_id join creative_projects c on c.id=a.project_id and c.org_id=a.org_id and c.brand_id=j.brand_id where a.id=${p.assetId} and a.org_id=${ctx.orgId} and a.kind='image' and j.status='COMPLETED' and j.target_type='creative_project' and j.target_id=c.id::text and c.id=${p.projectId} and c.brand_id=${p.brandId} and c.deleted_at is null`));
+   if(!asset)throw notFound('Completed project image');
+   const ext=asset.mime==='image/png'?'png':asset.mime==='image/jpeg'?'jpg':asset.mime==='image/webp'?'webp':null;
+   if(!ext||asset.bytes<1||asset.bytes>MAX_GENERATED_IMAGE_BYTES)throw badRequest('Generated image type or size is unsupported.');
+   const opened=await openAiAsset(ctx,p.assetId);
+   const info=await stat(opened.abs);
+   if(!info.isFile()||info.size!==asset.bytes||info.size>MAX_GENERATED_IMAGE_BYTES)throw badRequest('Generated asset size changed.');
+   const bytes=await readFile(opened.abs);
+   if(bytes.length!==asset.bytes)throw badRequest('Generated asset size changed.');
+   return importGeneratedImage(ctx,{rootId:p.rootId,projectId:p.projectId,brandId:p.brandId,fileName:'generated-'+p.assetId+'.'+ext,mime:asset.mime},r,bytes);
+ }),
  'generation.h3':op('generation.submit',true,h3Form.extend({runId:uuid.optional(),sourceEvidence:z.string().min(1).max(20000).optional()}),async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p,{skipDraft:trusted===true,serialDispatch:trusted===true,runId:p.runId,sourceEvidence:p.sourceEvidence});return {id:r.job.id,status:r.job.status};}),
  'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateLtx(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),

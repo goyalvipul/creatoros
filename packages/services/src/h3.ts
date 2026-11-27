@@ -460,14 +460,24 @@ function checkForm(form: H3Form) {
   });
 }
 
-type H3Options={skipDraft?:boolean;serialDispatch?:boolean;runId?:string;sourceEvidence?:string};
+type H3Options={skipDraft?:boolean;serialDispatch?:boolean;runId?:string;sourceEvidence?:string;productionPlanId?:string;productionAttempt?:number;retryOf?:string};
 export async function generateH3(ctx:Ctx,form:H3Form,options:H3Options={}):Promise<{job:{id:string;status:string}}> {
   if(options.runId){
     if(!form.projectId||!options.sourceEvidence?.trim())throw badRequest('Run submission needs project and source-footage evidence.');
     return ctx.db.transaction(async tx=>{
       const scoped={...ctx,db:tx};
       const existing=await assertRunSubmission(scoped,options.runId!,form.projectId!);
-      if(existing)return {job:existing};
+      if(options.productionPlanId){
+        const [plan]=rowsOf<{state:string;attempt:number;jobId:string|null}>(await tx.execute(sql`select state,attempt,job_id as "jobId" from production_plans where id=${options.productionPlanId} and org_id=${ctx.orgId} and run_id=${options.runId} and project_id=${form.projectId} for update`));
+        if(!plan||!['QUEUE_VIDEO','REGENERATE'].includes(plan.state)||!options.productionAttempt||options.productionAttempt!==plan.attempt+1)throw badRequest('Production plan is not ready to queue this attempt.');
+        if(existing){
+          const [previous]=rowsOf<{settings:Record<string,unknown>}>(await tx.execute(sql`select settings from generation_jobs where id=${existing.id} and org_id=${ctx.orgId}`));
+          if(previous?.settings.productionPlanId!==options.productionPlanId)throw badRequest('This project already has an unrelated H3 job in the run.');
+          if(previous.settings.productionAttempt===options.productionAttempt)return {job:existing};
+          if(plan.state!=='REGENERATE'||options.retryOf!==existing.id||plan.jobId!==existing.id||existing.status!=='SUCCEEDED'||previous.settings.productionQualityPassed===true||previous.settings.productionAttempt!==plan.attempt)throw badRequest('Only a verified rejected render can be replaced.');
+          await tx.execute(sql`update generation_jobs set settings=settings||'{"productionSuperseded":true,"postProduction":{"phase":"STOPPED","detail":"Rejected quality attempt; original output retained."}}'::jsonb,updated_at=now() where id=${existing.id} and org_id=${ctx.orgId}`);
+        }else if(options.retryOf)throw badRequest('Previous render no longer matches the production run.');
+      }else if(existing)return {job:existing};
       await tx.execute(sql`update creative_projects set content_format=case when content_format='OTHER' then 'SHORTS'::content_format else content_format end,type=case when type='OTHER' then 'SHORT_FORM'::project_type else type end,updated_at=now() where id=${form.projectId} and org_id=${ctx.orgId}`);
       const result=await generateH3Internal(scoped,form,{...options,skipDraft:true});
       await setAutomatedProjectStage(tx,ctx.orgId,form.projectId,'IN_PROGRESS','H3 production job queued.');
@@ -505,6 +515,7 @@ async function generateH3Internal(ctx: Ctx, form: H3Form, options:H3Options) {
         workerLabel: worker.label,
         serialDispatch: options.serialDispatch === true,
         ...(options.runId?{productionRunId:options.runId,sourceEvidence:options.sourceEvidence,postProduction:{phase:'WAIT_INDEX',attempt:1}}:{}),
+        ...(options.productionPlanId?{productionPlanId:options.productionPlanId,productionAttempt:options.productionAttempt,productionQualityPassed:false}:{}),
         progress: { phase: 'waiting', detail: 'Waiting for the selected GPU.' },
         imageFileId: form.imageFileId,
         imageUploadName: form.imageUploadName,
@@ -741,7 +752,7 @@ export async function submitH3Job(db: Db, env: ServiceEnv, jobId: string) {
     if (queued?.id!==jobId) return null;
     const running=rowsOf<{id:string}>(await tx.execute(sql`
       select id from generation_jobs where org_id=${candidate.orgId}
-        and settings->>'workerId'=${worker.id} and status='RUNNING' limit 1`))[0];
+        and settings->>'workerId'=${worker.id} and status='RUNNING' union all select id from local_image_jobs where org_id=${candidate.orgId} and worker_id=${worker.id} and state in ('SUBMITTING','RENDERING') limit 1`))[0];
     const queue=running?'busy':await readWorkerQueue(worker.baseUrl);
     if(queue!=='free'){
       await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({progress:{phase:'waiting',detail:queue==='offline'?'Waiting for ComfyUI to reconnect.':'Waiting for the selected GPU to finish existing work.'}})}::jsonb,updated_at=now()

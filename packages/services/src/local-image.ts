@@ -156,7 +156,74 @@ export async function runDueLocalImages(db:Db,env:ServiceEnv) {
   const recovered=rows<{id:string;orgId:string;runId:string|null;fileId:string}>(await db.execute(sql`update local_image_jobs i set state='COMPLETE',file_id=f.id,error=null,output=coalesce(i.output,'{}'::jsonb)||jsonb_build_object('fileId',f.id,'recovered',true),updated_at=now()
     from file_instances f join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id
     where i.state='UNCERTAIN' and i.prompt_id is not null and f.org_id=i.org_id and f.root_id=i.root_id and f.file_type='IMAGE' and f.availability='AVAILABLE' and f.archived_at is null
-      and f.file_name in ('kk_'||i.id::text||'_local-'||i.id::text||'.png','kk_'||i.id::text||'_local-'||i.id::text||'.jpg','kk_'||i.id::text||'_local-'||i.id::text||'.jpeg','kk_'||i.id::text||'_local-'||i.id::text||'.webp')
+      and i.output->>'filename' is not null and f.file_name='kk_'||i.id::text||'_local-'||i.id::text||'.'||lower(substring(i.output->>'filename' from '[^.]+
+      and a.project_id=i.project_id and a.brand_id=i.brand_id and a.source='gateway-upload' and not a.is_archived
+    returning i.id,i.org_id as "orgId",i.run_id as "runId",f.id as "fileId"`));
+  for(const j of recovered)await runEvent(db,j.orgId,j.runId,'IMAGE_RECOVERED','Verified existing indexed image '+j.fileId+'.');
+  const candidates=rows<Job>(await db.execute(sql`select ${columns} from local_image_jobs where state in ('QUEUED','RENDERING') order by updated_at,id limit 12`));
+  for(const job of candidates){
+    const ctx=systemCtx({db,env},job.orgId);
+    const [worker]=rows<{baseUrl:string;enabled:boolean}>(await db.execute(sql`select base_url as "baseUrl",enabled from gpu_workers where id=${job.workerId} and org_id=${job.orgId}`));
+    if(!worker?.enabled){await finish(db,job,'FAILED','GPU worker disabled or removed.');continue;}
+    if(job.state==='QUEUED'){
+      const claimed=await db.transaction(async tx=>{
+        const [w]=rows<{id:string}>(await tx.execute(sql`select id from gpu_workers where id=${job.workerId} and org_id=${job.orgId} and enabled for update`));
+        if(!w)return false;
+        if(job.runId&&!rows(await tx.execute(sql`select r.id from production_runs r join organizations o on o.id=r.org_id where r.id=${job.runId} and r.org_id=${job.orgId} and r.state='ACTIVE' and coalesce(o.settings->'productionAutomation'->(r.brand_id::text)->>'paused','false')<>'true'`)).length)return false;
+        if(rows(await tx.execute(sql`select id from generation_jobs where org_id=${job.orgId} and settings->>'workerId'=${job.workerId} and status='RUNNING' union all select id from local_image_jobs where org_id=${job.orgId} and worker_id=${job.workerId} and state in ('SUBMITTING','RENDERING')`)).length||await readWorkerQueue(worker.baseUrl)!=='free')return false;
+        return rows(await tx.execute(sql`update local_image_jobs set state='SUBMITTING',updated_at=now() where id=${job.id} and org_id=${job.orgId} and state='QUEUED' returning id`)).length>0;
+      });
+      if(!claimed)continue;
+      job.state='SUBMITTING';
+      let submitted=false;
+      try{
+        const configured=(await loadTemplates(env)).find(t=>t.template.id===job.payload.workflowId&&t.hash===job.payload.hash);
+        if(!configured)throw badRequest('Approved workflow changed; submit a new plan.');
+        const names:string[]=[];
+        for(const id of job.payload.references)if(!rows(await db.execute(sql`select id from file_instances where id=${id} and org_id=${job.orgId} and file_type='IMAGE' and availability='AVAILABLE' and archived_at is null`)).length)throw badRequest('A previously approved reference is no longer available.');
+        for(const [i,id] of job.payload.references.entries())names.push(await uploadReference(ctx,job,worker.baseUrl,id,i));
+        const graph=buildLocalImageGraph(configured.template,{...job.payload,names,id:job.id});
+        if(job.runId&&!rows(await db.execute(sql`select r.id from production_runs r join organizations o on o.id=r.org_id where r.id=${job.runId} and r.org_id=${job.orgId} and r.state='ACTIVE' and coalesce(o.settings->'productionAutomation'->(r.brand_id::text)->>'paused','false')<>'true'`)).length){
+          await finish(db,job,'QUEUED');return {advanced:1};
+        }
+        submitted=true;
+        const res=await fetch(new URL('/prompt',worker.baseUrl),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:graph,client_id:job.id}),signal:AbortSignal.timeout(30000),redirect:'error'});
+        if(!res.ok){if(res.status>=400&&res.status<500)submitted=false;throw badRequest('ComfyUI rejected the configured image workflow ('+res.status+').');}
+        const result=z.object({prompt_id:z.string().min(1).max(200)}).parse(await res.json());
+        await db.execute(sql`update local_image_jobs set state='RENDERING',prompt_id=${result.prompt_id},updated_at=now() where id=${job.id} and org_id=${job.orgId} and state='SUBMITTING'`);
+        await runEvent(db,job.orgId,job.runId,'IMAGE_RENDERING','Local prompt accepted: '+job.id);
+      }catch{await finish(db,job,submitted?'UNCERTAIN':'FAILED',submitted?'Image prompt submission not confirmed; do not replay.':'Local workflow validation, reference transfer or submission failed.');}
+      return {advanced:1};
+    }
+    if(!job.promptId){await finish(db,job,'UNCERTAIN','Missing prompt acknowledgement.');continue;}
+    try{
+      const res=await fetch(new URL('/history/'+encodeURIComponent(job.promptId),worker.baseUrl),{signal:AbortSignal.timeout(10000),redirect:'error'});
+      if(!res.ok)continue;
+      const body=await res.json() as Record<string,{status?:{completed?:boolean;status_str?:string};outputs?:Record<string,{images?:unknown[]}>}>;
+      const entry=body[job.promptId];
+      if(entry?.status?.status_str==='error'){await finish(db,job,'FAILED','ComfyUI reported image render failure.');continue;}
+      if(!entry||entry.status?.completed!==true){if(Date.now()-Date.parse(job.updatedAt)>3*60*60_000)await finish(db,job,'UNCERTAIN','Image render exceeded three hours; inspect GPU history.');continue;}
+      const configured=(await loadTemplates(env)).find(t=>t.template.id===job.payload.workflowId&&t.hash===job.payload.hash);
+      if(!configured){await finish(db,job,'FAILED','Workflow changed after submission; inspect original output.');continue;}
+      const output=z.object({filename:z.string().regex(/^[a-zA-Z0-9_.-]+\.(png|jpe?g|webp)$/i),subfolder:z.literal('kemokem'),type:z.literal('output')}).safeParse(entry.outputs?.[configured.template.outputNode]?.images?.[0]);
+      if(!output.success||!output.data.filename.startsWith('local_'+job.id)){await finish(db,job,'FAILED','Expected job-specific SaveImage output missing.');continue;}
+      const claimed=rows(await db.execute(sql`update local_image_jobs set state='IMPORTING',output=${JSON.stringify(output.data)}::jsonb,updated_at=now() where id=${job.id} and org_id=${job.orgId} and state='RENDERING' returning id`));
+      if(!claimed.length)continue;
+      job.state='IMPORTING';
+      const url=new URL('/view',worker.baseUrl);url.search=new URLSearchParams(output.data).toString();
+      const image=await fetch(url,{signal:AbortSignal.timeout(60000),redirect:'error'});
+      if(!image.ok||!image.body)throw badRequest('Local output not accessible.');
+      const bytes=await readBounded(image.body,MAX_GENERATED_IMAGE_BYTES);
+      const ext=output.data.filename.split('.').pop()!.toLowerCase();
+      const mime=ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
+      const result=await importGeneratedImage(ctx,{rootId:job.rootId,brandId:job.brandId,projectId:job.projectId,fileName:'local-'+job.id+'.'+ext,mime},job.id,bytes);
+      await finish(db,job,'COMPLETE',null,result,result.fileId);
+      return {advanced:1};
+    }catch{if(job.state==='IMPORTING')await finish(db,job,'UNCERTAIN','Output import not confirmed; inspect scanner and library before retrying.');}
+  }
+  return {advanced:0};
+}
+))
       and a.project_id=i.project_id and a.brand_id=i.brand_id and a.source='gateway-upload' and not a.is_archived
     returning i.id,i.org_id as "orgId",i.run_id as "runId",f.id as "fileId"`));
   for(const j of recovered)await runEvent(db,j.orgId,j.runId,'IMAGE_RECOVERED','Verified existing indexed image '+j.fileId+'.');

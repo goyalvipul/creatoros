@@ -7,7 +7,7 @@ import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
 import { registerBinaryUploadRoutes } from './ai-gateway-binary';
-import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative } from './ai-gateway-production-policy';
+import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative, authorizeDedicatedImageUpload, isDedicatedImageOperation } from './ai-gateway-production-policy';
 
 const mode = z.enum(['local', 'hosted']);
 const scope = z.string().refine(s => (scopes as readonly string[]).includes(s), 'Unknown permission');
@@ -109,7 +109,8 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       if(existing)return {row:existing,execute:false};
       const policy=auth.mode==='hosted'?productionPolicySchema.safeParse(connection.production_policy):null;
       const direct=canExecuteCreative(connection.active_scopes,body.operation);
-      const trusted=direct?await authorizeCreative({...auth.ctx,db:tx},body.operation,input):policy?.success===true&&await authorizeProduction({...auth.ctx,db:tx},policy.data,body.operation,input);
+      const dedicated=auth.mode==='hosted'&&await authorizeDedicatedImageUpload({...auth.ctx,db:tx},body.operation,input);
+      const trusted=dedicated||(direct?await authorizeCreative({...auth.ctx,db:tx},body.operation,input):policy?.success===true&&await authorizeProduction({...auth.ctx,db:tx},policy.data,body.operation,input));
       const [created]=rows<{id:string;status:string;result:unknown}>(await tx.execute(sql`insert into ai_gateway_requests(id,org_id,mode,credential_hash,operation,scope,input,status,policy_authorized) values(${body.requestId},${auth.ctx.orgId},${auth.mode},${auth.hash},${body.operation},${operation.scope},${json}::jsonb,${trusted?'RUNNING':'PENDING'},${trusted}) on conflict do nothing returning id,status,result`));
       if(!created)throw conflict('Request ID already used.');
       await audit({...auth.ctx,db:tx},trusted?'ai_gateway.policy_authorized':'ai_gateway.proposed',{type:'ai_gateway_request',id:created.id},undefined,{operation:body.operation,mode:auth.mode});
@@ -167,7 +168,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   });
   app.addHook('onSend',async(req,reply,payload)=>{if(req.url.split('?')[0]!.startsWith('/api/v1/ai-gateway/'))reply.header('cache-control','no-store');return payload;});
   app.get('/ai-gateway/status',async req=>{const a=await authenticate(req);return envelope(req,{mode:a.mode,scopes:a.scopes});});
-  app.get('/ai-gateway/tools',async req=>{const a=await authenticate(req);return envelope(req,Object.entries(operations).filter(([,op])=>a.scopes.includes(op.scope)).map(([name,op])=>({name,scope:op.scope,approvalRequired:op.write,conditionalProductionAuthorization:op.write&&(productionOperations.includes(name)||creativeOperations.includes(name)),inputSchema:z.toJSONSchema(op.schema,{io:'input',unrepresentable:'any'})})));});
+  app.get('/ai-gateway/tools',async req=>{const a=await authenticate(req);return envelope(req,Object.entries(operations).filter(([,op])=>a.scopes.includes(op.scope)).map(([name,op])=>({name,scope:op.scope,approvalRequired:op.write,conditionalProductionAuthorization:op.write&&(productionOperations.includes(name)||creativeOperations.includes(name)||isDedicatedImageOperation(name)),inputSchema:z.toJSONSchema(op.schema,{io:'input',unrepresentable:'any'})})));});
   app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   registerBinaryUploadRoutes(app,authenticate,envelope);

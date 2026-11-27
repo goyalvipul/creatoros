@@ -22,7 +22,7 @@ export const productionPlanInputSchema=z.object({
   maxRegenerations:z.number().int().min(0).max(2),acceptBillableQuality:z.literal(true),
 }).strict();
 type Input=z.infer<typeof productionPlanInputSchema>;
-type Payload=Input & {assetIds:string[];reviewRefs:string[];corrections?:string[]};
+type Payload=Input & {assetIds:string[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];inspectionRetryFor?:number;reviewStage?:string};
 type Plan={id:string;orgId:string;runId:string;projectId:string;brandId:string;payload:Payload;state:string;attempt:number;jobId:string|null;quality:unknown;detail:string|null;lease:string|null;updatedAt:string};
 const columns=sql`p.id,p.org_id as "orgId",p.run_id as "runId",p.project_id as "projectId",p.brand_id as "brandId",p.payload,p.state,p.attempt,p.job_id as "jobId",p.quality,p.detail,p.lease,p.updated_at as "updatedAt"`;
 type Form=z.output<typeof h3Form>;
@@ -82,7 +82,7 @@ export async function submitProductionPlan(ctx:Ctx,input:Input,id:string) {
   for(const a of input.assets)await validateLocalImageInput(ctx,a.image);
   if(!rows(await ctx.db.execute(sql`select id from gpu_workers where id=${f.workerId} and org_id=${ctx.orgId} and enabled`)).length)throw notFound('Enabled H3 GPU');
   if((await runPrefs(ctx))[project.brandId]?.paused)throw conflict('Creator production is paused.');
-  const payload:Payload={...input,reviewRefs,assetIds:input.assets.map(()=>randomUUID())};
+  const payload:Payload={...input,reviewRefs,assetIds:input.assets.map(()=>randomUUID()),imageRetries:input.assets.map(()=>0)};
   return ctx.db.transaction(async tx=>{
     const [run]=rows<{target:number;state:string}>(await tx.execute(sql`select target,state from production_runs where id=${input.runId} and org_id=${ctx.orgId} and brand_id=${project.brandId} for update`));
     if(!run||run.state!=='ACTIVE')throw conflict('Select an active production run for this creator.');
@@ -129,8 +129,18 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
   }
   if(p.state==='WAIT_IMAGES'||p.state==='QUEUE_VIDEO'||p.state==='REGENERATE'){
     const jobs=await Promise.all(payload.assetIds.map(id=>localImageStatus(ctx,id)));
-    const failed=jobs.find(j=>['FAILED','UNCERTAIN','CANCELLED'].includes(j.state));
-    if(failed)return finish(ctx,p,lease,'REVIEW','Local asset requires review: '+(failed.error??failed.state));
+    const failureIndex=jobs.findIndex(j=>['FAILED','UNCERTAIN','CANCELLED'].includes(j.state));
+    if(failureIndex>=0){
+      const failed=jobs[failureIndex]!;
+      // A confirmed GPU execution failure may get one new seed; never retry an uncertain write.
+      const retries=payload.imageRetries??payload.assets.map(()=>0);
+      if(failed.state==='FAILED'&&failed.error==='ComfyUI reported image render failure.'&&(retries[failureIndex]??0)<1){
+        const assetIds=[...payload.assetIds];assetIds[failureIndex]=randomUUID();
+        const nextRetries=[...retries];nextRetries[failureIndex]=1;
+        return finish(ctx,p,lease,'PREPARING','Confirmed local image render failure; one bounded recovery attempt.',{payload:{...payload,assetIds,imageRetries:nextRetries}});
+      }
+      return finish(ctx,p,lease,'REVIEW','Local asset requires review: '+(failed.error??failed.state),{payload:{...payload,reviewStage:p.state}});
+    }
     if(jobs.some(j=>j.state!=='COMPLETE'||!j.fileId))return finish(ctx,p,lease,'WAIT_IMAGES','Waiting for local image output registration.');
     if(p.state==='WAIT_IMAGES')return finish(ctx,p,lease,'QUEUE_VIDEO','All generated assets have permanent library IDs.');
     const form=resolvePlanForm(payload,jobs.map(j=>j.fileId!));
@@ -156,18 +166,46 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
     let semantic:SemanticQuality|null=null;
     if(!technical.defects.length){
       if(!payload.acceptBillableQuality)throw badRequest('Billable quality review not authorized.');
-      semantic=await inspectProductionSemantics(ctx,{fileId:file,brandId:p.brandId,referenceFileIds:payload.reviewRefs,brief:payload.brief+'\n'+payload.form.segments.map(s=>s.prompt).join('\n'),requirements:required});
+      semantic=await inspectProductionSemantics(ctx,{fileId:file,brandId:p.brandId,referenceFileIds:payload.reviewRefs,brief:payload.brief+'\nSource observations: '+payload.sourceEvidence+'\n'+payload.form.segments.map(s=>s.prompt).join('\n'),requirements:required});
     }
     const decision=qualityDecision(technical,semantic,required);
     const report={fileId:file,technical,semantic,...decision};
     if(decision.verdict==='PASS')return finish(ctx,p,lease,'PASSED','Automated quality gate passed; human review before publishing.',{quality:report});
     if(decision.verdict==='FAIL'&&p.attempt<=payload.maxRegenerations)return finish(ctx,p,lease,'REGENERATE','Observed defects; queue a corrected attempt within approved budget.',{quality:report,payload:{...payload,corrections:decision.corrections}});
-    return finish(ctx,p,lease,'REVIEW',decision.verdict==='FAIL'?'Quality failed; regeneration budget exhausted.':'Quality evidence is uncertain; human review required.',{quality:report});
+    return finish(ctx,p,lease,'REVIEW',decision.verdict==='FAIL'?'Quality failed; regeneration budget exhausted.':'Quality evidence is uncertain; human review required.',{quality:report,payload:{...payload,reviewStage:'QUALITY'}});
   }
+}
+export async function recoverProductionPlan(ctx:Ctx,id:string,action:'resume'|'retry_inspection'){
+  return ctx.db.transaction(async tx=>{
+    const [p]=rows<Plan>(await tx.execute(sql`select ${columns} from production_plans p where p.id=${id} and p.org_id=${ctx.orgId} for update`));
+    if(!p||p.state!=='REVIEW'||p.lease)throw conflict('Only a plan waiting for review can be recovered.');
+    if(!rows(await tx.execute(sql`select id from production_runs where id=${p.runId} and org_id=${ctx.orgId} and state='ACTIVE'`)).length)throw conflict('Resume the production run first.');
+    let state:string;let payload=p.payload;
+    if(action==='retry_inspection'){
+      if(p.attempt<1||payload.reviewStage!=='QUALITY'||payload.inspectionRetryFor===p.attempt||(p.quality as {verdict?:string}|null)?.verdict==='FAIL')throw conflict('Inspection retry is not available; failed or exhausted attempts cannot bypass the quality gate.');
+      state='QUALITY';payload={...payload,inspectionRetryFor:p.attempt};
+    }else{
+      const stage=payload.reviewStage;
+      if(!stage||!['PREPARING','WAIT_IMAGES','QUEUE_VIDEO','WAIT_VIDEO','REGENERATE'].includes(stage))throw conflict('This stage needs explicit inspection or a new approved plan.');
+      if(stage==='WAIT_IMAGES'||stage==='PREPARING'||stage==='QUEUE_VIDEO'||stage==='REGENERATE'){
+        const jobs=rows<{state:string}>(await tx.execute(sql`select state from local_image_jobs where org_id=${ctx.orgId} and id in (select jsonb_array_elements_text(${JSON.stringify(payload.assetIds)}::jsonb)::uuid)`));
+        if(jobs.some(j=>['UNCERTAIN','FAILED','CANCELLED'].includes(j.state)))throw conflict('An image job has not been safely reconciled; do not replay it.');
+      }
+      if(stage==='WAIT_VIDEO'){
+        const [job]=rows<{status:string}>(await tx.execute(sql`select status from generation_jobs where id=${p.jobId} and org_id=${ctx.orgId}`));
+        if(!job||['FAILED','CANCELLED'].includes(job.status))throw conflict('Render outcome requires GPU review; cannot silently retry.');
+      }
+      state=stage;
+    }
+    await tx.execute(sql`update production_plans set state=${state},payload=${JSON.stringify(payload)}::jsonb,detail='Owner requested bounded recovery.',updated_at=now() where id=${id} and org_id=${ctx.orgId}`);
+    await runEvent(tx,ctx.orgId,p.runId,'PLAN_RECOVERY','Owner requested '+action+'.',p.jobId);
+    await audit({...ctx,db:tx},'production.plan.recovery',{type:'production_run',id:p.runId},undefined,{planId:id,action});
+    return {id,state};
+  });
 }
 export async function runDueProductionPlans(db:Db,env:ServiceEnv){
   // Repeat only idempotent DB transitions. A paid review with uncertain outcome is never silently repeated.
-  await db.execute(sql`update production_plans set state=case when state='QUALITY' then 'REVIEW' else state end,detail=case when state='QUALITY' then 'Quality worker interrupted; provider outcome uncertain. Review manually.' else detail end,lease=null,lease_at=null,updated_at=now() where lease is not null and lease_at<now()-interval '12 minutes'`);
+  await db.execute(sql`update production_plans set state=case when state='QUALITY' then 'REVIEW' else state end,detail=case when state='QUALITY' then 'Quality worker interrupted; provider outcome uncertain. Review manually.' else detail end,payload=case when state='QUALITY' then payload||'{"reviewStage":"QUALITY"}'::jsonb else payload end,lease=null,lease_at=null,updated_at=now() where lease is not null and lease_at<now()-interval '12 minutes'`);
   await db.execute(sql`update production_plans p set state='STOPPED',detail='Run stopped by owner.',updated_at=now() from production_runs r where p.run_id=r.id and p.org_id=r.org_id and r.state='STOPPED' and p.lease is null and p.state not in ('PASSED','FAILED','REVIEW','STOPPED')`);
   const [p]=rows<Plan>(await db.execute(sql`select ${columns} from production_plans p join production_runs r on r.id=p.run_id and r.org_id=p.org_id join organizations o on o.id=p.org_id where p.state in ('PREPARING','WAIT_IMAGES','QUEUE_VIDEO','WAIT_VIDEO','QUALITY','REGENERATE') and p.lease is null and r.state='ACTIVE' and coalesce(o.settings->'productionAutomation'->(p.brand_id::text)->>'paused','false')<>'true' order by p.updated_at,p.id limit 1`));
   if(!p)return {advanced:0};
@@ -175,6 +213,6 @@ export async function runDueProductionPlans(db:Db,env:ServiceEnv){
   const claimed=rows(await db.execute(sql`update production_plans set lease=${lease},lease_at=now() where id=${p.id} and org_id=${p.orgId} and state=${p.state} and lease is null returning id`));
   if(!claimed.length)return {advanced:0};
   try{await advance(ctx,p,lease);}
-  catch(e){await finish(ctx,p,lease,'REVIEW',redactSecrets(e instanceof Error?e.message:'Production stage failed.'));}
+  catch(e){await finish(ctx,p,lease,'REVIEW',redactSecrets(e instanceof Error?e.message:'Production stage failed.'),{payload:{...p.payload,reviewStage:p.state}});}
   return {advanced:1};
 }

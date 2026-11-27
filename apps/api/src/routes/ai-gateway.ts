@@ -99,7 +99,6 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     if(!auth.scopes.includes(operation.scope))throw forbidden('Gateway permission not enabled.');
     const input=operation.schema.parse(body.input);
     if(!operation.write)return operation.run(auth.ctx,input,'read-only');
-    if(body.operation==='generation.h3')await validateForm(auth.ctx,h3Form.parse(input));
     if(body.operation==='media.uploadImage'||body.operation==='media.uploadAudio') decodeMedia(input as {fileName:string;mime:string;base64:string},body.operation==='media.uploadImage'?'IMAGE':'AUDIO');
     if(!body.requestId)throw badRequest('A unique UUID requestId is required for writes.');
     const json=JSON.stringify(input);
@@ -110,6 +109,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       if(!connection)throw forbidden('Connector authorization changed.');
       const [existing]=rows<{id:string;status:string;result:unknown}>(await tx.execute(sql`select id,status,result from ai_gateway_requests where id=${body.requestId} and org_id=${auth.ctx.orgId} and mode=${auth.mode} and credential_hash=${auth.hash} and operation=${body.operation} and input=${json}::jsonb`));
       if(existing)return {row:existing,execute:false};
+      if(body.operation==='generation.h3')await validateForm({...auth.ctx,db:tx},h3Form.parse(input));
       const policy=auth.mode==='hosted'?productionPolicySchema.safeParse(connection.production_policy):null;
       const direct=canExecuteCreative(connection.active_scopes,body.operation);
       const dedicated=auth.mode==='hosted'&&await authorizeDedicatedImageUpload({...auth.ctx,db:tx},body.operation,input);

@@ -10,7 +10,19 @@ import { audit, badRequest, conflict, notFound, getDeviceSigningKey, signAgentFe
 
 const exec = promisify(execFile);
 const rows = <T>(r: unknown) => (r as {rows:T[]}).rows;
-export const MAX_MEDIA_BYTES = 2 * 1024 * 1024;
+const MIB = 1024 * 1024;
+export const DEFAULT_MEDIA_BYTES = 5 * MIB;
+// A bounded ceiling keeps the JSON/Base64 request path below the gateway's HTTP budget.
+// Larger assets should use a separate streaming upload protocol.
+export function gatewayMediaLimit(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return DEFAULT_MEDIA_BYTES;
+  if (!/^[1-5]$/.test(raw)) throw new Error('AI_GATEWAY_MEDIA_MAX_MIB must be an integer from 1 to 5.');
+  return Number(raw) * MIB;
+}
+export const MAX_MEDIA_BYTES = gatewayMediaLimit(process.env.AI_GATEWAY_MEDIA_MAX_MIB);
+export const MAX_MEDIA_BASE64_CHARS = Math.ceil(MAX_MEDIA_BYTES / 3) * 4;
+export const MAX_GATEWAY_MEDIA_JSON_BYTES = MAX_MEDIA_BASE64_CHARS + 4096;
+export const MAX_GATEWAY_INVOKE_BODY_BYTES = MAX_GATEWAY_MEDIA_JSON_BYTES + 4096;
 const mimeMap = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', webp:'image/webp', wav:'audio/wav', mp3:'audio/mpeg', flac:'audio/flac' } as const;
 
 export function decodeMedia(input: {fileName:string;mime:string;base64:string}, kind:'IMAGE'|'AUDIO') {
@@ -19,9 +31,9 @@ export function decodeMedia(input: {fileName:string;mime:string;base64:string}, 
   const ext=name.split('.').pop()!.toLowerCase() as keyof typeof mimeMap;
   const mime=mimeMap[ext];
   if(!mime||mime!==input.mime||!mime.startsWith(kind==='IMAGE'?'image/':'audio/'))throw badRequest('File extension and MIME must match the upload kind.');
-  if(input.base64.length>Math.ceil(MAX_MEDIA_BYTES/3)*4||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64))throw badRequest('Invalid or oversized base64.');
+  if(input.base64.length>MAX_MEDIA_BASE64_CHARS||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64))throw badRequest('Invalid or oversized base64.');
   const bytes=Buffer.from(input.base64,'base64');
-  if(!bytes.length||bytes.length>MAX_MEDIA_BYTES||bytes.toString('base64')!==input.base64)throw badRequest('Use canonical base64, at most 2 MiB decoded.');
+  if(!bytes.length||bytes.length>MAX_MEDIA_BYTES||bytes.toString('base64')!==input.base64)throw badRequest(`Use canonical base64, at most ${MAX_MEDIA_BYTES / MIB} MiB decoded.`);
   const signature=ext==='png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):
     ext==='jpg'||ext==='jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:
     ext==='webp'?bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP':

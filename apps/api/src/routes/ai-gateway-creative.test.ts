@@ -3,7 +3,7 @@ import { canExecuteCreative, creativeOperations, dailyGatewayLimit, generationLi
 describe('creative execution boundary',()=>{
   it('requires the explicit execution scope',()=>expect(canExecuteCreative(['projects.write'],'projects.create')).toBe(false));
   it('classifies internal operations only',()=>{
-    for(const name of ['projects.create','generation.h3','generation.ltx','generation.autogen','generation.longscene','media.uploadImage','media.uploadAudio','publishing.draft','publishing.thumbnail'])expect(canExecuteCreative(['production.execute'],name)).toBe(true);
+    for(const name of ['projects.create','generation.h3','generation.ltx','generation.autogen','generation.longscene','media.uploadImage','media.uploadAudio','publishing.draft','publishing.thumbnail','production.qualityReport','production.finalize'])expect(canExecuteCreative(['production.execute'],name)).toBe(true);
     for(const name of ['publishing.schedule','publishing.cancel','publishing.reschedule','replies.send','generation.cancelClip','generation.cancelScene','media.analyze','generation.image','media.importGeneratedImage','production.runControl','production.planSubmit','production.planRecover','generation.localImage','generation.localImageCancel','unknown','constructor','__proto__'])expect(canExecuteCreative(['production.execute'],name)).toBe(false);
     expect(new Set(creativeOperations).size).toBe(creativeOperations.length);
   });
@@ -33,4 +33,18 @@ describe('configured gateway limits and dedicated upload boundary',()=>{
     expect(isDedicatedImageOperation('media.uploadImage')).toBe(true);
     for(const op of ['media.prepareAudioUpload','media.uploadAudio','publishing.thumbnail','generation.h3'])expect(isDedicatedImageOperation(op)).toBe(false);
   });
+});
+
+import {operations} from './ai-gateway-operations';
+describe('production finalization catalogue',()=>{
+ it('accepts exactly one thumbnail source and exposes scoped finalization',()=>{
+  const itemId='00000000-0000-4000-8000-000000000001',socialAccountId='00000000-0000-4000-8000-000000000002',fileId='00000000-0000-4000-8000-000000000003';
+  const schema=operations['publishing.thumbnail']!.schema;
+  expect(schema.safeParse({itemId,socialAccountId,fileId}).success).toBe(true);
+  expect(schema.safeParse({itemId,socialAccountId,base64:'YWJj'}).success).toBe(true);
+  expect(schema.safeParse({itemId,socialAccountId,fileId,base64:'YWJj'}).success).toBe(false);
+  expect(schema.safeParse({itemId,socialAccountId}).success).toBe(false);
+  expect(operations['production.readiness']).toMatchObject({write:false,scope:'projects.read'});
+  expect(operations['production.finalize']).toMatchObject({write:true,scope:'projects.update'});
+ });
 });

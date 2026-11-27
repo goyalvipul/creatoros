@@ -5,7 +5,7 @@ import { sql, type Executor } from '@creatoros/db';
 import { audit, notify, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
-import { decodeMedia } from './ai-gateway-media';
+import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
 import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative } from './ai-gateway-production-policy';
 
 const mode = z.enum(['local', 'hosted']);
@@ -99,7 +99,8 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     if(body.operation==='media.uploadImage'||body.operation==='media.uploadAudio') decodeMedia(input as {fileName:string;mime:string;base64:string},body.operation==='media.uploadImage'?'IMAGE':'AUDIO');
     if(!body.requestId)throw badRequest('A unique UUID requestId is required for writes.');
     const json=JSON.stringify(input);
-    if(json.length>3000000)throw badRequest('Request too large.');
+    const mediaUpload=body.operation==='media.uploadImage'||body.operation==='media.uploadAudio';
+    if(Buffer.byteLength(json,'utf8')>(mediaUpload?MAX_GATEWAY_MEDIA_JSON_BYTES:3000000))throw badRequest('Request too large.');
     const claimed=await auth.ctx.db.transaction(async tx=>{
       const [connection]=rows<{production_policy:unknown;active_scopes:string[]}>(await tx.execute(sql`select g.production_policy,case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end as active_scopes from ai_gateway_connections g join organization_memberships m on m.org_id=g.org_id and m.user_id=case when g.mode='hosted' then g.hosted_owner else g.local_owner end join users u on u.id=m.user_id where g.org_id=${auth.ctx.orgId} and g.enabled and g.mode=${auth.mode} and (case when g.mode='hosted' then g.hosted_hash else g.local_hash end)=${auth.hash} and ${operation.scope}=any(case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end) and m.role='OWNER' and m.status='ACTIVE' and u.status='ACTIVE' for update of g`));
       if(!connection)throw forbidden('Connector authorization changed.');
@@ -166,7 +167,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   app.addHook('onSend',async(req,reply,payload)=>{if(req.url.split('?')[0]!.startsWith('/api/v1/ai-gateway/'))reply.header('cache-control','no-store');return payload;});
   app.get('/ai-gateway/status',async req=>{const a=await authenticate(req);return envelope(req,{mode:a.mode,scopes:a.scopes});});
   app.get('/ai-gateway/tools',async req=>{const a=await authenticate(req);return envelope(req,Object.entries(operations).filter(([,op])=>a.scopes.includes(op.scope)).map(([name,op])=>({name,scope:op.scope,approvalRequired:op.write,conditionalProductionAuthorization:op.write&&(productionOperations.includes(name)||creativeOperations.includes(name)),inputSchema:z.toJSONSchema(op.schema,{io:'input',unrepresentable:'any'})})));});
-  app.post('/ai-gateway/invoke',{bodyLimit:4*1024*1024,config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
+  app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   // Keep legacy endpoints on the same permission, execution and request-id path.
   app.get('/ai-gateway/projects',async req=>envelope(req,await invoke(await authenticate(req),{operation:'projects.list',input:{}})));

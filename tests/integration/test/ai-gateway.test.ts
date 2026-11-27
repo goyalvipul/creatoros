@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { freshDb, makeApi, type Api } from '../src/helpers';
+import { freshDb, makeApi, pairTestDevice, makeRoot, type Api } from '../src/helpers';
+import { brands, organizations, devices, eq } from '@creatoros/db';
+import type { Ctx } from '@creatoros/services';
 
 const gateway='/api/v1/ai-gateway';
 const admin='/api/v1/integrations/ai-gateway';
@@ -70,6 +72,39 @@ describe('private AI gateway',()=>{
   await api.call('POST',admin+'/settings',{cookie,body:{enabled:true,mode:'hosted',hostedScopes:['projects.read','production.execute']}});
   expect((await api.call('POST',gateway+'/invoke',{headers:auth(hosted),body:{...body,requestId:randomUUID()}})).status).toBe(403);
   await api.call('POST',admin+'/settings',{cookie,body:{enabled:true,mode:'hosted',hostedScopes:['projects.read','projects.write']}});
+ });
+ it('opens a dedicated image session without approval, but preserves scope, quota and other-root review',async()=>{
+  const [org]=await fresh.handle.db.select().from(organizations);
+  const ctx:Ctx={db:fresh.handle.db,env:api.config.env,orgId:org!.id,userId:org!.ownerUserId,actor:{type:'user',id:org!.ownerUserId},now:()=>new Date()};
+  const [brand]=await ctx.db.insert(brands).values({orgId:ctx.orgId,name:'Upload fixture'}).returning();
+  const scanner=await pairTestDevice(ctx);
+  await ctx.db.update(devices).set({state:'ONLINE'}).where(eq(devices.id,scanner.deviceId));
+  const dedicated=await makeRoot(ctx,scanner.deviceId,'D:\\ChatGPT_Uploads');
+  const other=await makeRoot(ctx,scanner.deviceId,'D:\\Other');
+  ctx.env.processEnv.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID=dedicated.id;
+  ctx.env.processEnv.AI_GATEWAY_DAILY_IMAGE_UPLOAD_LIMIT='1';
+  const input={rootId:dedicated.id,brandId:brand!.id,fileName:'fixture.png',mime:'image/png',size:64,sha256:'a'.repeat(64)};
+  const requestId=randomUUID();
+  const submit=(operation:string,body:unknown,id=randomUUID())=>api.call('POST',gateway+'/invoke',{headers:auth(hosted),body:{operation,requestId:id,input:body}});
+  try{
+   await api.call('POST',admin+'/settings',{cookie,body:{enabled:true,mode:'hosted',hostedScopes:['media.read']}});
+   expect((await submit('media.prepareImageUpload',input,requestId)).status).toBe(403);
+   await api.call('POST',admin+'/settings',{cookie,body:{enabled:true,mode:'hosted',hostedScopes:['media.upload.image','media.upload.audio']}});
+   const opened=await submit('media.prepareImageUpload',input,requestId);
+   expect(opened.status).toBe(200);expect(opened.body.data.status).toBe('COMPLETED');expect(opened.body.data.approvalRequired).toBe(false);expect(opened.body.data.result.uploadState).toBe('OPEN');
+   const status=await api.call('GET',gateway+'/uploads/'+requestId,{headers:auth(hosted)});
+   expect(status.status).toBe(200);expect(status.body.data.uploadState).toBe('OPEN');
+   expect((await submit('media.prepareImageUpload',input,requestId)).body.data.status).toBe('COMPLETED');
+   expect((await submit('media.prepareImageUpload',input)).status).toBe(409);
+   expect((await submit('media.prepareImageUpload',{...input,rootId:other.id})).body.data.status).toBe('PENDING');
+   expect((await submit('media.prepareAudioUpload',{...input,fileName:'fixture.wav',mime:'audio/wav'})).body.data.status).toBe('PENDING');
+   // Closing the test's unused session does not write any bytes or contact a scanner.
+   expect((await api.call('POST',gateway+'/uploads/'+requestId+'/cancel',{headers:auth(hosted)})).status).toBe(200);
+  }finally{
+   delete ctx.env.processEnv.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID;
+   delete ctx.env.processEnv.AI_GATEWAY_DAILY_IMAGE_UPLOAD_LIMIT;
+   await api.call('POST',admin+'/settings',{cookie,body:{enabled:true,mode:'hosted',hostedScopes:['projects.read','projects.write']}});
+  }
  });
  it('blocks approval after mode switch and invalidates rotated credentials',async()=>{
   const requestId=randomUUID();

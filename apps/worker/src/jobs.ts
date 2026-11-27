@@ -332,7 +332,7 @@ export const JOB_TABLE = {
   'drive-sync': jobDriveSync,
   'publish-due': jobDuePublishes,
   ltx: jobLtx,
-  production: async (d:WorkerDeps) => (await import('@creatoros/services')).runDueProduction(d.db,d.env),
+  production: async (d:WorkerDeps) => { const services=await import('@creatoros/services'); await services.runDueLocalImages(d.db,d.env); await services.runDueProductionPlans(d.db,d.env); return services.runDueProduction(d.db,d.env); },
   live: jobLive,
   events: jobEvents,
   actions: jobActions,

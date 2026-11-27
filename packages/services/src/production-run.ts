@@ -58,7 +58,7 @@ export async function assertRunSubmission(ctx:Ctx,runId:string,projectId:string)
   if(!rows(await ctx.db.execute(sql`select id from creative_projects where id=${projectId} and org_id=${ctx.orgId} and brand_id=${r.brandId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')`)).length)throw badRequest('Choose a draft project belonging to this run creator.');
   const [existing]=rows<{id:string;status:string}>(await ctx.db.execute(sql`select id,status from generation_jobs where org_id=${ctx.orgId} and provider='comfyui-h3' and project_id=${projectId} and settings->>'productionRunId'=${runId} and coalesce(settings->>'productionSuperseded','false')<>'true'`));
   if(existing)return existing;
-  const [n]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${runId} and coalesce(settings->>'productionSuperseded','false')<>'true'`));
+  const [n]=rows<{n:number}>(await ctx.db.execute(sql`select count(distinct project_id)::int as n from (select project_id from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${runId} and coalesce(settings->>'productionSuperseded','false')<>'true' union select project_id from production_plans where org_id=${ctx.orgId} and run_id=${runId}) reserved where project_id<>${projectId}`));
   if((n?.n??0)>=r.target)throw conflict('Daily run already has its target number of videos.');
   return null;
 }

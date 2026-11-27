@@ -4,8 +4,8 @@ import { sql, type Db } from '@creatoros/db';
 import { redactSecrets } from '@creatoros/domain';
 import { h3Form } from './h3-form';
 import { generateH3 } from './h3';
-import { getAiProfile, inspectProductionSemantics } from './ai';
-import { localImageInputSchema, validateLocalImageInput, queueLocalImage, localImageStatus } from './local-image';
+import { getAiProfile, inspectProductionSemantics, aiStatus } from './ai';
+import { localImageInputSchema, validateLocalImageInput, queueLocalImage, localImageStatus, type LocalImageSnapshot } from './local-image';
 import { inspectTechnicalVideo, qualityDecision, type QualityRequirements, type SemanticQuality } from './production-quality';
 import { runEvent, runPrefs } from './production-run';
 import { audit } from './audit';
@@ -22,7 +22,7 @@ export const productionPlanInputSchema=z.object({
   maxRegenerations:z.number().int().min(0).max(2),acceptBillableQuality:z.literal(true),
 }).strict();
 type Input=z.infer<typeof productionPlanInputSchema>;
-type Payload=Input & {assetIds:string[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];inspectionRetryFor?:number;reviewStage?:string};
+type Payload=Input & {assetIds:string[];assetSnapshots:LocalImageSnapshot[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];inspectionRetryFor?:number;reviewStage?:string};
 type Plan={id:string;orgId:string;runId:string;projectId:string;brandId:string;payload:Payload;state:string;attempt:number;jobId:string|null;quality:unknown;detail:string|null;lease:string|null;updatedAt:string};
 const columns=sql`p.id,p.org_id as "orgId",p.run_id as "runId",p.project_id as "projectId",p.brand_id as "brandId",p.payload,p.state,p.attempt,p.job_id as "jobId",p.quality,p.detail,p.lease,p.updated_at as "updatedAt"`;
 type Form=z.output<typeof h3Form>;
@@ -79,10 +79,13 @@ export async function submitProductionPlan(ctx:Ctx,input:Input,id:string) {
     await available(ctx,segment.audioFileId,'AUDIO');await available(ctx,segment.videoFileId,'VIDEO');
     for(const image of segment.images)await available(ctx,image.fileId,'IMAGE');
   }
-  for(const a of input.assets)await validateLocalImageInput(ctx,a.image);
+  const assetSnapshots:LocalImageSnapshot[]=[];
+  for(const a of input.assets){const checked=await validateLocalImageInput(ctx,a.image);assetSnapshots.push({hash:checked.payload.hash,references:checked.payload.references});}
+  const provider=await aiStatus(ctx);
+  if(provider.gemini!=='CONFIGURED'||!provider.settings.enabled)throw badRequest('Configure enabled Gemini quality inspection before accepting this plan. No render has been started.');
   if(!rows(await ctx.db.execute(sql`select id from gpu_workers where id=${f.workerId} and org_id=${ctx.orgId} and enabled`)).length)throw notFound('Enabled H3 GPU');
   if((await runPrefs(ctx))[project.brandId]?.paused)throw conflict('Creator production is paused.');
-  const payload:Payload={...input,reviewRefs,assetIds:input.assets.map(()=>randomUUID()),imageRetries:input.assets.map(()=>0)};
+  const payload:Payload={...input,reviewRefs,assetSnapshots,assetIds:input.assets.map(()=>randomUUID()),imageRetries:input.assets.map(()=>0)};
   return ctx.db.transaction(async tx=>{
     const [run]=rows<{target:number;state:string}>(await tx.execute(sql`select target,state from production_runs where id=${input.runId} and org_id=${ctx.orgId} and brand_id=${project.brandId} for update`));
     if(!run||run.state!=='ACTIVE')throw conflict('Select an active production run for this creator.');
@@ -107,7 +110,7 @@ export async function productionPlanStatus(ctx:Ctx,id:string){
 }
 async function finish(ctx:Ctx,p:Plan,lease:string,state:string,detail:string,options:{jobId?:string;attempt?:number;quality?:unknown;payload?:Payload}={}){
   await ctx.db.transaction(async tx=>{
-    const changed=rows(await tx.execute(sql`update production_plans set state=${state},detail=${detail.slice(0,2000)},attempt=coalesce(${options.attempt??null}::int,attempt),job_id=coalesce(${options.jobId??null}::uuid,job_id),quality=coalesce(${options.quality===undefined?null:JSON.stringify(options.quality)}::jsonb,quality),payload=coalesce(${options.payload===undefined?null:JSON.stringify(options.payload)}::jsonb,payload),lease=null,lease_at=null,updated_at=now() where id=${p.id} and org_id=${ctx.orgId} and lease=${lease} returning id`));
+    const changed=rows(await tx.execute(sql`update production_plans set state=${state},detail=${detail.slice(0,2000)},attempt=coalesce(${options.attempt??null}::int,attempt),job_id=coalesce(${options.jobId??null}::uuid,job_id),quality=case when ${options.jobId!==undefined} then null else coalesce(${options.quality===undefined?null:JSON.stringify(options.quality)}::jsonb,quality) end,payload=coalesce(${options.payload===undefined?null:JSON.stringify(options.payload)}::jsonb,payload),lease=null,lease_at=null,updated_at=now() where id=${p.id} and org_id=${ctx.orgId} and lease=${lease} returning id`));
     if(!changed.length)return;
     if(options.quality!==undefined&&p.jobId){
       const passed=state==='PASSED';
@@ -124,7 +127,7 @@ async function finalFile(ctx:Ctx,p:Plan){
 async function advance(ctx:Ctx,p:Plan,lease:string){
   const payload=p.payload;
   if(p.state==='PREPARING'){
-    for(const [i,a] of payload.assets.entries())await queueLocalImage(ctx,a.image,payload.assetIds[i]!,p.runId);
+    for(const [i,a] of payload.assets.entries())await queueLocalImage(ctx,a.image,payload.assetIds[i]!,p.runId,payload.assetSnapshots[i]);
     return finish(ctx,p,lease,payload.assets.length?'WAIT_IMAGES':'QUEUE_VIDEO',payload.assets.length?'Waiting for generated image assets.':'All required references already available.');
   }
   if(p.state==='WAIT_IMAGES'||p.state==='QUEUE_VIDEO'||p.state==='REGENERATE'){
@@ -155,7 +158,7 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
     if(!job||['FAILED','CANCELLED'].includes(job.status))return finish(ctx,p,lease,'REVIEW','Render failed or was cancelled. Inspect the original GPU request; it was not replayed.');
     if(job.status!=='SUCCEEDED')return finish(ctx,p,lease,'WAIT_VIDEO','Waiting for H3 attempt '+p.attempt+'.');
     const file=await finalFile(ctx,p);
-    if(!file){const [age]=rows<{stale:boolean}>(await ctx.db.execute(sql`select finished_at<now()-interval '1 day' as stale from generation_jobs where id=${p.jobId} and org_id=${ctx.orgId}`));return finish(ctx,p,lease,age?.stale?'REVIEW':'WAIT_VIDEO',age?.stale?'Final video has not been indexed; check scanner.':'Render finished; waiting for indexed final video.');}
+    if(!file){const [age]=rows<{stale:boolean}>(await ctx.db.execute(sql`select finished_at<now()-interval '1 day' as stale from generation_jobs where id=${p.jobId} and org_id=${ctx.orgId}`));return finish(ctx,p,lease,age?.stale?'REVIEW':'WAIT_VIDEO',age?.stale?'Final video has not been indexed; check scanner.':'Render finished; waiting for indexed final video.',age?.stale?{payload:{...payload,reviewStage:'WAIT_VIDEO'}}:{});}
     return finish(ctx,p,lease,'QUALITY','Indexed final video ready for quality inspection.');
   }
   if(p.state==='QUALITY'){
@@ -198,6 +201,7 @@ export async function recoverProductionPlan(ctx:Ctx,id:string,action:'resume'|'r
       state=stage;
     }
     await tx.execute(sql`update production_plans set state=${state},payload=${JSON.stringify(payload)}::jsonb,detail='Owner requested bounded recovery.',updated_at=now() where id=${id} and org_id=${ctx.orgId}`);
+    await tx.execute(sql`update production_runs set planning_state='PLANNED',updated_at=now() where id=${p.runId} and org_id=${ctx.orgId}`);
     await runEvent(tx,ctx.orgId,p.runId,'PLAN_RECOVERY','Owner requested '+action+'.',p.jobId);
     await audit({...ctx,db:tx},'production.plan.recovery',{type:'production_run',id:p.runId},undefined,{planId:id,action});
     return {id,state};

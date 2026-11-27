@@ -77,8 +77,13 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
     return envelope(req,{uploadState:'CANCELLED'});
   });
   void app.register(async scoped=>{
-    // This parser is encapsulated: other API routes retain their normal JSON limits.
-    scoped.addContentTypeParser('application/octet-stream',(req,payload,done)=>done(null,payload));
+    // Fastify inherits the parent's buffer parser. Remove it only inside this child
+    // scope before installing the streaming parser; otherwise API startup throws
+    // FST_ERR_CTP_ALREADY_PRESENT. Sibling routes keep the inherited buffer parser.
+    if (scoped.hasContentTypeParser('application/octet-stream')) {
+      scoped.removeContentTypeParser('application/octet-stream');
+    }
+    scoped.addContentTypeParser('application/octet-stream',(_req,payload,done)=>done(null,payload));
     scoped.put('/ai-gateway/uploads/:id',{bodyLimit:MAX_BINARY_AUDIO_BYTES,config:{rateLimit:{max:6,timeWindow:'1 minute'}}},async req=>{
       const auth=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);
       const s=await loadSession(auth,id);const state=sessionState(s);

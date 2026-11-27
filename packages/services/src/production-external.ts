@@ -28,7 +28,7 @@ async function output(ctx:Ctx,target:Target,lock=false){
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     left join production_plans pl on pl.id::text=j.settings->>'productionPlanId' and pl.org_id=j.org_id and pl.job_id=j.id
     where j.org_id=${ctx.orgId} and j.id=${target.jobId} and f.id=${target.fileId} and p.deleted_at is null and p.brand_id is not null
-    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO'
+    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO' and o.asset_version_id is not null
     and j.provider='comfyui-h3' and j.status='SUCCEEDED'
     and coalesce(j.settings->>'productionSuperseded','false')<>'true'
     and (j.settings->>'productionPlanId' is null or pl.id is not null)

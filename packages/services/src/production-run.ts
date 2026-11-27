@@ -56,9 +56,9 @@ export async function assertRunSubmission(ctx:Ctx,runId:string,projectId:string)
   if(!r||r.state!=='ACTIVE'||r.planningState!=='PLANNED')throw conflict('Run must be active and have a recorded production plan.');
   if((await runPrefs(ctx))[r.brandId]?.paused)throw conflict('Creator production is paused.');
   if(!rows(await ctx.db.execute(sql`select id from creative_projects where id=${projectId} and org_id=${ctx.orgId} and brand_id=${r.brandId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')`)).length)throw badRequest('Choose a draft project belonging to this run creator.');
-  const [existing]=rows<{id:string;status:string}>(await ctx.db.execute(sql`select id,status from generation_jobs where org_id=${ctx.orgId} and provider='comfyui-h3' and project_id=${projectId} and settings->>'productionRunId'=${runId}`));
+  const [existing]=rows<{id:string;status:string}>(await ctx.db.execute(sql`select id,status from generation_jobs where org_id=${ctx.orgId} and provider='comfyui-h3' and project_id=${projectId} and settings->>'productionRunId'=${runId} and coalesce(settings->>'productionSuperseded','false')<>'true'`));
   if(existing)return existing;
-  const [n]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${runId}`));
+  const [n]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${runId} and coalesce(settings->>'productionSuperseded','false')<>'true'`));
   if((n?.n??0)>=r.target)throw conflict('Daily run already has its target number of videos.');
   return null;
 }
@@ -74,12 +74,13 @@ export async function setAutomatedProjectStage(db:Executor,orgId:string,projectI
 export async function productionRunBoard(ctx:Ctx,runId?:string){
   const runs=rows<Run&{brandName:string}>(await ctx.db.execute(sql`select r.id,r.brand_id as "brandId",b.name as "brandName",r.local_day::text as "localDay",r.target,r.state,r.planning_state as "planningState",r.planning_detail as "planningDetail",r.created_at as "createdAt",r.updated_at as "updatedAt" from production_runs r join brands b on b.id=r.brand_id and b.org_id=r.org_id where r.org_id=${ctx.orgId} ${runId?sql`and r.id=${runId}`:sql``} order by r.local_day desc,r.created_at desc limit 30`));
   if(runId&&!runs.length)throw notFound('Production run');
-  const jobs=rows<Record<string,unknown>>(await ctx.db.execute(sql`select j.id,j.project_id as "projectId",p.title,p.brand_id as "brandId",p.stage,j.status,j.error,j.created_at as "createdAt",j.started_at as "startedAt",j.finished_at as "finishedAt",j.settings->>'workerLabel' as worker,j.settings->>'productionRunId' as "runId",j.settings->'progress' as progress,j.settings->>'outputScanStatus' as "scanStatus",j.settings->'postProduction' as post,${runId?sql`j.settings->>'sourceEvidence' as "sourceEvidence",j.settings->'segments' as segments,`:sql``}coalesce(j.settings->>'dispatchPaused','false')='true' as paused
+  const jobs=rows<Record<string,unknown>>(await ctx.db.execute(sql`select j.id,j.project_id as "projectId",p.title,p.brand_id as "brandId",p.stage,j.status,j.error,j.created_at as "createdAt",j.started_at as "startedAt",j.finished_at as "finishedAt",j.settings->>'workerLabel' as worker,j.settings->>'productionRunId' as "runId",j.settings->'progress' as progress,j.settings->>'outputScanStatus' as "scanStatus",j.settings->'postProduction' as post,${runId?sql`j.settings->>'sourceEvidence' as "sourceEvidence",j.settings->'segments' as segments,`:sql``}coalesce(j.settings->>'dispatchPaused','false')='true' as paused,coalesce(j.settings->>'productionSuperseded','false')='true' as superseded
     from generation_jobs j left join creative_projects p on p.id=j.project_id and p.org_id=j.org_id where j.org_id=${ctx.orgId} and j.provider='comfyui-h3' and j.project_id is not null
     ${runId?sql`and j.settings->>'productionRunId'=${runId}`:sql`and j.created_at>now()-interval '30 days'`} order by j.created_at desc limit 100`));
   const events=rows<Record<string,unknown>>(await ctx.db.execute(sql`select e.id,e.run_id as "runId",e.job_id as "jobId",e.stage,e.detail,e.created_at as "createdAt" from production_run_events e where e.org_id=${ctx.orgId} ${runId?sql`and e.run_id=${runId}`:sql``} order by e.id desc limit 300`));
   const brands=rows<{id:string;name:string}>(await ctx.db.execute(sql`select id,name from brands where org_id=${ctx.orgId} and active and deleted_at is null order by name`));
-  return {runs,jobs,events,brands,preferences:await runPrefs(ctx)};
+  const plans=rows<Record<string,unknown>>(await ctx.db.execute(sql`select id,run_id as "runId",project_id as "projectId",state,attempt,job_id as "jobId",detail,quality,updated_at as "updatedAt" from production_plans where org_id=${ctx.orgId} ${runId?sql`and run_id=${runId}`:sql``} order by updated_at desc limit 100`));
+  return {runs,jobs,events,brands,plans,preferences:await runPrefs(ctx)};
 }
 export async function controlProductionRun(ctx:Ctx,id:string,action:'pause'|'resume'|'stop'){
   return ctx.db.transaction(async tx=>{
@@ -101,12 +102,13 @@ export async function reconcileProductionRuns(db:Db,_env:ServiceEnv){
   const stale=rows<{id:string;orgId:string}>(await db.execute(sql`
     update production_runs r set planning_state='BLOCKED',planning_detail='Planner stopped reporting before submitting the target videos. Resume the existing ChatGPT automation to finish the plan.',updated_at=now()
     where r.state='ACTIVE' and r.planning_state in ('RESEARCHING','PLANNED') and r.updated_at<now()-interval '30 minutes'
-      and (select count(*) from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text)<r.target
+      and not exists(select 1 from production_plans p where p.org_id=r.org_id and p.run_id=r.id and p.state not in ('FAILED','STOPPED','REVIEW'))
+      and (select count(*) from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and coalesce(j.settings->>'productionSuperseded','false')<>'true')<r.target
     returning id,org_id as "orgId"`));
   for(const r of stale)await runEvent(db,r.orgId,r.id,'BLOCKED','Planning or submission stopped before the daily target was queued.');
   const runs=rows<{id:string;orgId:string;target:number;brandName:string;ready:number;failed:number}>(await db.execute(sql`select r.id,r.org_id as "orgId",r.target,b.name as "brandName",
-    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and j.settings->'postProduction'->>'phase'='READY') as ready,
-    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and (j.status='FAILED' or j.settings->'postProduction'->>'phase'='FAILED')) as failed
+    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and coalesce(j.settings->>'productionSuperseded','false')<>'true' and j.settings->'postProduction'->>'phase'='READY') as ready,
+    (select count(*)::int from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text and coalesce(j.settings->>'productionSuperseded','false')<>'true' and (j.status='FAILED' or j.settings->'postProduction'->>'phase'='FAILED')) as failed
     from production_runs r join brands b on b.id=r.brand_id and b.org_id=r.org_id where r.state='ACTIVE' and r.created_at>now()-interval '30 days'`));
   for(const r of runs){
     if(r.ready>=r.target)await notify(db,{orgId:r.orgId,type:'production.ready',dedupeKey:'production.run.ready:'+r.id,title:r.brandName+' daily production ready',body:r.target+' videos ready for review. Nothing was published or scheduled.',severity:'INFO',deepLink:'/today',sourceType:'production_run',sourceId:r.id}).catch(()=>undefined);

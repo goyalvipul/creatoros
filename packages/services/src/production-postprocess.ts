@@ -12,6 +12,8 @@ import {readSocialCover,saveSocialCoverBytes} from './social-cover';
 import {notify} from './notifications';
 import {audit} from './audit';
 import {runEvent,runPrefs,runPlatforms,setAutomatedProjectStage,reconcileProductionRuns} from './production-run';
+import {runDueProductionPlans} from './production-plan';
+import {runDueLocalImages} from './local-image';
 import {badRequest,conflict,notFound,systemCtx,type Ctx,type ServiceEnv} from './types';
 
 const exec=promisify(execFile);
@@ -180,6 +182,8 @@ async function advance(ctx:Ctx,j:Job){
   }
 }
 export async function runDueProduction(db:Db,env:ServiceEnv){
+  await runDueLocalImages(db,env);
+  await runDueProductionPlans(db,env);
   await reconcileProductionRuns(db,env);
   // A killed worker cannot safely repeat an uncertain provider request.
   await db.execute(sql`update generation_jobs set settings=jsonb_set(settings,'{postProduction}',(settings->'postProduction')||jsonb_build_object('phase','FAILED','failedPhase',settings->'postProduction'->>'phase','detail','Worker stopped during this stage. Review and explicitly retry; paid requests may have been charged.','lease',null,'leaseAt',null)),updated_at=now()

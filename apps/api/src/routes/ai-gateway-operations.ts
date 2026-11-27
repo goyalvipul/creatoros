@@ -7,13 +7,13 @@ import {
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
   queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
-  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, type Ctx,
+  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, aiStatus, queueLocalProjectImage, localImageCapabilities, saveProductionPlan, productionPlanStatus, importProjectGeneratedImage, type Ctx,
 } from '@creatoros/services';
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
-import { uploadGatewayMedia, MAX_MEDIA_BASE64_CHARS, MAX_GENERATED_IMAGE_BYTES, importGeneratedImage } from './ai-gateway-media';
+import { uploadGatewayMedia, MAX_MEDIA_BASE64_CHARS } from './ai-gateway-media';
 import { prepareBinaryUpload, binaryUploadSchema } from './ai-gateway-binary';
-import { readFile, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -136,9 +136,9 @@ async function keyframes(ctx:Ctx,p:{id:string;seconds:number[]}) {
 
 export const permissionGroups = [
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
-  {name:'Production',items:[['production.execute','Execute authorized creative work without individual approval'],['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
+  {name:'Production',items:[['production.execute','Execute authorized creative work without individual approval'],['production.plan','Approve persistent production plans including asset preparation and H3'],['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},
-  {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis'],['image.generate','Request billable Gemini project images']]},
+  {name:'Media and analysis',items:[['media.read','Read media inventory, analysis and transcripts'],['media.upload.image','Upload images to indexed storage'],['media.upload.audio','Upload audio to indexed storage'],['frames.read','Extract video keyframes'],['analysis.request','Request billable Gemini analysis'],['image.generate','Request billable Gemini project images'],['image.local.generate','Generate project images with configured local ComfyUI']]},
   {name:'GPU and generation',items:[['gpu.read','Read GPU availability'],['generation.read','Read generation jobs and output IDs'],['generation.submit','Queue generation jobs'],['generation.cancel','Cancel specific generation jobs']]},
   {name:'Publishing and SEO',items:[['publishing.read','Read publishing queue and social accounts'],['publishing.write','Save platform publishing drafts'],['thumbnail.write','Attach custom thumbnails'],['schedule.write','Schedule approved videos'],['schedule.manage','Reschedule or cancel pending uploads']]},
   {name:'Analytics',items:[['analytics.read','Read stored analytics, post performance and demographics']]},
@@ -197,27 +197,20 @@ export const operations:Record<string,Operation>={
  'production.runs':op('generation.read',false,empty,ctx=>productionRunBoard(ctx)),
  'production.runDetail':op('generation.read',false,id,(ctx,p)=>productionRunBoard(ctx,p.id)),
  // These new writes are intentionally owner-reviewed; do not add them to the creative allowlist.
+ 'production.planStatus':op('generation.read',false,id,(ctx,p)=>productionPlanStatus(ctx,p.id)),
+ 'production.plan':op('production.plan',true,z.object({runId:uuid,form:h3Form,sourceEvidence:z.string().trim().min(1).max(20000),acceptBillable:z.boolean(),assets:z.array(z.object({rootId:uuid,provider:z.enum(['local','gemini']),prompt:z.string().trim().min(1).max(4000),referenceFileIds:z.array(uuid).min(1).max(8),width:z.number().int().min(256).max(2048),height:z.number().int().min(256).max(2048),slots:z.array(z.object({segment:z.number().int().min(0).max(4),image:z.number().int().min(0).max(7)}).strict()).min(1).max(40)}).strict()).max(4)}).strict(),(ctx,p,r)=>saveProductionPlan(ctx,p,r)),
  'production.runControl':op('generation.cancel',true,z.object({id:uuid,action:z.enum(['pause','resume','stop'])}).strict(),(ctx,p)=>controlProductionRun(ctx,p.id,p.action)),
+ 'generation.localImageCapabilities':op('generation.read',false,empty,ctx=>localImageCapabilities(ctx)),
+ 'generation.localImage':op('image.local.generate',true,z.object({projectId:uuid,prompt:z.string().trim().min(1).max(4000),referenceFileIds:z.array(uuid).max(8),width:z.number().int().min(256).max(2048),height:z.number().int().min(256).max(2048),seed:z.number().int().min(0).max(2147483647).optional()}).strict(),async(ctx,p,r)=>{const job=await queueLocalProjectImage(ctx,{...p,idempotencyKey:r});return {id:job.id,status:job.status};}),
  'generation.imageCapabilities':op('image.generate',false,empty,async ctx=>{const status=await aiStatus(ctx);return {provider:'gemini',availability:status.gemini,enabled:status.settings.enabled,imageModel:status.settings.imageModel,imageSize:status.settings.imageSize,usage:status.usage.image,billingNote:status.billingNote};}),
  'generation.image':op('image.generate',true,z.object({projectId:uuid,prompt:z.string().trim().min(1).max(4000),referenceFileIds:z.array(uuid).max(8),aspect:z.enum(['16:9','9:16','1:1','4:5','3:2','4:3','21:9']),acceptBillable:z.literal(true)}).strict(),async(ctx,p,r)=>{const job=await queueProjectImage(ctx,{...p,idempotencyKey:r});return {id:job.id,status:job.status};}),
  'generation.imageStatus':op('generation.read',false,id,async(ctx,p)=>{
-   const [job]=await query(ctx,sql`select id,status,error,target_id as "projectId",brand_id as "brandId",created_at,finished_at from ai_jobs where org_id=${ctx.orgId} and id=${p.id} and target_type='creative_project' and task='scene_image_generate'`);
+   const [job]=await query(ctx,sql`select id,status,error,target_id as "projectId",brand_id as "brandId",created_at,finished_at from ai_jobs where org_id=${ctx.orgId} and id=${p.id} and target_type='creative_project' and task in ('scene_image_generate','project_image_local')`);
    if(!job)throw notFound('Project image job');
    const assets=job.status==='COMPLETED'?await query(ctx,sql`select id,mime,bytes,width,height,reference_ids from ai_assets where org_id=${ctx.orgId} and job_id=${p.id} and kind='image' and path like 'ai/%'`):[];
    return {job,assets};
  }),
- 'media.importGeneratedImage':op('media.upload.image',true,z.object({assetId:uuid,rootId:uuid,projectId:uuid,brandId:uuid}).strict(),async(ctx,p,r)=>{
-   const [asset]=rows<{mime:string;bytes:number}>(await ctx.db.execute(sql`select a.mime,a.bytes from ai_assets a join ai_jobs j on j.id=a.job_id and j.org_id=a.org_id join creative_projects c on c.id=a.project_id and c.org_id=a.org_id and c.brand_id=j.brand_id where a.id=${p.assetId} and a.org_id=${ctx.orgId} and a.kind='image' and j.status='COMPLETED' and j.target_type='creative_project' and j.target_id=c.id::text and c.id=${p.projectId} and c.brand_id=${p.brandId} and c.deleted_at is null`));
-   if(!asset)throw notFound('Completed project image');
-   const ext=asset.mime==='image/png'?'png':asset.mime==='image/jpeg'?'jpg':asset.mime==='image/webp'?'webp':null;
-   if(!ext||asset.bytes<1||asset.bytes>MAX_GENERATED_IMAGE_BYTES)throw badRequest('Generated image type or size is unsupported.');
-   const opened=await openAiAsset(ctx,p.assetId);
-   const info=await stat(opened.abs);
-   if(!info.isFile()||info.size!==asset.bytes||info.size>MAX_GENERATED_IMAGE_BYTES)throw badRequest('Generated asset size changed.');
-   const bytes=await readFile(opened.abs);
-   if(bytes.length!==asset.bytes)throw badRequest('Generated asset size changed.');
-   return importGeneratedImage(ctx,{rootId:p.rootId,projectId:p.projectId,brandId:p.brandId,fileName:'generated-'+p.assetId+'.'+ext,mime:asset.mime},r,bytes);
- }),
+ 'media.importGeneratedImage':op('media.upload.image',true,z.object({assetId:uuid,rootId:uuid,projectId:uuid,brandId:uuid}).strict(),(ctx,p,r)=>importProjectGeneratedImage(ctx,p,r)),
  'generation.h3':op('generation.submit',true,h3Form.extend({runId:uuid.optional(),sourceEvidence:z.string().min(1).max(20000).optional()}),async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);const r=await generateH3(ctx,p,{skipDraft:trusted===true,serialDispatch:trusted===true,runId:p.runId,sourceEvidence:p.sourceEvidence});return {id:r.job.id,status:r.job.status};}),
  'generation.ltx':op('generation.submit',true,ltxForm,async(ctx,p,_requestId,trusted)=>{await validateForm(ctx,p);if(trusted&&(!p.workerId||(await workerQueue(ctx,p.workerId)).queue!=='free'))throw conflict('GPU is busy or offline; defer generation.');const r=await generateLtx(ctx,p,{skipDraft:trusted===true});return {id:r.job.id};}),
  'generation.longscene':op('generation.submit',true,scenePair,async(ctx,p)=>{await queueLongVideoScene(ctx,p.projectId,p.sceneId);return {queued:true};}),

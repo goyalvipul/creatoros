@@ -5,7 +5,7 @@ import {
   createLongVideo, updateLongVideo, updateLongVideoScene, splitLongVideoScene,
   addLongVideoFromLibrary, rebalanceLongVideo, queueLongVideoScene, cancelLongVideoScene,
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
-  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
+  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes, MAX_SOCIAL_COVER_BASE64_CHARS, socialCoverLimit, decodeSocialCoverBase64, productionQualityReportSchema, productionFinalizeSchema, submitChatGPTQualityReport, productionReadiness, finalizeChatGPTProduction,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
   workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, localImageCapabilities, localImageInputSchema, queueLocalImage, localImageStatus, cancelLocalImage, productionPlanInputSchema, submitProductionPlan, productionPlanStatus, recoverProductionPlan, type Ctx,
 } from '@creatoros/services';
@@ -45,7 +45,8 @@ async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeo
   // Uploaded worker filenames are intentionally unsupported; use owned library IDs.
   if (form.imageUploadName || form.imageUploadWorkerId) throw badRequest('Use a library image ID, not a worker upload path.');
   if ('segments' in form) {
-    for (const s of form.segments) {
+    for (const [index,s] of form.segments.entries()) {
+      if(!s.images.some(image=>image.fileId))throw badRequest(`Add a picture on segment ${index+1}.`,undefined,'H3_INPUT_INVALID');
       if(s.audioUploadName||s.audioUploadWorkerId||s.videoUploadName||s.videoUploadWorkerId) throw badRequest('Use library media IDs.');
       await availableMedia(ctx,s.audioFileId,'AUDIO'); await availableMedia(ctx,s.videoFileId,'VIDEO');
       for(const image of s.images) {
@@ -236,7 +237,18 @@ export const operations:Record<string,Operation>={
  'publishing.queue':op('publishing.read',false,empty,ctx=>query(ctx,sql`select i.id as item_id,v.project_id,f.file_name,d.id as draft_id,d.social_account_id,d.title,d.caption,d.hashtags,d.upload_state,d.scheduled_at from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id join file_instances f on f.id=i.file_instance_id and f.org_id=i.org_id left join publish_drafts d on d.item_id=i.id and d.org_id=i.org_id where i.org_id=${ctx.orgId} order by i.created_at desc limit 200`)),
  'publishing.preview':op('publishing.read',false,id,(ctx,p)=>getProjectScheduleRows(ctx,p.id)),
  'publishing.draft':op('publishing.write',true,draftSchema,saveDraft),
- 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(2700000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),async(ctx,p)=>{const t=await draftTarget(ctx,p.itemId,p.socialAccountId);if((await query(ctx,sql`select id from publish_drafts where org_id=${ctx.orgId} and item_id=${p.itemId} and social_account_id=${p.socialAccountId} and upload_state<>'DRAFT'`)).length)throw conflict('Only unscheduled draft thumbnails may be changed.');if(!t.project_id)throw badRequest('Link a project first.');return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,Buffer.from(p.base64,'base64'));}),
+ 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(MAX_SOCIAL_COVER_BASE64_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional(),fileId:uuid.optional()}).strict().refine(p=>!!p.fileId!==!!p.base64,'Provide exactly one registered fileId or Base64 image.'),async(ctx,p)=>{
+   const t=await draftTarget(ctx,p.itemId,p.socialAccountId);
+   if((await query(ctx,sql`select id from publish_drafts where org_id=${ctx.orgId} and item_id=${p.itemId} and social_account_id=${p.socialAccountId} and upload_state<>'DRAFT'`)).length)throw conflict('Only unscheduled draft thumbnails may be changed.');
+   if(!t.project_id)throw badRequest('Link a project first.');
+   const cap=socialCoverLimit(ctx.env.processEnv.AI_GATEWAY_THUMBNAIL_MAX_MIB);
+   if(p.fileId&&! (await query(ctx,sql`select f.id from file_instances f join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id join creative_projects pr on pr.id=${t.project_id} and pr.org_id=f.org_id where f.id=${p.fileId} and f.org_id=${ctx.orgId} and a.brand_id=pr.brand_id and (a.project_id is null or a.project_id=pr.id) and not a.is_archived and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='IMAGE'`)).length)throw badRequest('Use an available thumbnail registered to this creator and project.');
+   const bytes=p.fileId?await mediaBytes(ctx,p.fileId,'IMAGE',cap):decodeSocialCoverBase64(p.base64!,cap);
+   return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,bytes);
+ }),
+ 'production.qualityReport':op('projects.update',true,productionQualityReportSchema,submitChatGPTQualityReport),
+ 'production.readiness':op('projects.read',false,productionFinalizeSchema,productionReadiness),
+ 'production.finalize':op('projects.update',true,productionFinalizeSchema,finalizeChatGPTProduction),
  'publishing.schedule':op('schedule.write',true,scheduleSchema,async(ctx,p,r)=>{await draftTarget(ctx,p.itemId,p.socialAccountId);await schedulePublish(ctx,{...p,requestId:r});return {scheduled:true};}),
  'publishing.cancel':op('schedule.manage',true,id,async(ctx,p)=>ctx.db.transaction(async tx=>{const [d]=rows<{publication_id:string|null}>(await tx.execute(sql`update publish_drafts set upload_state='DRAFT',scheduled_at=null,request_id=null,updated_at=now() where org_id=${ctx.orgId} and id=${p.id} and upload_state='SCHEDULED' returning publication_id`));if(!d)throw conflict('Only pending scheduled uploads can be cancelled.');if(d.publication_id)await tx.execute(sql`update publication_records set state='PLANNED',planned_at=null,updated_at=now() where org_id=${ctx.orgId} and id=${d.publication_id} and state='SCHEDULED'`);return {cancelled:true};})),
  'publishing.reschedule':op('schedule.manage',true,z.object({id:uuid,plannedLocal:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),timezone:z.string().max(64)}).strict(),async(ctx,p)=>{

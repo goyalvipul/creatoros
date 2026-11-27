@@ -54,6 +54,9 @@ import {
   clearPublishCover,
   readPublishCover,
   saveSocialCover,
+  MAX_SOCIAL_COVER_BASE64_CHARS,
+  MAX_SOCIAL_COVER_JSON_BYTES,
+  MAX_SOCIAL_COVER_BYTES,
   deleteSocialCover,
   readSocialCover,
   verifySocialCoverToken,
@@ -124,6 +127,8 @@ const strArr = z.array(z.string().trim().min(1).max(200)).max(100);
 export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   const route = makeRouter(app, deps);
   const { db, config } = deps;
+
+  route({method:'GET',url:'/publishing/thumbnail-limit',tag:'Publishing',summary:'Configured custom thumbnail size limit'},()=>({maxBytes:MAX_SOCIAL_COVER_BYTES}));
 
   // ================================================================ catalog (brands / channels / accounts)
   route(
@@ -1078,8 +1083,8 @@ export function contentRoutes(app: FastifyInstance, deps: AppDeps) {
   route({
     method: 'POST', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',
     summary: 'Save an independent custom cover for one video on one social account',
-    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }), bodyLimit: 4 * 1024 * 1024,
-    body: z.object({ data: z.string().min(16).max(3_000_000) }),
+    params: z.object({ id: uuid, itemId: uuid, accountId: uuid }), bodyLimit: MAX_SOCIAL_COVER_JSON_BYTES,
+    body: z.object({ data: z.string().min(16).max(MAX_SOCIAL_COVER_BASE64_CHARS+128) }),
   }, ({ ctx, params, body }) => saveSocialCover(ctx, params.id, params.itemId, params.accountId, body.data));
   route({
     method: 'DELETE', url: '/projects/:id/social-covers/:itemId/:accountId', role: 'OWNER', tag: 'Publishing',

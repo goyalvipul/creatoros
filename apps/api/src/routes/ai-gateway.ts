@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
-import { audit, notify, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
+import { audit, notify, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
@@ -17,7 +17,8 @@ type Mode = z.infer<typeof mode>;
 type State = { enabled:boolean; mode:Mode; scopes:string[]; local_scopes:string[]; hosted_scopes:string[]; local_configured:boolean; hosted_configured:boolean; local_seen:string|null; hosted_seen:string|null; production_policy:unknown };
 type GatewayAuth = { ctx:Ctx; mode:Mode; hash:string; scopes:string[] };
 type RequestRow = { id:string; mode:Mode; operation:string; scope:string; input:unknown; status:string; result:unknown; created_at:string; expires_at:string; finished_at:string|null };
-function reqFailure(error:unknown):never {
+function reqFailure(error:unknown,operation?:string):never {
+  if(operation==='generation.h3'&&error instanceof AppError&&/^(Choose a resolution from the list\.|Choose the PC first\.|Choose 0\.5, 1, or 1\.5 megapixels\.|Add a segment\.|Add a picture on segment \d+\.|Write the prompt for segment \d+\.|Choose available library media of the requested type\.|Use library media IDs\.)$/.test(error.message))throw badRequest(error.message,undefined,'H3_INPUT_INVALID');
   if(error instanceof z.ZodError) throw badRequest('Approved operation has invalid input.');
   throw badRequest('Operation failed. Review the corresponding Kemokem page before retrying.');
 }
@@ -101,7 +102,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     if(!body.requestId)throw badRequest('A unique UUID requestId is required for writes.');
     const json=JSON.stringify(input);
     const mediaUpload=body.operation==='media.uploadImage'||body.operation==='media.uploadAudio';
-    if(Buffer.byteLength(json,'utf8')>(mediaUpload?MAX_GATEWAY_MEDIA_JSON_BYTES:3000000))throw badRequest('Request too large.');
+    if(Buffer.byteLength(json,'utf8')>(mediaUpload?MAX_GATEWAY_MEDIA_JSON_BYTES:body.operation==='publishing.thumbnail'?MAX_SOCIAL_COVER_JSON_BYTES:3000000))throw badRequest('Request too large.');
     const claimed=await auth.ctx.db.transaction(async tx=>{
       const [connection]=rows<{production_policy:unknown;active_scopes:string[]}>(await tx.execute(sql`select g.production_policy,case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end as active_scopes from ai_gateway_connections g join organization_memberships m on m.org_id=g.org_id and m.user_id=case when g.mode='hosted' then g.hosted_owner else g.local_owner end join users u on u.id=m.user_id where g.org_id=${auth.ctx.orgId} and g.enabled and g.mode=${auth.mode} and (case when g.mode='hosted' then g.hosted_hash else g.local_hash end)=${auth.hash} and ${operation.scope}=any(case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end) and m.role='OWNER' and m.status='ACTIVE' and u.status='ACTIVE' for update of g`));
       if(!connection)throw forbidden('Connector authorization changed.');
@@ -131,7 +132,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     }catch(e){
       await auth.ctx.db.execute(sql`update ai_gateway_requests set status='FAILED',result='{"message":"Trusted production operation failed. Inspect Kemokem before retrying."}'::jsonb,finished_at=now() where id=${claimed.row.id} and org_id=${auth.ctx.orgId}`);
       await audit(auth.ctx,'ai_gateway.failed',{type:'ai_gateway_request',id:claimed.row.id},undefined,{operation:body.operation});
-      reqFailure(e);
+      reqFailure(e,body.operation);
     }
   }
   route({method:'GET',url:'/integrations/ai-gateway/requests',tag:'AI Gateway',summary:'Review requested operations',role:'OWNER'},async({ctx,reply})=>{
@@ -163,13 +164,13 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       // Never echo upstream secrets. Running/failed operations are not automatically retried.
       await ctx.db.execute(sql`update ai_gateway_requests set status='FAILED',result='{"message":"Operation failed. Check Kemokem before retrying."}'::jsonb,finished_at=now() where id=${r.id} and org_id=${ctx.orgId}`);
       await audit(ctx,'ai_gateway.failed',{type:'ai_gateway_request',id:r.id},undefined,{operation:r.operation});
-      reqFailure(e);
+      reqFailure(e,r.operation);
     }
   });
   app.addHook('onSend',async(req,reply,payload)=>{if(req.url.split('?')[0]!.startsWith('/api/v1/ai-gateway/'))reply.header('cache-control','no-store');return payload;});
   app.get('/ai-gateway/status',async req=>{const a=await authenticate(req);return envelope(req,{mode:a.mode,scopes:a.scopes});});
   app.get('/ai-gateway/tools',async req=>{const a=await authenticate(req);return envelope(req,Object.entries(operations).filter(([,op])=>a.scopes.includes(op.scope)).map(([name,op])=>({name,scope:op.scope,approvalRequired:op.write,conditionalProductionAuthorization:op.write&&(productionOperations.includes(name)||creativeOperations.includes(name)||isDedicatedImageOperation(name)),inputSchema:z.toJSONSchema(op.schema,{io:'input',unrepresentable:'any'})})));});
-  app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
+  app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES,MAX_SOCIAL_COVER_JSON_BYTES+4096),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   registerBinaryUploadRoutes(app,authenticate,envelope);
   // Keep legacy endpoints on the same permission, execution and request-id path.

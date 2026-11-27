@@ -25,15 +25,13 @@ export const MAX_GATEWAY_MEDIA_JSON_BYTES = MAX_MEDIA_BASE64_CHARS + 4096;
 export const MAX_GATEWAY_INVOKE_BODY_BYTES = MAX_GATEWAY_MEDIA_JSON_BYTES + 4096;
 const mimeMap = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', webp:'image/webp', wav:'audio/wav', mp3:'audio/mpeg', flac:'audio/flac' } as const;
 
-export function decodeMedia(input: {fileName:string;mime:string;base64:string}, kind:'IMAGE'|'AUDIO') {
+function validateMediaBytes(input:{fileName:string;mime:string}, bytes:Buffer, kind:'IMAGE'|'AUDIO', maxBytes:number) {
   const name=input.fileName;
   if(!/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}$/.test(name)||name.includes('..')||/[. ]$/.test(name)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name))throw badRequest('Use a simple filename with a supported extension.');
   const ext=name.split('.').pop()!.toLowerCase() as keyof typeof mimeMap;
   const mime=mimeMap[ext];
   if(!mime||mime!==input.mime||!mime.startsWith(kind==='IMAGE'?'image/':'audio/'))throw badRequest('File extension and MIME must match the upload kind.');
-  if(input.base64.length>MAX_MEDIA_BASE64_CHARS||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64))throw badRequest('Invalid or oversized base64.');
-  const bytes=Buffer.from(input.base64,'base64');
-  if(!bytes.length||bytes.length>MAX_MEDIA_BYTES||bytes.toString('base64')!==input.base64)throw badRequest(`Use canonical base64, at most ${MAX_MEDIA_BYTES / MIB} MiB decoded.`);
+  if(!bytes.length||bytes.length>maxBytes)throw badRequest('Media is empty or exceeds the byte limit.');
   const signature=ext==='png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):
     ext==='jpg'||ext==='jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:
     ext==='webp'?bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP':
@@ -43,6 +41,14 @@ export function decodeMedia(input: {fileName:string;mime:string;base64:string}, 
   if(!signature)throw badRequest('File signature does not match the declared type.');
   return {bytes,mime,ext};
 }
+
+export function decodeMedia(input:{fileName:string;mime:string;base64:string},kind:'IMAGE'|'AUDIO') {
+  if(input.base64.length>MAX_MEDIA_BASE64_CHARS||!/^[A-Za-z0-9+/]+={0,2}$/.test(input.base64))throw badRequest('Invalid or oversized base64.');
+  const bytes=Buffer.from(input.base64,'base64');
+  if(!bytes.length||bytes.length>MAX_MEDIA_BYTES||bytes.toString('base64')!==input.base64)throw badRequest(`Use canonical base64, at most ${MAX_MEDIA_BYTES / MIB} MiB decoded.`);
+  return validateMediaBytes(input,bytes,kind,MAX_MEDIA_BYTES);
+}
+export const MAX_GENERATED_IMAGE_BYTES=50*MIB;
 
 async function probeMedia(bytes:Buffer,ext:string,kind:'IMAGE'|'AUDIO') {
   const dir=await mkdtemp(join(tmpdir(),'kk-media-'));
@@ -68,7 +74,14 @@ async function probeMedia(bytes:Buffer,ext:string,kind:'IMAGE'|'AUDIO') {
 
 type UploadInput={rootId:string;brandId:string;projectId?:string|null;fileName:string;mime:string;base64:string};
 export async function uploadGatewayMedia(ctx:Ctx,input:UploadInput,requestId:string,kind:'IMAGE'|'AUDIO') {
-  const {bytes,mime,ext}=decodeMedia(input,kind);
+  return storeGatewayMedia(ctx,input,requestId,kind,decodeMedia(input,kind));
+}
+// Only call with bytes from a verified same-organization completed AI asset.
+export async function importGeneratedImage(ctx:Ctx,input:Omit<UploadInput,'base64'>,requestId:string,bytes:Buffer) {
+  return storeGatewayMedia(ctx,input,requestId,'IMAGE',validateMediaBytes(input,bytes,'IMAGE',MAX_GENERATED_IMAGE_BYTES));
+}
+async function storeGatewayMedia(ctx:Ctx,input:Omit<UploadInput,'base64'>,requestId:string,kind:'IMAGE'|'AUDIO',decoded:ReturnType<typeof validateMediaBytes>) {
+  const {bytes,mime,ext}=decoded;
   const tech=await probeMedia(bytes,ext,kind);
   if(!rows(await ctx.db.execute(sql`select id from brands where id=${input.brandId} and org_id=${ctx.orgId} and active and deleted_at is null`)).length)throw notFound('Creator');
   if(input.projectId&&!rows(await ctx.db.execute(sql`select id from creative_projects where id=${input.projectId} and org_id=${ctx.orgId} and brand_id=${input.brandId} and deleted_at is null`)).length)throw notFound('Creator project');

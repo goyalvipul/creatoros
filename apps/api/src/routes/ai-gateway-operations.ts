@@ -38,7 +38,7 @@ async function availableMedia(ctx:Ctx,id:string|null|undefined,kind:'IMAGE'|'AUD
   if(!id)return;
   if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${id} and archived_at is null and availability='AVAILABLE' and file_type::text=${kind}`)).length)throw badRequest('Choose available library media of the requested type.');
 }
-async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeof ltxForm>) {
+export async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeof ltxForm>) {
   await owned(ctx,'project',form.projectId);
   await owned(ctx,'worker',form.workerId);
   await availableMedia(ctx,form.imageFileId,'IMAGE');

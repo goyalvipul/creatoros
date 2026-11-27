@@ -7,10 +7,11 @@ import {useApi,post} from '@/lib/api';
 import {ActionButton} from '@/components/ui';
 
 type Post={phase:string;detail?:string;lease?:string|null;fileId?:string;itemId?:string;covers?:string[];prefilled?:string[];missingPlatforms?:string[]};
-type Job={id:string;projectId:string;title:string;brandId:string;stage:string;status:string;error:string|null;runId:string|null;worker:string|null;progress?:{phase:string;detail:string};scanStatus?:string;post?:Post;paused:boolean;createdAt:string;finishedAt?:string};
+type Job={id:string;projectId:string;title:string;brandId:string;stage:string;status:string;error:string|null;runId:string|null;worker:string|null;progress?:{phase:string;detail:string};scanStatus?:string;post?:Post;paused:boolean;superseded?:boolean;createdAt:string;finishedAt?:string};
 type Run={id:string;brandId:string;brandName:string;localDay:string;target:number;state:string;planningState:string;planningDetail:string|null};
 type Event={id:number;runId:string;jobId?:string;stage:string;detail:string;createdAt:string};
-type Board={runs:Run[];jobs:Job[];events:Event[];brands:{id:string;name:string}[];preferences:Record<string,{paused?:boolean;billablePostprocess?:boolean}>};
+type Plan={id:string;runId:string;projectId:string;state:string;attempt:number;jobId?:string;detail?:string;quality?:{verdict?:string;corrections?:string[]};updatedAt:string};
+type Board={runs:Run[];jobs:Job[];events:Event[];plans?:Plan[];brands:{id:string;name:string}[];preferences:Record<string,{paused?:boolean;billablePostprocess?:boolean}>};
 const root='/comfy/production-runs';
 const words=(s:string)=>s.replace(/_/g,' ').toLowerCase().replace(/^./,c=>c.toUpperCase());
 const time=(s:string)=>new Date(s).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'America/Vancouver'});
@@ -20,6 +21,7 @@ function saveLogs(run:Run,jobs:Job[],events:Event[]){
   a.href=url;a.download='production-'+run.localDay+'-'+run.id.slice(0,8)+'.json';a.click();URL.revokeObjectURL(url);
 }
 function jobLabel(j:Job){
+  if(j.superseded)return 'Rejected attempt · retained';
   if(j.status==='FAILED'||j.status==='CANCELLED')return words(j.status);
   if(j.paused)return 'Paused';
   if(j.status==='SUCCEEDED')return j.post?words(j.post.phase):'Rendered · not enrolled';
@@ -37,12 +39,12 @@ function JobCard({j,refresh}:{j:Job;refresh:()=>Promise<unknown>}){
     </div>
     <p className={'mt-2 text-xs '+(failed?'text-bad':'text-muted')}>{j.error??j.post?.detail??j.progress?.detail??'Awaiting processing.'}{j.scanStatus?' · '+words(j.scanStatus):''}</p>
     {!!j.post?.missingPlatforms?.length&&<p className="mt-1 text-xs text-muted">Not connected: {j.post.missingPlatforms.join(', ')}. Packages remain saved.</p>}
-    <div className="mt-3 flex flex-wrap gap-2">
+    <div className="mt-3 flex flex-wrap gap-2">{j.superseded&&<span className="text-xs text-muted">Preserved for review; no automatic publishing drafts.</span>}
       {!j.runId&&j.status==='SUCCEEDED'&&<ActionButton size="sm" confirm="Continue post-processing this existing render without making another video? Billable provider calls still require creator authorization." onAction={()=>control('adopt')}>Process existing video</ActionButton>}
-      {j.status==='QUEUED'||(j.status==='SUCCEEDED'&&!ready&&phase!=='STOPPED'&&!!j.runId)?<ActionButton size="sm" variant="ghost" onAction={()=>control(j.paused?'resume':'pause')}>{j.paused?'Resume':'Pause'}</ActionButton>:null}
+      {!j.superseded&&(j.status==='QUEUED'||(j.status==='SUCCEEDED'&&!ready&&phase!=='STOPPED'&&!!j.runId))?<ActionButton size="sm" variant="ghost" onAction={()=>control(j.paused?'resume':'pause')}>{j.paused?'Resume':'Pause'}</ActionButton>:null}
       {phase==='FAILED'&&<ActionButton size="sm" confirm="Retry only the failed stage? A provider request may be charged again." onAction={()=>control('retry')}>Retry stage</ActionButton>}
       {(j.status==='QUEUED'||j.status==='RUNNING')&&<ActionButton size="sm" variant="danger" confirm="Cancel this exact render? If running, this sends an interrupt only after its prompt is identified as the sole running prompt. Other clients may change the queue concurrently." onAction={()=>control('cancel_render')}>Cancel render</ActionButton>}
-      {j.status==='SUCCEEDED'&&!ready&&!!j.runId&&!j.paused&&<ActionButton size="sm" variant="ghost" confirm="Stop the remaining stages? Any provider call already sent may finish." onAction={()=>control('stop')}>Stop stages</ActionButton>}
+      {!j.superseded&&j.status==='SUCCEEDED'&&!ready&&!!j.runId&&!j.paused&&<ActionButton size="sm" variant="ghost" confirm="Stop the remaining stages? Any provider call already sent may finish." onAction={()=>control('stop')}>Stop stages</ActionButton>}
       {j.post?.itemId&&<Link className="inline-flex items-center px-2 text-xs font-medium text-accent hover:underline" href="/publishing">Publishing</Link>}
     </div>
   </article>;
@@ -68,14 +70,14 @@ export function ProductionRuns({enabled,compact=false}:{enabled:boolean;compact?
       return <div key={b.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3"><span className="font-medium text-sm">{b.name}</span><div className="flex flex-wrap gap-2"><ActionButton size="sm" variant="ghost" onAction={()=>change({paused:!pref.paused})}>{pref.paused?'Resume future runs':'Pause future runs'}</ActionButton><ActionButton size="sm" confirm={pref.billablePostprocess?'Disable automatic paid provider calls?':'Authorize automatic Gemini video analysis and SEO for this creator within the existing AI limits?'} onAction={()=>change({billablePostprocess:!pref.billablePostprocess})}>{pref.billablePostprocess?'Disable paid AI':'Enable paid AI'}</ActionButton></div></div>;
     })}</div>}
     {visible?.map(r=>{
-      const jobs=d!.jobs.filter(j=>j.runId===r.id),events=d!.events.filter(e=>e.runId===r.id),rendered=jobs.filter(j=>j.status==='SUCCEEDED').length,ready=jobs.filter(j=>j.post?.phase==='READY').length;
+      const jobs=d!.jobs.filter(j=>j.runId===r.id),events=d!.events.filter(e=>e.runId===r.id),rendered=jobs.filter(j=>j.status==='SUCCEEDED'&&!j.superseded).length,ready=jobs.filter(j=>j.post?.phase==='READY'&&!j.superseded).length;
       const state=r.state!=='ACTIVE'?words(r.state):ready>=r.target?'Ready for review':jobs.some(j=>j.status==='FAILED'||j.post?.phase==='FAILED')?'Needs attention':r.planningState==='BLOCKED'||r.planningState==='FAILED'?words(r.planningState):jobs.some(j=>j.status==='RUNNING')?'Rendering':jobs.some(j=>j.status==='QUEUED')?'Queued':jobs.length?'Post-processing':words(r.planningState);
       const control=async(action:string)=>{await post(root+'/'+r.id+'/control',{action});await board.mutate();};
       return <article key={r.id} className="rounded-xl border border-border p-3.5 space-y-3">
         <div className="flex flex-wrap justify-between gap-2"><div><h3 className="font-semibold">{r.brandName}</h3><p className="text-xs text-muted">{r.localDay} · Daily production</p></div><span className={'self-start rounded-full px-2.5 py-1 text-xs font-medium '+(ready>=r.target?'bg-ok/10 text-ok':state==='Needs attention'||state==='Blocked'?'bg-warn/10 text-warn':'bg-panel2 text-muted')}>{state}</span></div>
         <div className="grid grid-cols-3 gap-2">{[['Submitted',jobs.length+'/'+r.target],['Rendered',rendered+'/'+r.target],['Ready',ready+'/'+r.target]].map(([name,value])=><div key={name} className="rounded-lg bg-panel2 px-3 py-2"><div className="text-xs text-muted">{name}</div><div className="font-semibold text-xl tabular-nums">{value}</div></div>)}</div>
         {r.planningDetail&&jobs.length<r.target&&<p className="text-xs text-muted whitespace-pre-wrap line-clamp-4">{r.planningDetail}</p>}
-        <div className="grid gap-2 md:grid-cols-2">{jobs.map(j=><JobCard key={j.id} j={j} refresh={board.mutate}/>)}</div>
+        <div className="grid gap-2 md:grid-cols-2">{d!.plans?.filter(p=>p.runId===r.id).map(p=><div key={p.id} className="rounded-lg border border-border p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><Link href={'/production/'+p.projectId} className="font-semibold hover:underline">Executable plan {p.id.slice(0,8)}</Link><span>{words(p.state)} · attempt {p.attempt}</span></div><p className="mt-1 text-xs text-muted">{p.detail}</p>{p.quality?.corrections?.map((c,i)=><p key={i} className="mt-1 text-xs text-bad">{c}</p>)}</div>)} {jobs.map(j=><JobCard key={j.id} j={j} refresh={board.mutate}/>)}</div>
         <div className="flex flex-wrap items-center gap-2">
           <ActionButton size="sm" variant="ghost" onAction={async()=>{setSelected(selected===r.id?null:r.id);}}><FileText className="mr-1 size-3.5" aria-hidden/> Logs <ChevronDown className="ml-1 size-3" aria-hidden/></ActionButton>
           {r.state!=='STOPPED'&&ready<r.target&&<><ActionButton size="sm" variant="ghost" onAction={()=>control(r.state==='PAUSED'?'resume':'pause')}>{r.state==='PAUSED'?<Play className="mr-1 size-3.5"/>:<Pause className="mr-1 size-3.5"/>}{r.state==='PAUSED'?'Resume':'Pause'}</ActionButton><ActionButton size="sm" variant="danger" confirm="Stop this run and cancel queued renders? Active rendering can be cancelled separately; already-sent AI requests may finish." onAction={()=>control('stop')}><Square className="mr-1 size-3.5"/> Stop run</ActionButton></>}

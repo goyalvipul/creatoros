@@ -421,6 +421,57 @@ async function sceneReferenceFiles(ctx: Ctx, projectId: string, sceneId: string 
   return files;
 }
 
+// Project-scoped image generation for H3/LTX: reuse the existing billable AI worker.
+async function projectImageReferences(ctx: Ctx, brandId: string, explicit: string[]) {
+  const profile = await getAiProfile(ctx, brandId);
+  const ids = [...new Set([...(profile?.referenceFileIds ?? []), ...explicit])];
+  if (!ids.length) throw badRequest('Choose a verified creator reference before generating an image. Nothing was sent.');
+  for (const id of ids) {
+    const result = await ctx.db.execute(sql`select id from file_instances where org_id=${ctx.orgId} and id=${id} and archived_at is null and availability='AVAILABLE' and file_type::text='IMAGE'`);
+    if (!(result as unknown as {rows:unknown[]}).rows.length) throw badRequest('An image reference is missing or unavailable. Nothing was sent.');
+  }
+  return ids;
+}
+export async function queueProjectImage(ctx: Ctx, input: {
+  projectId: string; prompt: string; referenceFileIds: string[]; aspect: string;
+  acceptBillable: boolean; idempotencyKey: string;
+}) {
+  if (!input.acceptBillable) throw badRequest(BILLING_NOTE);
+  if (!input.prompt.trim() || input.prompt.length > 4000) throw badRequest('Supply a 1–4000 character image prompt.');
+  const [existing] = await ctx.db.select().from(aiJobs).where(and(eq(aiJobs.orgId,ctx.orgId),eq(aiJobs.idempotencyKey,input.idempotencyKey))).limit(1);
+  if (existing) {
+    if (existing.targetType !== 'creative_project' || existing.targetId !== input.projectId) throw badRequest('Image request ID already used.');
+    return existing;
+  }
+  const settings = await assertAllowance(ctx,'image');
+  if (!settings.geminiEnabled || !keyOf(ctx.env,'GEMINI_API_KEY')) throw badRequest('Configure and enable Gemini in Settings → AI. Nothing was sent.');
+  const model = assertModel(settings.imageModel,AI_IMAGE_MODELS,'Image model');
+  const aspect = assertModel(input.aspect,AI_IMAGE_ASPECTS,'Image aspect');
+  const result = await ctx.db.execute(sql`select brand_id as "brandId" from creative_projects where id=${input.projectId} and org_id=${ctx.orgId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')`);
+  const project = (result as unknown as {rows:{brandId:string|null}[]}).rows[0];
+  if (!project?.brandId) throw badRequest('Choose an active project belonging to a creator.');
+  const referenceFileIds = await projectImageReferences(ctx,project.brandId,input.referenceFileIds);
+  const cap = AI_IMAGE_REF_CAP[model as keyof typeof AI_IMAGE_REF_CAP] ?? 8;
+  if (referenceFileIds.length > cap) throw badRequest('Reference count exceeds the configured model limit. Nothing was sent.');
+  return ctx.db.transaction(async tx => {
+    // Serialize the connector's project-image admissions per organization.
+    await tx.execute(sql`select id from organizations where id=${ctx.orgId} for update`);
+    const [prior] = await tx.select().from(aiJobs).where(and(eq(aiJobs.orgId,ctx.orgId),eq(aiJobs.idempotencyKey,input.idempotencyKey))).limit(1);
+    if (prior) {
+      if (prior.targetType !== 'creative_project' || prior.targetId !== input.projectId) throw badRequest('Image request ID already used.');
+      return prior;
+    }
+    const [busy] = await tx.select().from(aiJobs).where(and(eq(aiJobs.orgId,ctx.orgId),sql`${aiJobs.status} in ('QUEUED','RUNNING')`,sql`${aiJobs.task} like 'scene_image%'`)).limit(1);
+    if (busy) throw badRequest('An image request is already queued or running. Check its status before requesting another.');
+    const [job] = await tx.insert(aiJobs).values({
+      orgId:ctx.orgId,userId:ctx.userId,brandId:project.brandId,task:'scene_image_generate',provider:'gemini',model,status:'QUEUED',
+      idempotencyKey:input.idempotencyKey,targetType:'creative_project',targetId:input.projectId,
+      input:{projectId:input.projectId,sceneId:null,mode:'generate',prompt:input.prompt,aspect,size:settings.imageSize,referenceFileIds},
+    }).returning();
+    return job!;
+  });
+}
+
 export async function queueSceneImage(ctx: Ctx, input: {
   projectId: string;
   sceneId: string;
@@ -642,11 +693,22 @@ async function uploadGeminiFile(ctx: Ctx, bytes: Buffer, mime: string, name: str
 }
 
 async function runImageJob(ctx: Ctx, job: typeof aiJobs.$inferSelect, fetchImpl: FetchLike) {
-  const input = job.input as { projectId: string; sceneId: string; mode: string; prompt: string; instruction?: string; sourceAssetId?: string | null; aspect: string; size: string };
+  const input = job.input as { projectId: string; sceneId: string | null; mode: string; prompt: string; instruction?: string; sourceAssetId?: string | null; aspect: string; size: string; referenceFileIds?: string[] };
   const cap = AI_IMAGE_REF_CAP[job.model as keyof typeof AI_IMAGE_REF_CAP] ?? 8;
-  const refs = input.mode === 'generate' ? await sceneReferenceFiles(ctx, input.projectId, input.sceneId) : [];
+  const projectImage = job.targetType === 'creative_project';
+  const refs = !projectImage && input.mode === 'generate' ? await sceneReferenceFiles(ctx, input.projectId, input.sceneId) : [];
   const profile = await getAiProfile(ctx, job.brandId);
-  const libraryRefs = input.mode === 'generate' && profile ? await referenceBytes(ctx, profile.referenceFileIds ?? []) : [];
+  let libraryRefs: Awaited<ReturnType<typeof referenceBytes>> = [];
+  if (projectImage) {
+    if (!job.brandId) throw badRequest('Creator reference missing. Nothing was sent.');
+    const result = await ctx.db.execute(sql`select id from creative_projects where id=${input.projectId} and org_id=${ctx.orgId} and brand_id=${job.brandId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')`);
+    if (!(result as unknown as {rows:unknown[]}).rows.length) throw badRequest('Project is no longer available. Nothing was sent.');
+    const ids = await projectImageReferences(ctx,job.brandId,input.referenceFileIds ?? []);
+    if (ids.length > cap) throw badRequest('Reference count exceeds model limit. Nothing was sent.');
+    libraryRefs = await referenceBytes(ctx,ids);
+  } else if (input.mode === 'generate' && profile) {
+    libraryRefs = await referenceBytes(ctx,profile.referenceFileIds ?? []);
+  }
   let source: { id: string; mime: string; bytes: Buffer } | null = null;
   if (input.sourceAssetId) {
     const opened = await openAiAsset(ctx, input.sourceAssetId);

@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
 import { audit, notify, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
-import { operations, permissionGroups, scopes } from './ai-gateway-operations';
+import { operations, permissionGroups, scopes, validateForm } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
+import { h3Form } from './ai-gateway-forms';
 import { registerBinaryUploadRoutes } from './ai-gateway-binary';
 import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative, authorizeDedicatedImageUpload, isDedicatedImageOperation } from './ai-gateway-production-policy';
 
@@ -98,6 +99,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     if(!auth.scopes.includes(operation.scope))throw forbidden('Gateway permission not enabled.');
     const input=operation.schema.parse(body.input);
     if(!operation.write)return operation.run(auth.ctx,input,'read-only');
+    if(body.operation==='generation.h3')await validateForm(auth.ctx,h3Form.parse(input));
     if(body.operation==='media.uploadImage'||body.operation==='media.uploadAudio') decodeMedia(input as {fileName:string;mime:string;base64:string},body.operation==='media.uploadImage'?'IMAGE':'AUDIO');
     if(!body.requestId)throw badRequest('A unique UUID requestId is required for writes.');
     const json=JSON.stringify(input);

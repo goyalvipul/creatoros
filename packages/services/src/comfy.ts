@@ -303,6 +303,7 @@ export async function machineQueue(db: Db, orgId: string, worker: { id: string; 
       select 1 as n from generation_jobs
       where org_id = ${orgId} and status in ('QUEUED', 'RUNNING')
         and settings->>'workerId' = ${worker.id}
+      union all select 1 as n from local_image_jobs where org_id=${orgId} and worker_id=${worker.id} and state in ('QUEUED','SUBMITTING','RENDERING')
       limit 1`),
   );
   return pending.length ? ('busy' as const) : ('free' as const);
@@ -541,6 +542,9 @@ export async function generateLtx(ctx: Ctx, form: LtxForm, opts?: { skipDraft?: 
 }
 
 interface LtxSettings {
+  productionPlanId?: string;
+  productionQualityPassed?: boolean;
+  productionSuperseded?: boolean;
   workerId?: string;
   workerLabel?: string;
   imageFileId?: string;
@@ -995,6 +999,7 @@ function variantFormatFor(contentFormat: string | null | undefined) {
 /** When a clip was generated for a Production project, create one publishing variant and attach later videos to that same variant. */
 async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
   if (!job.projectId) return;
+  if(job.settings?.productionSuperseded||(job.settings?.productionPlanId&&job.settings.productionQualityPassed!==true))return;
   const source =
     job.provider === 'comfyui-h3' ? 'comfyui-h3' : job.provider === 'comfyui-qwen-tts' ? 'comfyui-qwen-tts' : 'comfyui-ltx';
   const label = source === 'comfyui-h3' ? 'MiniMax' : source === 'comfyui-qwen-tts' ? 'Voice' : 'LTX';
@@ -1278,7 +1283,16 @@ export async function linkRecentGeneratedOutputs(db: Db) {
       and o.expected_path is not null
       and o.created_at > now() - interval '14 days'
       and f.org_id = o.org_id
-      and f.file_name = regexp_replace(o.expected_path, '^.*/', '')`);
+      and f.file_name = regexp_replace(o.expected_path, '^.*/', '')
+      and not exists(select 1 from generation_jobs j where j.id=o.job_id and j.org_id=o.org_id and j.settings->>'productionPlanId' is not null)`);
+  // Managed production must use the exact indexed worker root and relative output path, never basename fallback.
+  await db.execute(sql`update generation_outputs o set file_instance_id=f.id
+    from generation_jobs j join storage_roots r on r.org_id=j.org_id and r.id::text=j.settings->>'outputScanRootId'
+    join file_instances f on f.org_id=r.org_id and f.root_id=r.id and f.archived_at is null and f.availability='AVAILABLE'
+    where o.job_id=j.id and o.org_id=j.org_id and o.file_instance_id is null and o.expected_path is not null
+      and j.settings->>'productionPlanId' is not null and j.status='SUCCEEDED' and r.state='ACTIVE' and r.retired_at is null
+      and (case when r.path_os='windows' then lower(replace(f.canonical_path,chr(92),'/')) else replace(f.canonical_path,chr(92),'/') end)
+        =(case when r.path_os='windows' then lower(rtrim(replace(r.canonical_path,chr(92),'/'),'/')||'/'||replace(o.expected_path,chr(92),'/')) else rtrim(replace(r.canonical_path,chr(92),'/'),'/')||'/'||replace(o.expected_path,chr(92),'/') end)`);
   const pending = rowsOf<ClaimedJob>(
     await db.execute(sql`
       select id, org_id as "orgId", prompt_id as "promptId", project_id as "projectId", provider, settings, started_at as "startedAt"
@@ -1286,6 +1300,8 @@ export async function linkRecentGeneratedOutputs(db: Db) {
       where provider in ('comfyui-ltx', 'comfyui-h3', 'comfyui-qwen-tts') and status = 'SUCCEEDED' and project_id is not null
         and finished_at > now() - interval '14 days'
         and (settings->>'variantId' is null or settings->>'assetVersionId' is not null)
+        and coalesce(settings->>'productionSuperseded','false')<>'true'
+        and (settings->>'productionPlanId' is null or settings->>'productionQualityPassed'='true')
       order by finished_at desc
       limit 20`),
   );

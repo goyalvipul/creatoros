@@ -28,7 +28,7 @@ export function qualityDecision(technical:TechnicalQuality,semantic:SemanticQual
   if(requirements.requireAudio)required.add('audio');
   if(requirements.requireLipSync)required.add('lipSync');
   if(requirements.requirePhysicalAccuracy)required.add('physicalAccuracy');
-  const uncertain=semantic.checks.filter(c=>c.status==='UNCERTAIN'||(c.status==='NOT_APPLICABLE'&&required.has(c.criterion)));
+  const uncertain=semantic.checks.filter(c=>required.has(c.criterion)&&(c.status==='UNCERTAIN'||c.status==='NOT_APPLICABLE'));
   const failures=semantic.checks.filter(c=>c.status==='FAIL');
   // Do not auto-correct when the model cannot determine critical facts.
   if(uncertain.length)return {verdict:'REVIEW' as const,corrections:uncertain.map(c=>c.criterion+': '+c.evidence)};

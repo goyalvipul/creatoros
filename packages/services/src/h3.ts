@@ -467,6 +467,7 @@ export async function generateH3(ctx:Ctx,form:H3Form,options:H3Options={}):Promi
     return ctx.db.transaction(async tx=>{
       const scoped={...ctx,db:tx};
       const existing=await assertRunSubmission(scoped,options.runId!,form.projectId!);
+      if(!options.productionPlanId&&!existing&&rowsOf(await tx.execute(sql`select id from production_plans where org_id=${ctx.orgId} and run_id=${options.runId} and project_id=${form.projectId}`)).length)throw badRequest('This project is reserved for an executable production plan.');
       if(options.productionPlanId){
         const [plan]=rowsOf<{state:string;attempt:number;jobId:string|null}>(await tx.execute(sql`select state,attempt,job_id as "jobId" from production_plans where id=${options.productionPlanId} and org_id=${ctx.orgId} and run_id=${options.runId} and project_id=${form.projectId} for update`));
         if(!plan||!['QUEUE_VIDEO','REGENERATE'].includes(plan.state)||!options.productionAttempt||options.productionAttempt!==plan.attempt+1)throw badRequest('Production plan is not ready to queue this attempt.');

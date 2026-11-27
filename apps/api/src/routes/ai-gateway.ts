@@ -6,6 +6,7 @@ import { audit, notify, forbidden, unauthorized, notFound, conflict, badRequest,
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
+import { registerBinaryUploadRoutes } from './ai-gateway-binary';
 import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative } from './ai-gateway-production-policy';
 
 const mode = z.enum(['local', 'hosted']);
@@ -169,6 +170,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   app.get('/ai-gateway/tools',async req=>{const a=await authenticate(req);return envelope(req,Object.entries(operations).filter(([,op])=>a.scopes.includes(op.scope)).map(([name,op])=>({name,scope:op.scope,approvalRequired:op.write,conditionalProductionAuthorization:op.write&&(productionOperations.includes(name)||creativeOperations.includes(name)),inputSchema:z.toJSONSchema(op.schema,{io:'input',unrepresentable:'any'})})));});
   app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
+  registerBinaryUploadRoutes(app,authenticate,envelope);
   // Keep legacy endpoints on the same permission, execution and request-id path.
   app.get('/ai-gateway/projects',async req=>envelope(req,await invoke(await authenticate(req),{operation:'projects.list',input:{}})));
   app.get('/ai-gateway/videos',async req=>envelope(req,await invoke(await authenticate(req),{operation:'media.list',input:{kind:'VIDEO'}})));

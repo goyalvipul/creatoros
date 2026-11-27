@@ -12,6 +12,7 @@ import {
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
 import { uploadGatewayMedia, MAX_MEDIA_BASE64_CHARS, MAX_GENERATED_IMAGE_BYTES, importGeneratedImage } from './ai-gateway-media';
+import { prepareBinaryUpload, binaryUploadSchema } from './ai-gateway-binary';
 import { readFile, mkdtemp, rm, writeFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -176,6 +177,8 @@ export const operations:Record<string,Operation>={
  'longvideo.rebalance':op('longvideo.write',true,z.object({id:uuid,seconds:z.number().min(4).max(15)}).strict(),async(ctx,p)=>{await rebalanceLongVideo(ctx,p.id,p.seconds);return {updated:true};}),
  'longvideo.attach':op('longvideo.write',true,z.object({projectId:uuid,fileId:uuid,sceneId:uuid.nullable()}).strict(),async(ctx,p)=>{await owned(ctx,'file',p.fileId);await addLongVideoFromLibrary(ctx,p.projectId,p.fileId,p.sceneId);return {attached:true};}),
  'media.list':op('media.read',false,z.object({kind:z.enum(['IMAGE','VIDEO','AUDIO']).default('VIDEO')}).strict(),(ctx,p)=>query(ctx,sql`select id,file_name,file_type,tech from file_instances where org_id=${ctx.orgId} and archived_at is null and availability='AVAILABLE' and file_type::text=${p.kind} order by created_at desc limit 100`)),
+ 'media.prepareImageUpload':op('media.upload.image',true,binaryUploadSchema,(ctx,p,r)=>prepareBinaryUpload(ctx,p,r,'IMAGE')),
+ 'media.prepareAudioUpload':op('media.upload.audio',true,binaryUploadSchema,(ctx,p,r)=>prepareBinaryUpload(ctx,p,r,'AUDIO')),
  'media.uploadImage':op('media.upload.image',true,uploadSchema,(ctx,p,r)=>uploadGatewayMedia(ctx,p,r,'IMAGE')),
  'media.uploadAudio':op('media.upload.audio',true,uploadSchema,(ctx,p,r)=>uploadGatewayMedia(ctx,p,r,'AUDIO')),
  'media.roots':op('media.read',false,empty,ctx=>query(ctx,sql`select r.id,r.display_path,d.display_name as device_name,r.state,d.state as device_state from storage_roots r join devices d on d.id=r.device_id and d.org_id=r.org_id where r.org_id=${ctx.orgId} and r.retired_at is null order by d.display_name,r.display_path limit 100`)),

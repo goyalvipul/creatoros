@@ -69,3 +69,4 @@ export * from './social-cover';
 
 export * from './gateway-media';
 export * from './local-image';
+export * from './production-plan';

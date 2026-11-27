@@ -6,7 +6,7 @@ import {useState} from 'react';
 import {useApi,post} from '@/lib/api';
 import {ActionButton} from '@/components/ui';
 
-type Post={phase:string;detail?:string;lease?:string|null;fileId?:string;itemId?:string;covers?:string[];prefilled?:string[];missingPlatforms?:string[]};
+type Post={phase:string;detail?:string;lease?:string|null;fileId?:string;itemId?:string;covers?:string[];prefilled?:string[];missingPlatforms?:string[];humanReviewRequired?:boolean;unresolvedChecks?:string[];qualityVerdict?:string};
 type Job={id:string;projectId:string;title:string;brandId:string;stage:string;status:string;error:string|null;runId:string|null;worker:string|null;progress?:{phase:string;detail:string};scanStatus?:string;post?:Post;paused:boolean;superseded?:boolean;createdAt:string;finishedAt?:string};
 type Run={id:string;brandId:string;brandName:string;localDay:string;target:number;state:string;planningState:string;planningDetail:string|null};
 type Event={id:number;runId:string;jobId?:string;stage:string;detail:string;createdAt:string};
@@ -24,7 +24,7 @@ function jobLabel(j:Job){
   if(j.superseded)return 'Rejected attempt · retained';
   if(j.status==='FAILED'||j.status==='CANCELLED')return words(j.status);
   if(j.paused)return 'Paused';
-  if(j.status==='SUCCEEDED')return j.post?words(j.post.phase):'Rendered · not enrolled';
+  if(j.status==='SUCCEEDED')return j.post?.phase==='READY'&&j.post.humanReviewRequired?'Ready for human review':j.post?words(j.post.phase):'Rendered · not enrolled';
   return j.status==='RUNNING'?'Rendering':'Waiting for GPU';
 }
 function JobCard({j,refresh}:{j:Job;refresh:()=>Promise<unknown>}){
@@ -38,6 +38,7 @@ function JobCard({j,refresh}:{j:Job;refresh:()=>Promise<unknown>}){
       {[j.status==='SUCCEEDED',!!j.post?.fileId,!!phase&&['METADATA','COVERS','PREFILL','AWAITING_ACCOUNTS','READY'].includes(phase),!!j.post?.covers?.length,ready].map((done,i)=><div key={i} className="min-w-0"><div className={'h-1.5 rounded-full '+(done?'bg-ok':'bg-panel2')}/><div className="mt-1 text-[10px] text-muted">{['Render','Index','Analysis','Cover','Draft'][i]}</div></div>)}
     </div>
     <p className={'mt-2 text-xs '+(failed?'text-bad':'text-muted')}>{j.error??j.post?.detail??j.progress?.detail??'Awaiting processing.'}{j.scanStatus?' · '+words(j.scanStatus):''}</p>
+    {j.post?.humanReviewRequired&&<p className="mt-1 text-xs font-medium text-muted">Human review required{j.post.unresolvedChecks?.length?': '+j.post.unresolvedChecks.join(', '):'.'} Not creative approval.</p>}
     {!!j.post?.missingPlatforms?.length&&<p className="mt-1 text-xs text-muted">Not connected: {j.post.missingPlatforms.join(', ')}. Packages remain saved.</p>}
     <div className="mt-3 flex flex-wrap gap-2">{j.superseded&&<span className="text-xs text-muted">Preserved for review; no automatic publishing drafts.</span>}
       {!j.runId&&j.status==='SUCCEEDED'&&<ActionButton size="sm" confirm="Continue post-processing this existing render without making another video? Billable provider calls still require creator authorization." onAction={()=>control('adopt')}>Process existing video</ActionButton>}

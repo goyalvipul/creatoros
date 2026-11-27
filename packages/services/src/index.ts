@@ -66,3 +66,5 @@ export * from './live-server';
 export * from './project-drive';
 export * from './project-drive-metadata';
 export * from './social-cover';
+
+export * from './gateway-media';

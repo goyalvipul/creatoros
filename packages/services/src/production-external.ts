@@ -16,11 +16,11 @@ export const productionQualityReportSchema=productionFinalizeSchema.extend({
 }).strict();
 type Target=z.infer<typeof productionFinalizeSchema>;
 type Report=z.infer<typeof productionQualityReportSchema>;
-type Stored={requirements?:QualityRequirements;fileId:string;versionId:string;size:number;mtime:string;verdict:string;technical:unknown;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
-type Output={jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;versionId:string;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
+type Stored={requirements?:QualityRequirements;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;verdict:string;technical:unknown;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
+type Output={jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
 async function output(ctx:Ctx,target:Target,lock=false){
   const [o]=rows<Output>(await ctx.db.execute(sql`select j.id as "jobId",p.id as "projectId",p.brand_id as "brandId",p.stage,j.status,j.settings,
-    j.settings->>'productionRunId' as "runId",r.state as "runState",f.id as "fileId",o.asset_version_id as "versionId",f.size::float8 as size,f.mtime::text as mtime,
+    j.settings->>'productionRunId' as "runId",r.state as "runState",f.id as "fileId",o.id as "outputId",o.asset_version_id as "versionId",f.size::float8 as size,f.mtime::text as mtime,
     pl.id as "planId",pl.state as "planState",pl.payload as "planPayload"
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
     join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and o.output_role='final'
@@ -28,7 +28,7 @@ async function output(ctx:Ctx,target:Target,lock=false){
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     left join production_plans pl on pl.id::text=j.settings->>'productionPlanId' and pl.org_id=j.org_id and pl.job_id=j.id
     where j.org_id=${ctx.orgId} and j.id=${target.jobId} and f.id=${target.fileId} and p.deleted_at is null and p.brand_id is not null
-    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO' and o.asset_version_id is not null
+    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO'
     and j.provider='comfyui-h3' and j.status='SUCCEEDED'
     and coalesce(j.settings->>'productionSuperseded','false')<>'true'
     and (j.settings->>'productionPlanId' is null or pl.id is not null)
@@ -58,7 +58,7 @@ export function constrainEvidence(report:Report,required:QualityRequirements):Se
   });
   return {checks};
 }
-function matches(o:Output,r:Stored|undefined){return !!r&&r.fileId===o.fileId&&r.versionId===o.versionId&&r.size===o.size&&r.mtime===o.mtime;}
+function matches(o:Output,r:Stored|undefined){return !!r&&r.fileId===o.fileId&&r.outputId===o.outputId&&r.size===o.size&&r.mtime===o.mtime;}
 export async function submitChatGPTQualityReport(ctx:Ctx,input:Report){
   const p=productionQualityReportSchema.parse(input);
   const initial=await output(ctx,p);requireActive(initial);
@@ -68,7 +68,7 @@ export async function submitChatGPTQualityReport(ctx:Ctx,input:Report){
   const semantic=constrainEvidence(p,req);
   const technical=await inspectTechnicalVideo(ctx,p.fileId,req);
   const decision=qualityDecision(technical,semantic,req);
-  const report:Stored={requirements:req,fileId:p.fileId,versionId:initial.versionId,size:initial.size,mtime:initial.mtime,technical,semantic,evidence:p.evidence,...decision};
+  const report:Stored={requirements:req,fileId:p.fileId,outputId:initial.outputId,versionId:initial.versionId,size:initial.size,mtime:initial.mtime,technical,semantic,evidence:p.evidence,...decision};
   return ctx.db.transaction(async tx=>{
     const scoped={...ctx,db:tx};
     const o=await output(scoped,p,true);requireActive(o);

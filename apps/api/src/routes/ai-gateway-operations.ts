@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { sql, and, eq, publishDrafts } from '@creatoros/db';
 import {
   audit, badRequest, conflict, notFound, createProject, updateProject, upsertScenes,
   createLongVideo, updateLongVideo, updateLongVideoScene, splitLongVideoScene,
   addLongVideoFromLibrary, rebalanceLongVideo, queueLongVideoScene, cancelLongVideoScene,
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
-  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes, MAX_SOCIAL_COVER_BASE64_CHARS, socialCoverLimit, decodeSocialCoverBase64, productionQualityReportSchema, productionFinalizeSchema, submitChatGPTQualityReport, productionReadiness, finalizeChatGPTProduction,
+  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes, readSocialCover, MAX_SOCIAL_COVER_BASE64_CHARS, socialCoverLimit, decodeSocialCoverBase64, productionQualityReportSchema, productionFinalizeSchema, submitChatGPTQualityReport, productionReadiness, finalizeChatGPTProduction,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
   workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, localImageCapabilities, localImageInputSchema, queueLocalImage, localImageStatus, cancelLocalImage, productionPlanInputSchema, submitProductionPlan, productionPlanStatus, recoverProductionPlan, type Ctx,
 } from '@creatoros/services';
@@ -191,7 +192,7 @@ export const operations:Record<string,Operation>={
  'media.keyframes':op('frames.read',false,z.object({id:uuid,seconds:z.array(z.number().min(0).max(7200)).min(1).max(4)}).strict(),keyframes),
  'media.analyze':op('analysis.request',true,id,async(ctx,p,r)=>{await owned(ctx,'file',p.id);if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${p.id} and file_type='VIDEO'`)).length)throw badRequest('Choose a video.');const job=await queueVideoAnalysis(ctx,{fileId:p.id,acceptBillable:true,idempotencyKey:r});return {id:job.id,status:job.status};}),
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
- 'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,started_at,finished_at,error,settings->>'workerId' as worker_id,settings->'progress' as progress,settings->>'outputScanStatus' as output_scan_status,settings->>'outputScanRequestedAt' as output_scan_requested_at,coalesce(settings->>'dispatchPaused','false')='true' as paused from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
+ 'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,started_at,finished_at,error,settings->>'workerId' as worker_id,settings->'progress' as progress,settings->'postProduction' as post_production,settings->'qualityReport'->>'verdict' as quality_verdict,settings->>'creativeOwner' as creative_owner,settings->>'productionRunId' as production_run_id,settings->>'outputScanStatus' as output_scan_status,settings->>'outputScanRequestedAt' as output_scan_requested_at,coalesce(settings->>'dispatchPaused','false')='true' as paused from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
  'production.runStart':op('projects.write',true,z.object({brandId:uuid,localDay:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),target:z.number().int().min(1).max(2)}).strict(),(ctx,p)=>startProductionRun(ctx,p)),
  'production.runEvent':op('projects.update',true,z.object({runId:uuid,stage:z.enum(['RESEARCHING','PLANNED','BLOCKED','FAILED']),detail:z.string().min(1).max(4000)}).strict(),(ctx,p)=>recordProductionPlanning(ctx,p)),
@@ -244,7 +245,10 @@ export const operations:Record<string,Operation>={
    const cap=socialCoverLimit(ctx.env.processEnv.AI_GATEWAY_THUMBNAIL_MAX_MIB);
    if(p.fileId&&! (await query(ctx,sql`select f.id from file_instances f join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id join creative_projects pr on pr.id=${t.project_id} and pr.org_id=f.org_id where f.id=${p.fileId} and f.org_id=${ctx.orgId} and a.brand_id=pr.brand_id and (a.project_id is null or a.project_id=pr.id) and not a.is_archived and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='IMAGE'`)).length)throw badRequest('Use an available thumbnail registered to this creator and project.');
    const bytes=p.fileId?await mediaBytes(ctx,p.fileId,'IMAGE',cap):decodeSocialCoverBase64(p.base64!,cap);
-   return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,bytes);
+   const saved=await saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,bytes);
+   const verified=await readSocialCover(ctx,ctx.orgId,p.itemId,p.socialAccountId);
+   if(!verified||!verified.bytes.equals(bytes))throw conflict('Thumbnail readback did not match. Inspect the original request.');
+   return {...saved,sourceFileId:p.fileId??null,size:verified.bytes.length,sha256:createHash('sha256').update(verified.bytes).digest('hex'),mime:verified.mime};
  }),
  'production.qualityReport':op('projects.update',true,productionQualityReportSchema,submitChatGPTQualityReport),
  'production.readiness':op('projects.read',false,productionFinalizeSchema,productionReadiness),

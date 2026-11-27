@@ -16,7 +16,7 @@ export const productionQualityReportSchema=productionFinalizeSchema.extend({
 }).strict();
 type Target=z.infer<typeof productionFinalizeSchema>;
 type Report=z.infer<typeof productionQualityReportSchema>;
-type Stored={fileId:string;versionId:string;size:number;mtime:string;verdict:string;technical:unknown;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
+type Stored={requirements?:QualityRequirements;fileId:string;versionId:string;size:number;mtime:string;verdict:string;technical:unknown;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
 type Output={jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;versionId:string;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
 async function output(ctx:Ctx,target:Target,lock=false){
   const [o]=rows<Output>(await ctx.db.execute(sql`select j.id as "jobId",p.id as "projectId",p.brand_id as "brandId",p.stage,j.status,j.settings,
@@ -47,7 +47,8 @@ function requirements(o:Output,p:Report):QualityRequirements {
   const aspectRatio=String(o.settings.aspectRatio??'');
   if(duration<=0||duration>30||!/^\d+:\d+/.test(aspectRatio))throw badRequest('Original render requirements are unavailable.');
   const plan=o.planPayload;
-  return {duration,aspectRatio,requireAudio:p.requireAudio||p.requireLipSync||plan?.requireAudio===true||plan?.requireLipSync===true||!!segments?.some(s=>s.audioFileId||s.audioUploadName),requireLipSync:p.requireLipSync||plan?.requireLipSync===true,requirePhysicalAccuracy:p.requirePhysicalAccuracy||plan?.requirePhysicalAccuracy===true};
+  const previous=o.settings.qualityReport as (Stored&{requirements?:QualityRequirements})|undefined;
+  return {duration,aspectRatio,requireAudio:previous?.requirements?.requireAudio===true||p.requireAudio||p.requireLipSync||plan?.requireAudio===true||plan?.requireLipSync===true||!!segments?.some(s=>s.audioFileId||s.audioUploadName),requireLipSync:previous?.requirements?.requireLipSync===true||p.requireLipSync||plan?.requireLipSync===true,requirePhysicalAccuracy:previous?.requirements?.requirePhysicalAccuracy===true||p.requirePhysicalAccuracy||plan?.requirePhysicalAccuracy===true};
 }
 export function constrainEvidence(report:Report,required:QualityRequirements):SemanticQuality {
   const checks=report.assessment.checks.map(c=>{
@@ -67,11 +68,12 @@ export async function submitChatGPTQualityReport(ctx:Ctx,input:Report){
   const semantic=constrainEvidence(p,req);
   const technical=await inspectTechnicalVideo(ctx,p.fileId,req);
   const decision=qualityDecision(technical,semantic,req);
-  const report:Stored={fileId:p.fileId,versionId:initial.versionId,size:initial.size,mtime:initial.mtime,technical,semantic,evidence:p.evidence,...decision};
+  const report:Stored={requirements:req,fileId:p.fileId,versionId:initial.versionId,size:initial.size,mtime:initial.mtime,technical,semantic,evidence:p.evidence,...decision};
   return ctx.db.transaction(async tx=>{
     const scoped={...ctx,db:tx};
     const o=await output(scoped,p,true);requireActive(o);
     if(!matches(o,report))throw conflict('Output changed during review.');
+    if(o.stage==='READY'&&decision.verdict!=='PASS')throw conflict('Reopen the project for review before replacing a finalized quality report.');
     if(o.settings.postProduction&&((o.settings.postProduction as {lease?:string}).lease))throw conflict('Another post-production worker is active.');
     if(o.planId){
       if(!['QUALITY','REVIEW','PASSED'].includes(o.planState??''))throw conflict('Plan is not awaiting assessment.');

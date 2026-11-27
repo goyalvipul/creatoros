@@ -1,5 +1,5 @@
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
-import {brands,creativeProjects,sql,fileInstances,generationJobs,generationOutputs,logicalAssets,assetVersions,distributionVariants,publishItems,channels,socialAccounts,publishDrafts} from '@creatoros/db';
+import {brands,creativeProjects,sql,fileInstances,generationJobs,generationOutputs,logicalAssets,assetVersions,distributionVariants,publishItems,channels,socialAccounts,publishDrafts,devices,eq} from '@creatoros/db';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -53,6 +53,7 @@ describe('ChatGPT production finalization',()=>{
    const [brand]=await ctx.db.insert(brands).values({orgId:ctx.orgId,name:'External fixture'}).returning();
    const [project]=await ctx.db.insert(creativeProjects).values({orgId:ctx.orgId,brandId:brand!.id,title:'External test'}).returning();
    const device=await pairTestDevice(ctx);
+   await ctx.db.update(devices).set({state:'ONLINE'}).where(eq(devices.id,device.deviceId));
    const root=await makeRoot(ctx,device.deviceId);
    const [file]=await ctx.db.insert(fileInstances).values({orgId:ctx.orgId,rootId:root.id,deviceId:device.deviceId,displayPath:'D:\\Media\\fixture.mp4',canonicalPath:'d:/media/fixture.mp4',fileName:'fixture.mp4',fileType:'VIDEO',size:1234,mtime:new Date()}).returning();
    const [asset]=await ctx.db.insert(logicalAssets).values({orgId:ctx.orgId,brandId:brand!.id,projectId:project!.id,title:'Fixture'}).returning();

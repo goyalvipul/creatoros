@@ -1,2 +1,1 @@
-// Backwards-compatible API import; the worker uses the same validation and scanner path.
-export * from '@creatoros/services';
+export {decodeMedia, gatewayMediaLimit, DEFAULT_MEDIA_BYTES, MAX_MEDIA_BYTES, MAX_MEDIA_BASE64_CHARS, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES, MAX_GENERATED_IMAGE_BYTES, MAX_BINARY_IMAGE_BYTES, MAX_BINARY_AUDIO_BYTES, validateMediaName, uploadGatewayMedia, importBinaryMedia, importGeneratedImage} from '@creatoros/services';

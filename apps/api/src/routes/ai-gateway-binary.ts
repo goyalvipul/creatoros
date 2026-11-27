@@ -6,6 +6,8 @@ import { sql } from '@creatoros/db';
 import { badRequest, conflict, forbidden, notFound, tooMany, type Ctx } from '@creatoros/services';
 import { importBinaryMedia, MAX_BINARY_IMAGE_BYTES, MAX_BINARY_AUDIO_BYTES, validateMediaName } from './ai-gateway-media';
 
+import { isDedicatedUploadRoot } from './ai-gateway-production-policy';
+
 const rows = <T>(r: unknown) => (r as { rows: T[] }).rows;
 type Kind = 'IMAGE' | 'AUDIO';
 type Auth = { ctx: Ctx; mode: 'local' | 'hosted'; hash: string; scopes: string[] };
@@ -16,7 +18,7 @@ export const binaryUploadSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 type Input = z.infer<typeof binaryUploadSchema>;
-type Session = { id: string; operation: string; scope: string; input: unknown; result: { uploadState: string; expiresAt: string; [key: string]: unknown } };
+type Session = { policy_authorized: boolean; id: string; operation: string; scope: string; input: unknown; result: { uploadState: string; expiresAt: string; [key: string]: unknown } };
 const operations = ['media.prepareImageUpload','media.prepareAudioUpload'];
 const kindOf = (operation: string): Kind => operation === operations[0] ? 'IMAGE' : 'AUDIO';
 const maxOf = (kind: Kind) => kind === 'IMAGE' ? MAX_BINARY_IMAGE_BYTES : MAX_BINARY_AUDIO_BYTES;
@@ -37,7 +39,7 @@ export async function prepareBinaryUpload(ctx: Ctx, input: Input, requestId: str
   });
 }
 async function loadSession(auth: Auth,id:string) {
-  const [session]=rows<Session>(await auth.ctx.db.execute(sql`select id,operation,scope,input,result from ai_gateway_requests where id=${id} and org_id=${auth.ctx.orgId} and mode=${auth.mode} and credential_hash=${auth.hash} and status='COMPLETED' and operation in ('media.prepareImageUpload','media.prepareAudioUpload')`));
+  const [session]=rows<Session>(await auth.ctx.db.execute(sql`select id,operation,scope,input,result,policy_authorized from ai_gateway_requests where id=${id} and org_id=${auth.ctx.orgId} and mode=${auth.mode} and credential_hash=${auth.hash} and status='COMPLETED' and operation in ('media.prepareImageUpload','media.prepareAudioUpload')`));
   if (!session || !auth.scopes.includes(session.scope) || !session.result?.uploadState) throw notFound('Upload session');
   return session;
 }
@@ -106,6 +108,7 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
         const current=await authenticate(req,s.scope);
         if(current.hash!==auth.hash||current.ctx.orgId!==auth.ctx.orgId)throw forbidden('Upload authorization changed.');
         if(Date.parse(s.result.expiresAt)<=Date.now())throw conflict('Upload session expired.');
+        if(s.policy_authorized&&kind==='IMAGE'&&!await isDedicatedUploadRoot(current.ctx,input.rootId))throw forbidden('Dedicated ChatGPT upload root authorization changed.');
         writing=true;
         const output=await importBinaryMedia(current.ctx,input,id,kind,bytes);
         if(!await setState(auth,id,'RECEIVING','COMPLETE',{output}))throw conflict('Upload result could not be recorded; inspect the original session.');

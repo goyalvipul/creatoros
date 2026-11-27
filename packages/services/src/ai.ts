@@ -422,7 +422,7 @@ async function sceneReferenceFiles(ctx: Ctx, projectId: string, sceneId: string 
 }
 
 // Project-scoped image generation for H3/LTX: reuse the existing billable AI worker.
-async function projectImageReferences(ctx: Ctx, brandId: string, explicit: string[]) {
+export async function projectImageReferences(ctx: Ctx, brandId: string, explicit: string[]) {
   const profile = await getAiProfile(ctx, brandId);
   const ids = [...new Set([...(profile?.referenceFileIds ?? []), ...explicit])];
   if (!ids.length) throw badRequest('Choose a verified creator reference before generating an image. Nothing was sent.');
@@ -791,7 +791,7 @@ async function failJob(ctx: Ctx, job: typeof aiJobs.$inferSelect, error: unknown
 export async function runDueAiJobs(db: Ctx['db'], env: ServiceEnv, fetchImpl: FetchLike = fetch) {
   await db.execute(sql`
     update ai_jobs set status = 'FAILED', error = 'The worker stopped before the provider finished. Kemokem did not send it again. Retry only if you accept another billable request.', finished_at = now()
-    where status = 'RUNNING' and started_at < now() - interval '8 minutes'
+    where status = 'RUNNING' and task in ('scene_image_generate','scene_image_edit','video_analyze') and started_at < now() - interval '8 minutes'
   `);
   const claimed = await db.execute(sql`
     update ai_jobs set status = 'RUNNING', started_at = now(), attempts = attempts + 1

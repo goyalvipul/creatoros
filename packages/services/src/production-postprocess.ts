@@ -189,6 +189,8 @@ export async function runDueProduction(db:Db,env:ServiceEnv){
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     where j.provider='comfyui-h3' and j.status='SUCCEEDED' and p.deleted_at is null and p.brand_id is not null and p.stage in ('DRAFT','IN_PROGRESS','READY')
       and (r.id is not null or j.settings->>'productionAdopted'='true') and (r.id is null or r.state='ACTIVE')
+      and coalesce(j.settings->>'productionSuperseded','false')<>'true'
+      and (j.settings->>'productionPlanId' is null or j.settings->>'productionQualityPassed'='true')
       and coalesce(j.settings->>'dispatchPaused','false')<>'true'
       and j.settings->'postProduction'->>'lease' is null
       and (coalesce(j.settings->'postProduction'->>'phase','WAIT_INDEX') not in ('READY','FAILED','STOPPED') or (j.settings->'postProduction'->>'phase'='READY' and exists(select 1 from social_accounts a join channels c on c.id=a.channel_id and c.org_id=a.org_id where a.org_id=j.org_id and c.brand_id=p.brand_id and a.active and a.deleted_at is null and c.deleted_at is null and a.platform::text in ('youtube','instagram','facebook','tiktok','threads','x') and not (coalesce(j.settings->'postProduction'->'prefilled','[]'::jsonb) ? a.id::text))))
@@ -202,6 +204,7 @@ export async function runDueProduction(db:Db,env:ServiceEnv){
 }
 export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pause'|'resume'|'stop'|'retry'|'cancel_render'){
   const j=await loadJob(ctx,id);
+  if(j.settings.productionSuperseded===true)throw conflict('Rejected production attempt is retained for history only.');
   if(action==='adopt'){
     if(!j.brandId||j.status!=='SUCCEEDED')throw badRequest('Adopt a completed creator video.');
     if(j.settings.productionAdopted===true||j.runId)return {accepted:true};
@@ -211,7 +214,7 @@ export async function controlProductionJob(ctx:Ctx,id:string,action:'adopt'|'pau
       await tx.execute(sql`insert into production_runs(org_id,brand_id,local_day,target,planning_state,planning_detail) values(${ctx.orgId},${j.brandId},${date.day}::date,2,'PLANNED','Owner adopted an existing completed render; source evidence predates run tracking.') on conflict(org_id,brand_id,local_day) do nothing`);
       const [run]=rows<{id:string;state:string}>(await tx.execute(sql`select id,state from production_runs where org_id=${ctx.orgId} and brand_id=${j.brandId} and local_day=${date.day}::date for update`));
       if(!run||run.state==='STOPPED')throw conflict('That daily run is stopped.');
-      const [count]=rows<{n:number}>(await tx.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${run.id}`));
+      const [count]=rows<{n:number}>(await tx.execute(sql`select count(*)::int as n from generation_jobs where org_id=${ctx.orgId} and settings->>'productionRunId'=${run.id} and coalesce(settings->>'productionSuperseded','false')<>'true'`));
       if((count?.n??0)>=2)throw conflict('This daily run already has two videos.');
       await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({productionAdopted:true,productionRunId:run.id,postProduction:{phase:'WAIT_INDEX',attempt:1}})}::jsonb,updated_at=now() where id=${id} and org_id=${ctx.orgId}`);
       await runEvent(tx,ctx.orgId,run.id,'ADOPTED','Existing render adopted without regenerating.',id);

@@ -188,7 +188,8 @@ export async function runDueProduction(db:Db,env:ServiceEnv){
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     where j.provider='comfyui-h3' and j.status='SUCCEEDED' and p.deleted_at is null and p.brand_id is not null and p.stage in ('DRAFT','IN_PROGRESS','READY')
-      and (r.id is not null or j.settings->>'productionAdopted'='true') and (r.id is null or r.state='ACTIVE')
+      and (r.id is not null or j.settings->>'productionAdopted'='true')
+      and coalesce(j.settings->>'creativeOwner','')<>'chatgpt' and (r.id is null or r.state='ACTIVE')
       and coalesce(j.settings->>'productionSuperseded','false')<>'true'
       and (j.settings->>'productionPlanId' is null or j.settings->>'productionQualityPassed'='true')
       and coalesce(j.settings->>'dispatchPaused','false')<>'true'

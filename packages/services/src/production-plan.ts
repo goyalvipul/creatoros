@@ -22,7 +22,7 @@ export const productionPlanInputSchema=z.object({
   maxRegenerations:z.number().int().min(0).max(2),acceptBillableQuality:z.literal(true),
 }).strict();
 type Input=z.infer<typeof productionPlanInputSchema>;
-type Payload=Input & {assetIds:string[];assetSnapshots:LocalImageSnapshot[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];inspectionRetryFor?:number;reviewStage?:string};
+type Payload=Input & {assetIds:string[];assetSnapshots:LocalImageSnapshot[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];assetCorrections?:Record<string,string>;inspectionRetryFor?:number;reviewStage?:string};
 type Plan={id:string;orgId:string;runId:string;projectId:string;brandId:string;payload:Payload;state:string;attempt:number;jobId:string|null;quality:unknown;detail:string|null;lease:string|null;updatedAt:string};
 const columns=sql`p.id,p.org_id as "orgId",p.run_id as "runId",p.project_id as "projectId",p.brand_id as "brandId",p.payload,p.state,p.attempt,p.job_id as "jobId",p.quality,p.detail,p.lease,p.updated_at as "updatedAt"`;
 type Form=z.output<typeof h3Form>;
@@ -127,7 +127,11 @@ async function finalFile(ctx:Ctx,p:Plan){
 async function advance(ctx:Ctx,p:Plan,lease:string){
   const payload=p.payload;
   if(p.state==='PREPARING'){
-    for(const [i,a] of payload.assets.entries())await queueLocalImage(ctx,a.image,payload.assetIds[i]!,p.runId,payload.assetSnapshots[i]);
+    for(const [i,a] of payload.assets.entries()){
+      const correction=payload.assetCorrections?.[String(i)];
+      const image=correction?{...a.image,prompt:(a.image.prompt+'\nRepair observed reference defect: '+correction).slice(0,4000)}:a.image;
+      await queueLocalImage(ctx,image,payload.assetIds[i]!,p.runId,payload.assetSnapshots[i]);
+    }
     return finish(ctx,p,lease,payload.assets.length?'WAIT_IMAGES':'QUEUE_VIDEO',payload.assets.length?'Waiting for generated image assets.':'All required references already available.');
   }
   if(p.state==='WAIT_IMAGES'||p.state==='QUEUE_VIDEO'||p.state==='REGENERATE'){
@@ -145,7 +149,7 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
       return finish(ctx,p,lease,'REVIEW','Local asset requires review: '+(failed.error??failed.state),{payload:{...payload,reviewStage:p.state}});
     }
     if(jobs.some(j=>j.state!=='COMPLETE'||!j.fileId))return finish(ctx,p,lease,'WAIT_IMAGES','Waiting for local image output registration.');
-    if(p.state==='WAIT_IMAGES')return finish(ctx,p,lease,'QUEUE_VIDEO','All generated assets have permanent library IDs.');
+    if(p.state==='WAIT_IMAGES')return finish(ctx,p,lease,p.attempt>0?'REGENERATE':'QUEUE_VIDEO','All generated assets have permanent library IDs.');
     const form=resolvePlanForm(payload,jobs.map(j=>j.fileId!));
     for(const segment of form.segments){for(const image of segment.images)await available(ctx,image.fileId,'IMAGE');await available(ctx,segment.audioFileId,'AUDIO');await available(ctx,segment.videoFileId,'VIDEO');}
     const next=p.attempt+1;
@@ -174,7 +178,21 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
     const decision=qualityDecision(technical,semantic,required);
     const report={fileId:file,technical,semantic,...decision};
     if(decision.verdict==='PASS')return finish(ctx,p,lease,'PASSED','Automated quality gate passed; human review before publishing.',{quality:report});
-    if(decision.verdict==='FAIL'&&p.attempt<=payload.maxRegenerations)return finish(ctx,p,lease,'REGENERATE','Observed defects; queue a corrected attempt within approved budget.',{quality:report,payload:{...payload,corrections:decision.corrections}});
+    if(decision.verdict==='FAIL'&&p.attempt<=payload.maxRegenerations){
+      const assetIds=[...payload.assetIds],assetCorrections={...payload.assetCorrections};
+      const repairs=new Map<number,string>();
+      for(const check of semantic?.checks??[]){
+        if(check.status!=='FAIL'||!['identity','equipment'].includes(check.criterion)||check.seconds===null)continue;
+        let elapsed=0,segmentIndex=payload.form.segments.length-1;
+        for(const [i,s] of payload.form.segments.entries()){elapsed+=s.durationSec??0;if(check.seconds<elapsed){segmentIndex=i;break;}}
+        const index=payload.assets.findIndex(a=>a.segmentIndexes.includes(segmentIndex));
+        if(index>=0)repairs.set(index,((repairs.get(index)??'')+' '+check.correction).trim().slice(0,1000));
+      }
+      // Regenerate at most one relevant starting image per corrected video attempt; retain its old job and media.
+      const first=repairs.entries().next().value;
+      if(first){const [index,correction]=first;assetIds[index]=randomUUID();assetCorrections[String(index)]=correction;}
+      return finish(ctx,p,lease,first?'PREPARING':'REGENERATE',first?'Observed reference defect; regenerate the affected starting image before the corrected render.':'Observed defects; queue a corrected attempt within approved budget.',{quality:report,payload:{...payload,assetIds,assetCorrections,corrections:decision.corrections}});
+    }
     return finish(ctx,p,lease,'REVIEW',decision.verdict==='FAIL'?'Quality failed; regeneration budget exhausted.':'Quality evidence is uncertain; human review required.',{quality:report,payload:{...payload,reviewStage:'QUALITY'}});
   }
 }

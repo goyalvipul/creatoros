@@ -375,7 +375,7 @@ export function SocialThumbnailStudio({
               onChange={async (e) => {
                 const f = e.target.files?.[0];
                 if (!f) return;
-                if (f.size > 2_000_000) { setError('Image must be 2 MB or smaller.'); return; }
+                if (f.size > 5 * 1024 * 1024) { setError('Image exceeds the maximum supported 5 MiB; the server may enforce a lower configured limit.'); return; }
                 const reader = new FileReader();
                 reader.onload = () => setImageData(String(reader.result ?? ''));
                 reader.readAsDataURL(f);

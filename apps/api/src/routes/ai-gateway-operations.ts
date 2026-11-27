@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { sql, and, eq, publishDrafts } from '@creatoros/db';
 import {
   audit, badRequest, conflict, notFound, createProject, updateProject, upsertScenes,
   createLongVideo, updateLongVideo, updateLongVideoScene, splitLongVideoScene,
   addLongVideoFromLibrary, rebalanceLongVideo, queueLongVideoScene, cancelLongVideoScene,
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
-  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
+  queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes, readSocialCover, MAX_SOCIAL_COVER_BASE64_CHARS, socialCoverLimit, decodeSocialCoverBase64, productionQualityReportSchema, productionFinalizeSchema, submitChatGPTQualityReport, productionReadiness, finalizeChatGPTProduction,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
   workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, localImageCapabilities, localImageInputSchema, queueLocalImage, localImageStatus, cancelLocalImage, productionPlanInputSchema, submitProductionPlan, productionPlanStatus, recoverProductionPlan, type Ctx,
 } from '@creatoros/services';
@@ -38,14 +39,15 @@ async function availableMedia(ctx:Ctx,id:string|null|undefined,kind:'IMAGE'|'AUD
   if(!id)return;
   if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${id} and archived_at is null and availability='AVAILABLE' and file_type::text=${kind}`)).length)throw badRequest('Choose available library media of the requested type.');
 }
-async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeof ltxForm>) {
+export async function validateForm(ctx: Ctx, form: z.infer<typeof h3Form>|z.infer<typeof ltxForm>) {
   await owned(ctx,'project',form.projectId);
   await owned(ctx,'worker',form.workerId);
   await availableMedia(ctx,form.imageFileId,'IMAGE');
   // Uploaded worker filenames are intentionally unsupported; use owned library IDs.
   if (form.imageUploadName || form.imageUploadWorkerId) throw badRequest('Use a library image ID, not a worker upload path.');
   if ('segments' in form) {
-    for (const s of form.segments) {
+    for (const [index,s] of form.segments.entries()) {
+      if(!s.images.some(image=>image.fileId))throw badRequest(`Add a picture on segment ${index+1}.`,undefined,'H3_INPUT_INVALID');
       if(s.audioUploadName||s.audioUploadWorkerId||s.videoUploadName||s.videoUploadWorkerId) throw badRequest('Use library media IDs.');
       await availableMedia(ctx,s.audioFileId,'AUDIO'); await availableMedia(ctx,s.videoFileId,'VIDEO');
       for(const image of s.images) {
@@ -190,7 +192,7 @@ export const operations:Record<string,Operation>={
  'media.keyframes':op('frames.read',false,z.object({id:uuid,seconds:z.array(z.number().min(0).max(7200)).min(1).max(4)}).strict(),keyframes),
  'media.analyze':op('analysis.request',true,id,async(ctx,p,r)=>{await owned(ctx,'file',p.id);if(!(await query(ctx,sql`select id from file_instances where org_id=${ctx.orgId} and id=${p.id} and file_type='VIDEO'`)).length)throw badRequest('Choose a video.');const job=await queueVideoAnalysis(ctx,{fileId:p.id,acceptBillable:true,idempotencyKey:r});return {id:job.id,status:job.status};}),
  'gpu.list':op('gpu.read',false,empty,ctx=>query(ctx,sql`select id,label,role,enabled,last_ok,last_checked_at,reported_vram_gb,expected_vram_gb from gpu_workers where org_id=${ctx.orgId} order by label`)),
- 'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,started_at,finished_at,error,settings->>'workerId' as worker_id,settings->'progress' as progress,settings->>'outputScanStatus' as output_scan_status,settings->>'outputScanRequestedAt' as output_scan_requested_at,coalesce(settings->>'dispatchPaused','false')='true' as paused from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
+ 'generation.jobs':op('generation.read',false,empty,ctx=>query(ctx,sql`select id,project_id,scene_id,provider,status,created_at,started_at,finished_at,error,settings->>'workerId' as worker_id,settings->'progress' as progress,settings->'postProduction' as post_production,settings->'qualityReport'->>'verdict' as quality_verdict,settings->>'creativeOwner' as creative_owner,settings->>'productionRunId' as production_run_id,settings->>'outputScanStatus' as output_scan_status,settings->>'outputScanRequestedAt' as output_scan_requested_at,coalesce(settings->>'dispatchPaused','false')='true' as paused from generation_jobs where org_id=${ctx.orgId} order by created_at desc limit 100`)),
  'generation.outputs':op('generation.read',false,id,(ctx,p)=>query(ctx,sql`select o.id,o.file_instance_id,o.asset_version_id,o.output_role from generation_outputs o join generation_jobs j on j.id=o.job_id and j.org_id=o.org_id where o.org_id=${ctx.orgId} and j.id=${p.id}`)),
  'production.runStart':op('projects.write',true,z.object({brandId:uuid,localDay:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),target:z.number().int().min(1).max(2)}).strict(),(ctx,p)=>startProductionRun(ctx,p)),
  'production.runEvent':op('projects.update',true,z.object({runId:uuid,stage:z.enum(['RESEARCHING','PLANNED','BLOCKED','FAILED']),detail:z.string().min(1).max(4000)}).strict(),(ctx,p)=>recordProductionPlanning(ctx,p)),
@@ -236,7 +238,21 @@ export const operations:Record<string,Operation>={
  'publishing.queue':op('publishing.read',false,empty,ctx=>query(ctx,sql`select i.id as item_id,v.project_id,f.file_name,d.id as draft_id,d.social_account_id,d.title,d.caption,d.hashtags,d.upload_state,d.scheduled_at from publish_items i join distribution_variants v on v.id=i.variant_id and v.org_id=i.org_id join file_instances f on f.id=i.file_instance_id and f.org_id=i.org_id left join publish_drafts d on d.item_id=i.id and d.org_id=i.org_id where i.org_id=${ctx.orgId} order by i.created_at desc limit 200`)),
  'publishing.preview':op('publishing.read',false,id,(ctx,p)=>getProjectScheduleRows(ctx,p.id)),
  'publishing.draft':op('publishing.write',true,draftSchema,saveDraft),
- 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(2700000).regex(/^[A-Za-z0-9+/]+={0,2}$/)}).strict(),async(ctx,p)=>{const t=await draftTarget(ctx,p.itemId,p.socialAccountId);if((await query(ctx,sql`select id from publish_drafts where org_id=${ctx.orgId} and item_id=${p.itemId} and social_account_id=${p.socialAccountId} and upload_state<>'DRAFT'`)).length)throw conflict('Only unscheduled draft thumbnails may be changed.');if(!t.project_id)throw badRequest('Link a project first.');return saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,Buffer.from(p.base64,'base64'));}),
+ 'publishing.thumbnail':op('thumbnail.write',true,z.object({itemId:uuid,socialAccountId:uuid,base64:z.string().max(MAX_SOCIAL_COVER_BASE64_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/).optional(),fileId:uuid.optional()}).strict().refine(p=>!!p.fileId!==!!p.base64,'Provide exactly one registered fileId or Base64 image.'),async(ctx,p)=>{
+   const t=await draftTarget(ctx,p.itemId,p.socialAccountId);
+   if((await query(ctx,sql`select id from publish_drafts where org_id=${ctx.orgId} and item_id=${p.itemId} and social_account_id=${p.socialAccountId} and upload_state<>'DRAFT'`)).length)throw conflict('Only unscheduled draft thumbnails may be changed.');
+   if(!t.project_id)throw badRequest('Link a project first.');
+   const cap=socialCoverLimit(ctx.env.processEnv.AI_GATEWAY_THUMBNAIL_MAX_MIB);
+   if(p.fileId&&! (await query(ctx,sql`select f.id from file_instances f join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id join creative_projects pr on pr.id=${t.project_id} and pr.org_id=f.org_id where f.id=${p.fileId} and f.org_id=${ctx.orgId} and a.brand_id=pr.brand_id and (a.project_id is null or a.project_id=pr.id) and not a.is_archived and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='IMAGE'`)).length)throw badRequest('Use an available thumbnail registered to this creator and project.');
+   const bytes=p.fileId?await mediaBytes(ctx,p.fileId,'IMAGE',cap):decodeSocialCoverBase64(p.base64!,cap);
+   const saved=await saveSocialCoverBytes(ctx,t.project_id,p.itemId,p.socialAccountId,bytes);
+   const verified=await readSocialCover(ctx,ctx.orgId,p.itemId,p.socialAccountId);
+   if(!verified||!verified.bytes.equals(bytes))throw conflict('Thumbnail readback did not match. Inspect the original request.');
+   return {...saved,sourceFileId:p.fileId??null,size:verified.bytes.length,sha256:createHash('sha256').update(verified.bytes).digest('hex'),mime:verified.mime};
+ }),
+ 'production.qualityReport':op('projects.update',true,productionQualityReportSchema,submitChatGPTQualityReport),
+ 'production.readiness':op('projects.read',false,productionFinalizeSchema,productionReadiness),
+ 'production.finalize':op('projects.update',true,productionFinalizeSchema,finalizeChatGPTProduction),
  'publishing.schedule':op('schedule.write',true,scheduleSchema,async(ctx,p,r)=>{await draftTarget(ctx,p.itemId,p.socialAccountId);await schedulePublish(ctx,{...p,requestId:r});return {scheduled:true};}),
  'publishing.cancel':op('schedule.manage',true,id,async(ctx,p)=>ctx.db.transaction(async tx=>{const [d]=rows<{publication_id:string|null}>(await tx.execute(sql`update publish_drafts set upload_state='DRAFT',scheduled_at=null,request_id=null,updated_at=now() where org_id=${ctx.orgId} and id=${p.id} and upload_state='SCHEDULED' returning publication_id`));if(!d)throw conflict('Only pending scheduled uploads can be cancelled.');if(d.publication_id)await tx.execute(sql`update publication_records set state='PLANNED',planned_at=null,updated_at=now() where org_id=${ctx.orgId} and id=${d.publication_id} and state='SCHEDULED'`);return {cancelled:true};})),
  'publishing.reschedule':op('schedule.manage',true,z.object({id:uuid,plannedLocal:z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),timezone:z.string().max(64)}).strict(),async(ctx,p)=>{

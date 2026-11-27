@@ -19,7 +19,7 @@ export const productionPlanInputSchema=z.object({
   assets:z.array(z.object({image:localImageInputSchema,segmentIndexes:z.array(z.number().int().min(0).max(7)).min(1).max(8)}).strict()).max(4),
   qualityReferenceFileIds:z.array(z.uuid()).max(4),
   requireAudio:z.boolean(),requireLipSync:z.boolean(),requirePhysicalAccuracy:z.boolean(),
-  maxRegenerations:z.number().int().min(0).max(2),acceptBillableQuality:z.literal(true),
+  maxRegenerations:z.number().int().min(0).max(2),acceptBillableQuality:z.boolean().optional().default(false),qualityProvider:z.enum(['chatgpt','gemini']).optional().default('chatgpt'),
 }).strict();
 type Input=z.infer<typeof productionPlanInputSchema>;
 type Payload=Input & {assetIds:string[];assetSnapshots:LocalImageSnapshot[];reviewRefs:string[];corrections?:string[];imageRetries?:number[];assetCorrections?:Record<string,string>;inspectionRetryFor?:number;reviewStage?:string};
@@ -81,8 +81,10 @@ export async function submitProductionPlan(ctx:Ctx,input:Input,id:string) {
   }
   const assetSnapshots:LocalImageSnapshot[]=[];
   for(const a of input.assets){const checked=await validateLocalImageInput(ctx,a.image);assetSnapshots.push({hash:checked.payload.hash,references:checked.payload.references});}
-  const provider=await aiStatus(ctx);
-  if(provider.gemini!=='CONFIGURED'||!provider.settings.enabled)throw badRequest('Configure enabled Gemini quality inspection before accepting this plan. No render has been started.');
+  if(input.qualityProvider==='gemini'){
+    const provider=await aiStatus(ctx);
+    if(!input.acceptBillableQuality||provider.gemini!=='CONFIGURED'||!provider.settings.enabled)throw badRequest('Explicitly authorize and configure Gemini to use optional paid inspection.');
+  }
   if(!rows(await ctx.db.execute(sql`select id from gpu_workers where id=${f.workerId} and org_id=${ctx.orgId} and enabled`)).length)throw notFound('Enabled H3 GPU');
   if((await runPrefs(ctx))[project.brandId]?.paused)throw conflict('Creator production is paused.');
   const payload:Payload={...input,reviewRefs,assetSnapshots,assetIds:input.assets.map(()=>randomUUID()),imageRetries:input.assets.map(()=>0)};
@@ -166,6 +168,7 @@ async function advance(ctx:Ctx,p:Plan,lease:string){
     return finish(ctx,p,lease,'QUALITY','Indexed final video ready for quality inspection.');
   }
   if(p.state==='QUALITY'){
+    if(payload.qualityProvider!=='gemini')return finish(ctx,p,lease,'REVIEW','Awaiting ChatGPT quality report for the exact indexed output.',{payload:{...payload,reviewStage:'QUALITY'}});
     const file=await finalFile(ctx,p);
     if(!file)throw badRequest('Indexed final output is no longer available.');
     const required=requirements(payload);

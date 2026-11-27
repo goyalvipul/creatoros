@@ -4,7 +4,21 @@ import { sql, type Db } from '@creatoros/db';
 import { hmacHex, safeEqualHex } from './crypto';
 import { badRequest, notFound, type Ctx, type ServiceEnv } from './types';
 
-const MAX_BYTES = 2_000_000;
+const MIB = 1024 * 1024;
+export function socialCoverLimit(raw:string|undefined):number {
+  if(raw===undefined||raw==='')return 5*MIB;
+  if(!/^[1-5]$/.test(raw))throw new Error('AI_GATEWAY_THUMBNAIL_MAX_MIB must be an integer from 1 to 5.');
+  return Number(raw)*MIB;
+}
+export const MAX_SOCIAL_COVER_BYTES=socialCoverLimit(process.env.AI_GATEWAY_THUMBNAIL_MAX_MIB);
+export const MAX_SOCIAL_COVER_BASE64_CHARS=Math.ceil(MAX_SOCIAL_COVER_BYTES/3)*4;
+export const MAX_SOCIAL_COVER_JSON_BYTES=MAX_SOCIAL_COVER_BASE64_CHARS+4096;
+export function decodeSocialCoverBase64(raw:string,maxBytes=MAX_SOCIAL_COVER_BYTES) {
+  if(!raw.length||raw.length>Math.ceil(maxBytes/3)*4||!/^[A-Za-z0-9+/]+={0,2}$/.test(raw))throw badRequest('Invalid or oversized thumbnail Base64.');
+  const bytes=Buffer.from(raw,'base64');
+  if(!bytes.length||bytes.length>maxBytes||bytes.toString('base64')!==raw)throw badRequest('Thumbnail must use canonical Base64 and fit the configured byte limit.');
+  return bytes;
+}
 const rowsOf = <T>(r: unknown): T[] => (r as { rows: T[] }).rows;
 const safeId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -41,7 +55,8 @@ export async function saveSocialCoverBytes(
       and v.org_id=${ctx.orgId} and v.project_id=${projectId}
   `));
   if (!row) throw notFound('Video and social account in project');
-  if (!bytes.length || bytes.length > MAX_BYTES) throw badRequest('A thumbnail must be 2 MB or smaller.');
+  const limit=socialCoverLimit(ctx.env.processEnv.AI_GATEWAY_THUMBNAIL_MAX_MIB);
+  if (!bytes.length || bytes.length > limit) throw badRequest(`A thumbnail must be ${limit/MIB} MiB or smaller.`);
   const ext = imageKind(bytes);
   if (!ext) throw badRequest('Upload a JPG, PNG, or WebP thumbnail.');
   await mkdir(join(ctx.env.mediaPreviewDir, 'social-covers'), { recursive: true });
@@ -53,7 +68,7 @@ export async function saveSocialCoverBytes(
 
 export async function saveSocialCover(ctx: Ctx, projectId: string, itemId: string, accountId: string, data: string) {
   const raw = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
-  return saveSocialCoverBytes(ctx, projectId, itemId, accountId, Buffer.from(raw, 'base64'));
+  return saveSocialCoverBytes(ctx, projectId, itemId, accountId, decodeSocialCoverBase64(raw,socialCoverLimit(ctx.env.processEnv.AI_GATEWAY_THUMBNAIL_MAX_MIB)));
 }
 
 /** Restore platform's automatic video frame for one account without touching others. */

@@ -19,7 +19,7 @@ const rows=<T>(r:unknown)=>(r as {rows:T[]}).rows;
 type Post={phase:string;detail?:string;lease?:string|null;leaseAt?:string;fileId?:string;itemId?:string;analysisId?:string;metadata?:Record<string,MetadataDraft>;covers?:string[];prefilled?:string[];missingPlatforms?:string[];attempt?:number;failedPhase?:string};
 type Job={id:string;orgId:string;projectId:string;brandId:string;title:string;status:string;runId:string|null;settings:Record<string,unknown>;post:Post|null};
 const terminal=['READY','FAILED','STOPPED'];
-const phaseLabels:Record<string,string>={WAIT_INDEX:'Waiting for indexed final video',ANALYSIS:'Video analysis',METADATA:'Platform SEO',COVERS:'Cover generation',PREFILL:'Publishing draft prefill',AWAITING_ACCOUNTS:'Waiting for creator accounts',BLOCKED_BILLING:'AI billing authorization required',READY:'Ready for review',FAILED:'Post-processing failed',STOPPED:'Post-processing stopped'};
+const phaseLabels:Record<string,string>={WAIT_INDEX:'Waiting for indexed final video',AWAITING_QUALITY_REVIEW:'Awaiting ChatGPT quality report',AWAITING_PUBLISHING_PACKAGE:'Awaiting ChatGPT publishing package',ANALYSIS:'Video analysis',METADATA:'Platform SEO',COVERS:'Cover generation',PREFILL:'Publishing draft prefill',AWAITING_ACCOUNTS:'Waiting for creator accounts',BLOCKED_BILLING:'AI billing authorization required',READY:'Ready for review',FAILED:'Post-processing failed',STOPPED:'Post-processing stopped'};
 export function coverSeconds(timestamp:unknown){
   if(typeof timestamp!=='string')return 1;
   const parts=timestamp.trim().split(':');
@@ -181,6 +181,12 @@ async function advance(ctx:Ctx,j:Job){
 }
 export async function runDueProduction(db:Db,env:ServiceEnv){
   await reconcileProductionRuns(db,env);
+  // External creative owner: synchronize phase only, never invoke an AI provider.
+  await db.execute(sql`update generation_jobs j set settings=jsonb_set(j.settings,'{postProduction}',coalesce(j.settings->'postProduction','{}'::jsonb)||jsonb_build_object('phase','AWAITING_QUALITY_REVIEW','detail','Indexed output is available for ChatGPT quality inspection.'),true),updated_at=now()
+    where j.provider='comfyui-h3' and j.status='SUCCEEDED' and j.settings->>'creativeOwner'='chatgpt'
+    and coalesce(j.settings->'postProduction'->>'phase','WAIT_INDEX')='WAIT_INDEX'
+    and coalesce(j.settings->>'dispatchPaused','false')<>'true' and coalesce(j.settings->>'productionSuperseded','false')<>'true'
+    and exists(select 1 from generation_outputs o join file_instances f on f.id=o.file_instance_id and f.org_id=o.org_id where o.job_id=j.id and o.org_id=j.org_id and o.output_role='final' and f.file_type='VIDEO' and f.availability='AVAILABLE' and f.archived_at is null)`);
   // A killed worker cannot safely repeat an uncertain provider request.
   await db.execute(sql`update generation_jobs set settings=jsonb_set(settings,'{postProduction}',(settings->'postProduction')||jsonb_build_object('phase','FAILED','failedPhase',settings->'postProduction'->>'phase','detail','Worker stopped during this stage. Review and explicitly retry; paid requests may have been charged.','lease',null,'leaseAt',null)),updated_at=now()
     where provider='comfyui-h3' and settings->'postProduction'->>'lease' is not null and (settings->'postProduction'->>'leaseAt')::timestamptz<now()-interval '12 minutes'`);
@@ -188,7 +194,8 @@ export async function runDueProduction(db:Db,env:ServiceEnv){
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     where j.provider='comfyui-h3' and j.status='SUCCEEDED' and p.deleted_at is null and p.brand_id is not null and p.stage in ('DRAFT','IN_PROGRESS','READY')
-      and (r.id is not null or j.settings->>'productionAdopted'='true') and (r.id is null or r.state='ACTIVE')
+      and (r.id is not null or j.settings->>'productionAdopted'='true')
+      and coalesce(j.settings->>'creativeOwner','')<>'chatgpt' and (r.id is null or r.state='ACTIVE')
       and coalesce(j.settings->>'productionSuperseded','false')<>'true'
       and (j.settings->>'productionPlanId' is null or j.settings->>'productionQualityPassed'='true')
       and coalesce(j.settings->>'dispatchPaused','false')<>'true'

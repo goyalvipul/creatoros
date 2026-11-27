@@ -41,7 +41,7 @@ export function validateTemplate(template: Template) {
     if (seen.has(key) || !inputs || !Object.hasOwn(inputs,mapping.input) || Array.isArray(inputs[mapping.input])) throw badRequest('Workflow mappings must identify distinct literal inputs.');
     seen.add(key);
   }
-  if (template.graph[template.outputNode]?.class_type !== 'SaveImage') throw badRequest('Workflow output must be an explicit SaveImage node.');
+  if (template.graph[template.outputNode]?.class_type !== 'SaveImage'||!Object.hasOwn(template.graph[template.outputNode]?.inputs??{},'filename_prefix')) throw badRequest('Workflow output must be an explicit SaveImage node.');
   if (!!template.width !== !!template.height) throw badRequest('Map both dimensions or neither.');
   if (Object.keys(template.graph).length > 300) throw badRequest('Local image workflow exceeds the node budget.');
 }
@@ -140,6 +140,14 @@ export async function runDueLocalImages(db:Db,env:ServiceEnv) {
   // No blind resubmission after a crash at an external-write boundary.
   await db.execute(sql`update local_image_jobs set state='UNCERTAIN',error='Worker stopped during image submission/import. Inspect the original job and scanner before replacing it.',updated_at=now() where state in ('SUBMITTING','IMPORTING') and updated_at<now()-interval '12 minutes'`);
   await db.execute(sql`update local_image_jobs i set state='CANCELLED',error='Production stopped before image dispatch.',updated_at=now() from production_runs r where i.run_id=r.id and i.org_id=r.org_id and r.state='STOPPED' and i.state='QUEUED'`);
+  // Recover only when the exact imported file is already linked to this creator/project.
+  const recovered=rows<{id:string;orgId:string;runId:string|null;fileId:string}>(await db.execute(sql`update local_image_jobs i set state='COMPLETE',file_id=f.id,error=null,output=coalesce(i.output,'{}'::jsonb)||jsonb_build_object('fileId',f.id,'recovered',true),updated_at=now()
+    from file_instances f join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id join logical_assets a on a.id=v.asset_id and a.org_id=v.org_id
+    where i.state='UNCERTAIN' and i.prompt_id is not null and f.org_id=i.org_id and f.root_id=i.root_id and f.file_type='IMAGE' and f.availability='AVAILABLE' and f.archived_at is null
+      and f.file_name in ('kk_'||i.id::text||'_local-'||i.id::text||'.png','kk_'||i.id::text||'_local-'||i.id::text||'.jpg','kk_'||i.id::text||'_local-'||i.id::text||'.jpeg','kk_'||i.id::text||'_local-'||i.id::text||'.webp')
+      and a.project_id=i.project_id and a.brand_id=i.brand_id and a.source='gateway-upload' and not a.is_archived
+    returning i.id,i.org_id as "orgId",i.run_id as "runId",f.id as "fileId"`));
+  for(const j of recovered)await runEvent(db,j.orgId,j.runId,'IMAGE_RECOVERED','Verified existing indexed image '+j.fileId+'.');
   const candidates=rows<Job>(await db.execute(sql`select ${columns} from local_image_jobs where state in ('QUEUED','RENDERING') order by updated_at,id limit 12`));
   for(const job of candidates){
     const ctx=systemCtx({db,env},job.orgId);
@@ -160,11 +168,15 @@ export async function runDueLocalImages(db:Db,env:ServiceEnv) {
         const configured=(await loadTemplates(env)).find(t=>t.template.id===job.payload.workflowId&&t.hash===job.payload.hash);
         if(!configured)throw badRequest('Approved workflow changed; submit a new plan.');
         const names:string[]=[];
+        for(const id of job.payload.references)if(!rows(await db.execute(sql`select id from file_instances where id=${id} and org_id=${job.orgId} and file_type='IMAGE' and availability='AVAILABLE' and archived_at is null`)).length)throw badRequest('A previously approved reference is no longer available.');
         for(const [i,id] of job.payload.references.entries())names.push(await uploadReference(ctx,job,worker.baseUrl,id,i));
         const graph=buildLocalImageGraph(configured.template,{...job.payload,names,id:job.id});
+        if(job.runId&&!rows(await db.execute(sql`select r.id from production_runs r join organizations o on o.id=r.org_id where r.id=${job.runId} and r.org_id=${job.orgId} and r.state='ACTIVE' and coalesce(o.settings->'productionAutomation'->(r.brand_id::text)->>'paused','false')<>'true'`)).length){
+          await finish(db,job,'QUEUED');return {advanced:1};
+        }
         submitted=true;
         const res=await fetch(new URL('/prompt',worker.baseUrl),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:graph,client_id:job.id}),signal:AbortSignal.timeout(30000),redirect:'error'});
-        if(!res.ok){submitted=false;throw badRequest('ComfyUI rejected the configured image workflow ('+res.status+').');}
+        if(!res.ok){if(res.status>=400&&res.status<500)submitted=false;throw badRequest('ComfyUI rejected the configured image workflow ('+res.status+').');}
         const result=z.object({prompt_id:z.string().min(1).max(200)}).parse(await res.json());
         await db.execute(sql`update local_image_jobs set state='RENDERING',prompt_id=${result.prompt_id},updated_at=now() where id=${job.id} and org_id=${job.orgId} and state='SUBMITTING'`);
         await runEvent(db,job.orgId,job.runId,'IMAGE_RENDERING','Local prompt accepted: '+job.id);

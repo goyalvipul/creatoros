@@ -25,10 +25,12 @@ async function output(ctx:Ctx,target:Target,lock=false){
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
     join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and o.output_role='final'
     join file_instances f on f.id=o.file_instance_id and f.org_id=o.org_id
+    join storage_roots sr on sr.id=f.root_id and sr.org_id=f.org_id
+    join devices dev on dev.id=f.device_id and dev.org_id=f.org_id
     left join production_runs r on r.id::text=j.settings->>'productionRunId' and r.org_id=j.org_id
     left join production_plans pl on pl.id::text=j.settings->>'productionPlanId' and pl.org_id=j.org_id and pl.job_id=j.id
     where j.org_id=${ctx.orgId} and j.id=${target.jobId} and f.id=${target.fileId} and p.deleted_at is null and p.brand_id is not null
-    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO'
+    and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO' and sr.state='ACTIVE' and sr.retired_at is null and dev.state='ONLINE'
     and j.provider='comfyui-h3' and j.status='SUCCEEDED'
     and coalesce(j.settings->>'productionSuperseded','false')<>'true'
     and (j.settings->>'productionPlanId' is null or pl.id is not null)
@@ -110,7 +112,7 @@ async function inspectReadiness(ctx:Ctx,o:Output){
     if(!coverSha256)missing.push('COVER:'+a.id);
     results.push({accountId:a.id,platform:a.platform,draftVerified:draft,coverSha256});
   }
-  return {jobId:o.jobId,fileId:o.fileId,projectId:o.projectId,itemId,stage:o.stage,ready:missing.length===0,missing,accounts:results,unconnectedPlatforms:runPlatforms.filter(p=>!accounts.some(a=>a.platform===p))};
+  return {jobId:o.jobId,fileId:o.fileId,projectId:o.projectId,itemId,stage:o.stage,ready:missing.length===0,missing,qualityReport:o.settings.qualityReport??null,accounts:results,unconnectedPlatforms:runPlatforms.filter(p=>!accounts.some(a=>a.platform===p))};
 }
 export async function productionReadiness(ctx:Ctx,p:Target){return inspectReadiness(ctx,await output(ctx,productionFinalizeSchema.parse(p)));}
 export async function finalizeChatGPTProduction(ctx:Ctx,p:Target){

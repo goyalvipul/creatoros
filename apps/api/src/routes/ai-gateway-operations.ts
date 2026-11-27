@@ -7,7 +7,7 @@ import {
   saveH3Draft, saveLtxDraft, generateH3, generateLtx, createAutogenRun, cancelAutogenClip,
   queueVideoAnalysis, getProjectScheduleRows, schedulePublish, saveSocialCoverBytes,
   analyticsDetail, listSocialThreads, getSocialThread, replyToThread, openAgentFile,
-  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, localImageCapabilities, localImageInputSchema, queueLocalImage, localImageStatus, productionPlanInputSchema, submitProductionPlan, productionPlanStatus, type Ctx,
+  workerQueue, startProductionRun, recordProductionPlanning, productionRunBoard, controlProductionRun, queueProjectImage, openAiAsset, aiStatus, localImageCapabilities, localImageInputSchema, queueLocalImage, localImageStatus, cancelLocalImage, productionPlanInputSchema, submitProductionPlan, productionPlanStatus, recoverProductionPlan, type Ctx,
 } from '@creatoros/services';
 import { parseLocalDateTime, isValidTimeZone } from '@creatoros/domain';
 import { h3Form, ltxForm } from './ai-gateway-forms';
@@ -199,9 +199,11 @@ export const operations:Record<string,Operation>={
  // Owner-approved executable plans authorize bounded internal asset and render work, including billable quality review.
  'production.planSubmit':op('generation.submit',true,productionPlanInputSchema,(ctx,p,r)=>submitProductionPlan(ctx,p,r)),
  'production.planStatus':op('generation.read',false,id,(ctx,p)=>productionPlanStatus(ctx,p.id)),
+ 'production.planRecover':op('generation.submit',true,z.object({id:uuid,action:z.enum(['resume','retry_inspection'])}).strict(),(ctx,p)=>recoverProductionPlan(ctx,p.id,p.action)),
  'generation.localImageCapabilities':op('generation.read',false,empty,ctx=>localImageCapabilities(ctx)),
  'generation.localImage':op('generation.submit',true,localImageInputSchema,async(ctx,p,r)=>{const j=await queueLocalImage(ctx,p,r);return {id:j.id,state:j.state};}),
  'generation.localImageStatus':op('generation.read',false,id,(ctx,p)=>localImageStatus(ctx,p.id)),
+ 'generation.localImageCancel':op('generation.cancel',true,id,(ctx,p)=>cancelLocalImage(ctx,p.id)),
  // These new writes are intentionally owner-reviewed; do not add them to the creative allowlist.
  'production.runControl':op('generation.cancel',true,z.object({id:uuid,action:z.enum(['pause','resume','stop'])}).strict(),(ctx,p)=>controlProductionRun(ctx,p.id,p.action)),
  'generation.imageCapabilities':op('image.generate',false,empty,async ctx=>{const status=await aiStatus(ctx);return {provider:'gemini',availability:status.gemini,enabled:status.settings.enabled,imageModel:status.settings.imageModel,imageSize:status.settings.imageSize,usage:status.usage.image,billingNote:status.billingNote};}),

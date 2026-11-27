@@ -79,7 +79,8 @@ export async function productionRunBoard(ctx:Ctx,runId?:string){
     ${runId?sql`and j.settings->>'productionRunId'=${runId}`:sql`and j.created_at>now()-interval '30 days'`} order by j.created_at desc limit 100`));
   const events=rows<Record<string,unknown>>(await ctx.db.execute(sql`select e.id,e.run_id as "runId",e.job_id as "jobId",e.stage,e.detail,e.created_at as "createdAt" from production_run_events e where e.org_id=${ctx.orgId} ${runId?sql`and e.run_id=${runId}`:sql``} order by e.id desc limit 300`));
   const brands=rows<{id:string;name:string}>(await ctx.db.execute(sql`select id,name from brands where org_id=${ctx.orgId} and active and deleted_at is null order by name`));
-  return {runs,jobs,events,brands,preferences:await runPrefs(ctx)};
+  const plans=rows(await ctx.db.execute(sql`select id,run_id as "runId",project_id as "projectId",state,detail,step,assets,job_id as "jobId",updated_at as "updatedAt" from production_plans where org_id=${ctx.orgId} ${runId?sql`and run_id=${runId}`:sql``} order by updated_at desc limit 100`));
+  return {runs,jobs,events,brands,plans,preferences:await runPrefs(ctx)};
 }
 export async function controlProductionRun(ctx:Ctx,id:string,action:'pause'|'resume'|'stop'){
   return ctx.db.transaction(async tx=>{
@@ -101,6 +102,7 @@ export async function reconcileProductionRuns(db:Db,_env:ServiceEnv){
   const stale=rows<{id:string;orgId:string}>(await db.execute(sql`
     update production_runs r set planning_state='BLOCKED',planning_detail='Planner stopped reporting before submitting the target videos. Resume the existing ChatGPT automation to finish the plan.',updated_at=now()
     where r.state='ACTIVE' and r.planning_state in ('RESEARCHING','PLANNED') and r.updated_at<now()-interval '30 minutes'
+      and not exists(select 1 from production_plans p where p.org_id=r.org_id and p.run_id=r.id and p.state='WAITING')
       and (select count(*) from generation_jobs j where j.org_id=r.org_id and j.settings->>'productionRunId'=r.id::text)<r.target
     returning id,org_id as "orgId"`));
   for(const r of stale)await runEvent(db,r.orgId,r.id,'BLOCKED','Planning or submission stopped before the daily target was queued.');

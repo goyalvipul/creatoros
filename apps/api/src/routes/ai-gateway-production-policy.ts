@@ -10,6 +10,41 @@ export const productionPolicySchema=z.object({
 }).strict();
 export type ProductionPolicy=z.infer<typeof productionPolicySchema>;
 const rows=<T>(r:unknown)=>(r as {rows:T[]}).rows;
+// Server-side environment is the authority; no client may override these limits.
+export function dailyGatewayLimit(raw:string|undefined, fallback:number, name:string):number {
+  if(raw===undefined||raw==='')return fallback;
+  if(!/^\d{1,4}$/.test(raw)||Number(raw)>1000)throw new Error(name+' must be an integer from 0 to 1000.');
+  return Number(raw);
+}
+export const generationLimit=(env:Ctx['env']['processEnv'])=>dailyGatewayLimit(env.AI_GATEWAY_DAILY_GENERATION_LIMIT,2,'AI_GATEWAY_DAILY_GENERATION_LIMIT');
+export const imageUploadLimit=(env:Ctx['env']['processEnv'])=>dailyGatewayLimit(env.AI_GATEWAY_DAILY_IMAGE_UPLOAD_LIMIT,24,'AI_GATEWAY_DAILY_IMAGE_UPLOAD_LIMIT');
+export const dedicatedImageOperations=['media.prepareImageUpload','media.uploadImage'] as const;
+export function isDedicatedImageOperation(operation:string) {
+  return (dedicatedImageOperations as readonly string[]).includes(operation);
+}
+export function matchesDedicatedUploadRoot(configured:string|undefined,rootId:unknown,root:{display_path:string;path_os:string}|undefined) {
+  return !!configured&&z.uuid().safeParse(configured).success&&rootId===configured&&root?.path_os==='windows'&&root.display_path.toLowerCase().replace(/[\\/]+$/,'')==='d:\\chatgpt_uploads';
+}
+export async function isDedicatedUploadRoot(ctx:Ctx,rootId:unknown) {
+  const configured=ctx.env.processEnv.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID;
+  if(!configured||!z.uuid().safeParse(configured).success||rootId!==configured)return false;
+  const [root]=rows<{display_path:string;path_os:string}>(await ctx.db.execute(sql`select r.display_path,r.path_os from storage_roots r join devices d on d.id=r.device_id and d.org_id=r.org_id where r.id=${configured} and r.org_id=${ctx.orgId} and r.state='ACTIVE' and r.retired_at is null and d.state='ONLINE'`));
+  return matchesDedicatedUploadRoot(configured,rootId,root);
+}
+// The caller has already authenticated the owner, checked media.upload.image and locked the connection.
+export async function authorizeDedicatedImageUpload(ctx:Ctx,operation:string,input:unknown) {
+  if(!isDedicatedImageOperation(operation))return false;
+  const v=input as Record<string,unknown>;
+  if(!await isDedicatedUploadRoot(ctx,v.rootId))return false;
+  if(!rows(await ctx.db.execute(sql`select id from brands where id=${v.brandId} and org_id=${ctx.orgId} and active and deleted_at is null`)).length)throw forbidden('Choose an active creator.');
+  if(v.projectId&&!rows(await ctx.db.execute(sql`select id from creative_projects where id=${v.projectId} and org_id=${ctx.orgId} and brand_id=${v.brandId} and deleted_at is null`)).length)throw forbidden('Choose a project belonging to the creator.');
+  await checkImageUploadQuota(ctx);
+  return true;
+}
+async function checkImageUploadQuota(ctx:Ctx) {
+  const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests where org_id=${ctx.orgId} and policy_authorized and operation in ('media.prepareImageUpload','media.uploadImage') and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
+  if((count?.n??0)>=imageUploadLimit(ctx.env.processEnv))throw conflict('Daily image upload quota reached.',undefined,'production_quota_reached');
+}
 const quotas:Record<string,number>={'projects.create':2,'projects.update':8,'scenes.upsert':4,'media.uploadImage':24,'media.uploadAudio':4,'generation.h3':2,'publishing.draft':10};
 export const productionOperations=Object.keys(quotas);
 
@@ -47,9 +82,11 @@ export async function authorizeProduction(ctx:Ctx,p:ProductionPolicy,operation:s
   }
   if(!matches)return false;
   await validatePolicy(ctx,p);
-  const cap=operation==='generation.h3'||operation==='projects.create'?p.dailyVideos:quotas[operation]!;
-  const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests where org_id=${ctx.orgId} and policy_authorized and operation=${operation} and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
-  if((count?.n??0)>=cap)throw conflict('Daily trusted production limit reached.');
+  if(operation==='media.uploadImage'){await checkImageUploadQuota(ctx);return true;}
+  const isGeneration=(generationOperations as readonly string[]).includes(operation);
+  const cap=isGeneration?Math.min(p.dailyVideos,generationLimit(ctx.env.processEnv)):operation==='projects.create'?p.dailyVideos:quotas[operation]!;
+  const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests where org_id=${ctx.orgId} and policy_authorized and (case when ${isGeneration} then operation=any(ARRAY['generation.h3','generation.ltx','generation.longscene','generation.autogen']::text[]) else operation=${operation} end) and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
+  if((count?.n??0)>=cap)throw conflict('Daily trusted production limit reached.',undefined,'production_quota_reached');
   return true;
 }
 
@@ -111,11 +148,13 @@ export async function authorizeCreative(ctx:Ctx,operation:string,input:unknown) 
     ) as ok`));
     if(!target?.ok)throw forbidden('Use an unscheduled draft and the social account belonging to its creator.');
   }
+  if(operation==='media.uploadImage'){await checkImageUploadQuota(ctx);return true;}
   const isGeneration=(generationOperations as readonly string[]).includes(operation);
   const [count]=rows<{n:number}>(await ctx.db.execute(sql`select count(*)::int as n from ai_gateway_requests
     where org_id=${ctx.orgId} and policy_authorized
     and (case when ${isGeneration} then operation=any(ARRAY['generation.h3','generation.ltx','generation.longscene','generation.autogen']::text[]) else operation=${operation} end)
     and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
-  if((count?.n??0)>=creativeQuotas[operation]!)throw conflict('Daily creative execution limit reached. No approval request was created.');
+  const cap=isGeneration?generationLimit(ctx.env.processEnv):creativeQuotas[operation]!;
+  if((count?.n??0)>=cap)throw conflict('Daily creative execution limit reached. No approval request was created.',undefined,'production_quota_reached');
   return true;
 }

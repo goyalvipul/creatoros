@@ -25,12 +25,16 @@ export const MAX_GATEWAY_MEDIA_JSON_BYTES = MAX_MEDIA_BASE64_CHARS + 4096;
 export const MAX_GATEWAY_INVOKE_BODY_BYTES = MAX_GATEWAY_MEDIA_JSON_BYTES + 4096;
 const mimeMap = { png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', webp:'image/webp', wav:'audio/wav', mp3:'audio/mpeg', flac:'audio/flac' } as const;
 
-function validateMediaBytes(input:{fileName:string;mime:string}, bytes:Buffer, kind:'IMAGE'|'AUDIO', maxBytes:number) {
+export function validateMediaName(input:{fileName:string;mime:string},kind:'IMAGE'|'AUDIO') {
   const name=input.fileName;
   if(!/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}$/.test(name)||name.includes('..')||/[. ]$/.test(name)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name))throw badRequest('Use a simple filename with a supported extension.');
   const ext=name.split('.').pop()!.toLowerCase() as keyof typeof mimeMap;
   const mime=mimeMap[ext];
   if(!mime||mime!==input.mime||!mime.startsWith(kind==='IMAGE'?'image/':'audio/'))throw badRequest('File extension and MIME must match the upload kind.');
+  return {mime,ext};
+}
+function validateMediaBytes(input:{fileName:string;mime:string},bytes:Buffer,kind:'IMAGE'|'AUDIO',maxBytes:number) {
+  const {mime,ext}=validateMediaName(input,kind);
   if(!bytes.length||bytes.length>maxBytes)throw badRequest('Media is empty or exceeds the byte limit.');
   const signature=ext==='png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):
     ext==='jpg'||ext==='jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:
@@ -79,6 +83,11 @@ export async function uploadGatewayMedia(ctx:Ctx,input:UploadInput,requestId:str
 // Only call with bytes from a verified same-organization completed AI asset.
 export async function importGeneratedImage(ctx:Ctx,input:Omit<UploadInput,'base64'>,requestId:string,bytes:Buffer) {
   return storeGatewayMedia(ctx,input,requestId,'IMAGE',validateMediaBytes(input,bytes,'IMAGE',MAX_GENERATED_IMAGE_BYTES));
+}
+export const MAX_BINARY_IMAGE_BYTES=50*MIB;
+export const MAX_BINARY_AUDIO_BYTES=100*MIB;
+export async function importBinaryMedia(ctx:Ctx,input:Omit<UploadInput,'base64'>,requestId:string,kind:'IMAGE'|'AUDIO',bytes:Buffer) {
+  return storeGatewayMedia(ctx,input,requestId,kind,validateMediaBytes(input,bytes,kind,kind==='IMAGE'?MAX_BINARY_IMAGE_BYTES:MAX_BINARY_AUDIO_BYTES));
 }
 async function storeGatewayMedia(ctx:Ctx,input:Omit<UploadInput,'base64'>,requestId:string,kind:'IMAGE'|'AUDIO',decoded:ReturnType<typeof validateMediaBytes>) {
   const {bytes,mime,ext}=decoded;

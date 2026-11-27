@@ -516,6 +516,7 @@ async function generateH3Internal(ctx: Ctx, form: H3Form, options:H3Options) {
         workerLabel: worker.label,
         serialDispatch: options.serialDispatch === true,
         ...(options.runId?{productionRunId:options.runId,sourceEvidence:options.sourceEvidence,postProduction:{phase:'WAIT_INDEX',attempt:1}}:{}),
+        ...(options.serialDispatch?{creativeOwner:'chatgpt',postProduction:{phase:'WAIT_INDEX',attempt:1}}:{}),
         ...(options.productionPlanId?{productionPlanId:options.productionPlanId,productionAttempt:options.productionAttempt,productionQualityPassed:false}:{}),
         progress: { phase: 'waiting', detail: 'Waiting for the selected GPU.' },
         imageFileId: form.imageFileId,
@@ -530,6 +531,7 @@ async function generateH3Internal(ctx: Ctx, form: H3Form, options:H3Options) {
       workflow: { format: 'api', source: WORKFLOW, sha256: h3Workflow()!.sha256 },
     })
     .returning();
+  if(options.serialDispatch&&form.projectId)await setAutomatedProjectStage(ctx.db,ctx.orgId,form.projectId,'IN_PROGRESS','H3 production job queued.');
   await audit(ctx, 'comfy.h3.generate', { type: 'generation_job', id: job!.id }, undefined, { workerLabel: worker.label });
   return { job: { id: job!.id, status: 'QUEUED' as const } };
 }

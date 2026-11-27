@@ -86,6 +86,8 @@ export function SocialThumbnailStudio({
   const [imageData, setImageData] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [maxCoverBytes,setMaxCoverBytes]=useState(5*1024*1024);
+  useEffect(()=>{let cancelled=false;void api<{maxBytes:number}>('/publishing/thumbnail-limit').then(r=>{if(!cancelled&&r.maxBytes>0)setMaxCoverBytes(r.maxBytes);}).catch(()=>{});return()=>{cancelled=true;};},[]);
   // Shorts must always be rendered in portrait; regular YouTube videos stay landscape.
   // The metadata aspect hint is descriptive and cannot override the publishing content form.
   const format = platform === 'youtube'
@@ -375,7 +377,7 @@ export function SocialThumbnailStudio({
               onChange={async (e) => {
                 const f = e.target.files?.[0];
                 if (!f) return;
-                if (f.size > 5 * 1024 * 1024) { setError('Image exceeds the maximum supported 5 MiB; the server may enforce a lower configured limit.'); return; }
+                if (f.size > maxCoverBytes) { setError(`Image must be ${maxCoverBytes/(1024*1024)} MiB or smaller.`); return; }
                 const reader = new FileReader();
                 reader.onload = () => setImageData(String(reader.result ?? ''));
                 reader.readAsDataURL(f);

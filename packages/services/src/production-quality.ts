@@ -31,8 +31,8 @@ export function qualityDecision(technical:TechnicalQuality,semantic:SemanticQual
   const uncertain=semantic.checks.filter(c=>required.has(c.criterion)&&(c.status==='UNCERTAIN'||c.status==='NOT_APPLICABLE'));
   const failures=semantic.checks.filter(c=>c.status==='FAIL');
   // Do not auto-correct when the model cannot determine critical facts.
-  if(uncertain.length)return {verdict:'REVIEW' as const,corrections:uncertain.map(c=>c.criterion+': '+c.evidence)};
   if(failures.length)return {verdict:'FAIL' as const,corrections:failures.map(c=>c.criterion+' at '+c.seconds+'s: '+c.correction)};
+  if(uncertain.length)return {verdict:'REVIEW' as const,corrections:uncertain.map(c=>c.criterion+': '+c.evidence)};
   return {verdict:'PASS' as const,corrections:[]};
 }
 export async function inspectTechnicalVideo(ctx:Ctx,fileId:string,requirements:QualityRequirements):Promise<TechnicalQuality> {

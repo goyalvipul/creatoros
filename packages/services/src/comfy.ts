@@ -544,6 +544,7 @@ export async function generateLtx(ctx: Ctx, form: LtxForm, opts?: { skipDraft?: 
 interface LtxSettings {
   productionPlanId?: string;
   productionQualityPassed?: boolean;
+  productionReviewEligible?: boolean;
   productionSuperseded?: boolean;
   workerId?: string;
   workerLabel?: string;
@@ -999,7 +1000,7 @@ function variantFormatFor(contentFormat: string | null | undefined) {
 /** When a clip was generated for a Production project, create one publishing variant and attach later videos to that same variant. */
 async function attachLtxVariantToProject(db: Db, job: ClaimedJob) {
   if (!job.projectId) return;
-  if(job.settings?.productionSuperseded||(job.settings?.productionPlanId&&job.settings.productionQualityPassed!==true))return;
+  if(job.settings?.productionSuperseded||(job.settings?.productionPlanId&&job.settings.productionQualityPassed!==true&&job.settings.productionReviewEligible!==true))return;
   const source =
     job.provider === 'comfyui-h3' ? 'comfyui-h3' : job.provider === 'comfyui-qwen-tts' ? 'comfyui-qwen-tts' : 'comfyui-ltx';
   const label = source === 'comfyui-h3' ? 'MiniMax' : source === 'comfyui-qwen-tts' ? 'Voice' : 'LTX';
@@ -1301,7 +1302,7 @@ export async function linkRecentGeneratedOutputs(db: Db) {
         and finished_at > now() - interval '14 days'
         and (settings->>'variantId' is null or settings->>'assetVersionId' is not null)
         and coalesce(settings->>'productionSuperseded','false')<>'true'
-        and (settings->>'productionPlanId' is null or settings->>'productionQualityPassed'='true')
+        and (settings->>'productionPlanId' is null or settings->>'productionQualityPassed'='true' or settings->>'productionReviewEligible'='true')
       order by finished_at desc
       limit 20`),
   );

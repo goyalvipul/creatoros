@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {productionReadiness,finalizeChatGPTProduction,saveSocialCoverBytes} from '@creatoros/services';
+import {productionReadiness,finalizeChatGPTProduction,saveSocialCoverBytes,qualityCriteria} from '@creatoros/services';
 import {startProductionRun,recordProductionPlanning,assertRunSubmission,controlProductionRun,setProductionPreference,setAutomatedProjectStage,productionRunBoard} from '@creatoros/services';
 import {freshDb,makeOrg,pairTestDevice,makeRoot} from '../src/helpers';
 let fresh:Awaited<ReturnType<typeof freshDb>>;
@@ -66,17 +66,22 @@ describe('ChatGPT production finalization',()=>{
    const [account]=await ctx.db.insert(socialAccounts).values({orgId:ctx.orgId,channelId:channel!.id,platform:'youtube',handle:'@fixture'}).returning();
    const target={jobId:job!.id,fileId:file!.id};
    await expect(productionReadiness(other,target)).rejects.toThrow();
-   expect((await finalizeChatGPTProduction(ctx,target)).missing).toContain('QUALITY_REPORT_PASS');
+   expect((await finalizeChatGPTProduction(ctx,target)).missing).toContain('QUALITY_REPORT_ELIGIBLE');
    // Persist a fixture report directly: this test exercises the finalizer, not live FFmpeg or scanner fetch.
    const mtime=(await ctx.db.execute(sql`select mtime::text as mtime from file_instances where id=${file!.id}`)).rows[0]?.mtime;
-   await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({productionQualityPassed:true,qualityReport:{fileId:file!.id,outputId:output!.id,size:1234,mtime,verdict:'PASS'}})}::jsonb where id=${job!.id}`);
+   const report={fileId:file!.id,outputId:output!.id,size:1234,mtime,verdict:'REVIEW',technical:{duration:8,width:544,height:960,audio:true,defects:[]},requirements:{duration:8,aspectRatio:'9:16',requireAudio:true,requireLipSync:true,requirePhysicalAccuracy:false},evidence:{frameSeconds:[0,2,4,6],continuousMotion:false,audioHeard:false,lipSyncObserved:false},semantic:{checks:qualityCriteria.map(criterion=>({criterion,status:['motion','audio','lipSync'].includes(criterion)?'UNCERTAIN':'PASS',evidence:'Fixture evidence',seconds:null,correction:''}))}};
+   const persist=async(qualityReport:unknown)=>ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({productionQualityPassed:false,qualityReport})}::jsonb where id=${job!.id}`);
+   await persist(report);
    expect((await productionReadiness(ctx,target)).missing).toContain('DRAFT:'+account!.id);
    await ctx.db.insert(publishDrafts).values({orgId:ctx.orgId,itemId:item!.id,socialAccountId:account!.id,title:'Fixture',caption:'Fixture description',hashtags:['fixture'],aiUse:'YES',privacy:'PRIVATE'});
    expect((await finalizeChatGPTProduction(ctx,target)).missing).toContain('COVER:'+account!.id);
    const cover=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2sAAAAASUVORK5CYII=','base64');
    await saveSocialCoverBytes(ctx,project!.id,item!.id,account!.id,cover);
+   await persist({...report,technical:{...report.technical,defects:['Frozen frames']}});
+   expect((await finalizeChatGPTProduction(ctx,target)).missing).toContain('QUALITY_REPORT_ELIGIBLE');
+   await persist(report);
    const finalized=await finalizeChatGPTProduction(ctx,target);
-   expect(finalized.ready).toBe(true);expect(finalized.stage).toBe('READY');
+   expect(finalized.ready).toBe(true);expect(finalized.stage).toBe('READY');expect(finalized.qualityVerdict).toBe('REVIEW');expect(finalized.humanReviewRequired).toBe(true);expect(finalized.unresolvedChecks).toEqual(['motion','audio','lipSync']);
    expect(finalized.accounts[0]?.coverSha256).toBe(createHash('sha256').update(cover).digest('hex'));
    expect((await productionReadiness(ctx,target)).stage).toBe('READY');
   }finally{await rm(directory,{recursive:true,force:true});}

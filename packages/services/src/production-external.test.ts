@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import {socialCoverLimit,decodeSocialCoverBase64} from './social-cover';
-import {productionQualityReportSchema,constrainEvidence} from './production-external';
+import {productionQualityReportSchema,constrainEvidence,reviewEligibility} from './production-external';
 import {qualityCriteria,qualityDecision,type SemanticQuality} from './production-quality';
 const MiB=1024*1024;
 const requirements={duration:8,aspectRatio:'9:16',requireAudio:true,requireLipSync:true,requirePhysicalAccuracy:false};
@@ -38,5 +38,21 @@ describe('ChatGPT quality evidence',()=>{
   const assessment=constrainEvidence(p,requirements);
   expect(qualityDecision({duration:8,width:720,height:1280,audio:true,defects:[]},assessment,requirements).verdict).toBe('PASS');
   expect(qualityDecision({duration:8,width:720,height:1280,audio:true,defects:['Frozen frames']},assessment,requirements).verdict).toBe('FAIL');
+ });
+});
+
+describe('production package readiness is not creative approval',()=>{
+ const stored=()=>{const p=report();return {verdict:'REVIEW',technical:{duration:8,width:544,height:960,audio:true,defects:[] as string[]},semantic:constrainEvidence(p,requirements),evidence:p.evidence,requirements};};
+ it('allows clean technical results and disclosed uncertainty for human review',()=>{
+  expect(reviewEligibility(stored())).toMatchObject({eligible:true,humanReviewRequired:true,unresolvedChecks:['motion','audio','lipSync']});
+ });
+ it('blocks missing or malformed reports, required audio missing, and observed failures even alongside uncertainty',()=>{
+  expect(reviewEligibility(null).eligible).toBe(false);
+  expect(reviewEligibility({verdict:'PASS'}).eligible).toBe(false);
+  const r=stored();r.technical.audio=false;expect(reviewEligibility(r).eligible).toBe(false);
+  r.technical.audio=true;r.technical.defects=['Frozen frames'];expect(reviewEligibility(r).eligible).toBe(false);
+  r.technical.defects=[];r.semantic.checks[0]={criterion:'identity',status:'FAIL',evidence:'Observed different identity.',seconds:0,correction:'Restore reference identity.'};
+  expect(reviewEligibility(r).eligible).toBe(false);
+  expect(qualityDecision(r.technical,r.semantic,r.requirements).verdict).toBe('FAIL');
  });
 });

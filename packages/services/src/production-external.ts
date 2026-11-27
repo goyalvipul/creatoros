@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {sql} from '@creatoros/db';
 import {createHash} from 'node:crypto';
-import {qualityReportSchema,qualityDecision,inspectTechnicalVideo,type QualityRequirements,type SemanticQuality} from './production-quality';
+import {qualityReportSchema,qualityDecision,inspectTechnicalVideo,type QualityRequirements,type SemanticQuality,type TechnicalQuality} from './production-quality';
 import {runEvent,runPrefs,runPlatforms,setAutomatedProjectStage} from './production-run';
 import {readSocialCover} from './social-cover';
 import {audit} from './audit';
@@ -16,7 +16,7 @@ export const productionQualityReportSchema=productionFinalizeSchema.extend({
 }).strict();
 type Target=z.infer<typeof productionFinalizeSchema>;
 type Report=z.infer<typeof productionQualityReportSchema>;
-type Stored={requirements?:QualityRequirements;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;verdict:string;technical:unknown;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
+type Stored={requirements?:QualityRequirements;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;verdict:string;technical:TechnicalQuality;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
 type Output={jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
 async function output(ctx:Ctx,target:Target,lock=false){
   const [o]=rows<Output>(await ctx.db.execute(sql`select j.id as "jobId",p.id as "projectId",p.brand_id as "brandId",p.stage,j.status,j.settings,
@@ -60,6 +60,23 @@ export function constrainEvidence(report:Report,required:QualityRequirements):Se
   });
   return {checks};
 }
+// READY means a complete package for human review, not creative approval.
+const technicalSchema=z.object({duration:z.number().positive().max(45),width:z.number().int().positive(),height:z.number().int().positive(),audio:z.boolean(),defects:z.array(z.string())});
+const requirementsSchema=z.object({duration:z.number().positive().max(30),aspectRatio:z.string().regex(/^\d+:\d+/),requireAudio:z.boolean(),requireLipSync:z.boolean(),requirePhysicalAccuracy:z.boolean()});
+export function reviewEligibility(report:unknown){
+  const parsed=z.object({verdict:z.enum(['PASS','REVIEW','FAIL']),technical:technicalSchema,semantic:qualityReportSchema,requirements:requirementsSchema,evidence:productionQualityReportSchema.shape.evidence}).safeParse(report);
+  const invalid={eligible:false,humanReviewRequired:true,unresolvedChecks:[] as string[]};
+  if(!parsed.success)return invalid;
+  const r=parsed.data;
+  const checked=constrainEvidence({assessment:r.semantic,evidence:r.evidence} as Report,r.requirements);
+  // Explicit failures must block even when an independent criterion is uncertain.
+  if(r.verdict==='FAIL'||r.technical.defects.length||checked.checks.some(c=>c.status==='FAIL')||((r.requirements.requireAudio||r.requirements.requireLipSync)&&!r.technical.audio))return invalid;
+  if(Math.abs(r.technical.duration-r.requirements.duration)>Math.max(0.75,r.requirements.duration*0.06))return invalid;
+  const ratio=r.requirements.aspectRatio.match(/^(\d+):(\d+)/);
+  if(!ratio||Number(ratio[1])<=0||Number(ratio[2])<=0||Math.abs((r.technical.width/r.technical.height)/(Number(ratio[1])/Number(ratio[2]))-1)>0.06)return invalid;
+  const unresolvedChecks=checked.checks.filter(c=>c.status==='UNCERTAIN'||(c.status==='NOT_APPLICABLE'&&(['identity','motion','equipment','brief','continuity','artifacts'].includes(c.criterion)||(c.criterion==='audio'&&(r.requirements.requireAudio||r.requirements.requireLipSync))||(c.criterion==='lipSync'&&r.requirements.requireLipSync)||(c.criterion==='physicalAccuracy'&&r.requirements.requirePhysicalAccuracy)))).map(c=>c.criterion);
+  return {eligible:true,humanReviewRequired:true,unresolvedChecks};
+}
 function matches(o:Output,r:Stored|undefined){return !!r&&r.fileId===o.fileId&&r.outputId===o.outputId&&r.size===o.size&&r.mtime===o.mtime;}
 export async function submitChatGPTQualityReport(ctx:Ctx,input:Report){
   const p=productionQualityReportSchema.parse(input);
@@ -71,27 +88,30 @@ export async function submitChatGPTQualityReport(ctx:Ctx,input:Report){
   const technical=await inspectTechnicalVideo(ctx,p.fileId,req);
   const decision=qualityDecision(technical,semantic,req);
   const report:Stored={requirements:req,fileId:p.fileId,outputId:initial.outputId,versionId:initial.versionId,size:initial.size,mtime:initial.mtime,technical,semantic,evidence:p.evidence,...decision};
+  const eligibility=reviewEligibility(report);
   return ctx.db.transaction(async tx=>{
     const scoped={...ctx,db:tx};
     const o=await output(scoped,p,true);requireActive(o);
     if(!matches(o,report))throw conflict('Output changed during review.');
-    if(o.stage==='READY'&&decision.verdict!=='PASS')throw conflict('Reopen the project for review before replacing a finalized quality report.');
+    if(o.stage==='READY'&&!eligibility.eligible)throw conflict('Reopen the project for review before replacing a finalized quality report.');
     if(o.settings.postProduction&&((o.settings.postProduction as {lease?:string}).lease))throw conflict('Another post-production worker is active.');
     if(o.planId){
       if(!['QUALITY','REVIEW','PASSED'].includes(o.planState??''))throw conflict('Plan is not awaiting assessment.');
       const changed=rows(await tx.execute(sql`update production_plans set state=${decision.verdict==='PASS'?'PASSED':'REVIEW'},quality=${JSON.stringify(report)}::jsonb,detail=${decision.verdict==='PASS'?'ChatGPT quality report passed.':'ChatGPT quality report needs review.'},payload=payload||'{"reviewStage":"QUALITY"}'::jsonb,updated_at=now() where id=${o.planId} and org_id=${ctx.orgId} and job_id=${o.jobId} and lease is null and state in ('QUALITY','REVIEW','PASSED') returning id`));
       if(!changed.length)throw conflict('Plan changed; check its status.');
     }
-    const phase=decision.verdict==='PASS'?'AWAITING_PUBLISHING_PACKAGE':'AWAITING_QUALITY_REVIEW';
-    await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({creativeOwner:'chatgpt',qualityReport:report,productionQualityPassed:decision.verdict==='PASS',postProduction:{phase,fileId:p.fileId,detail:decision.verdict==='PASS'?'Verified report; awaiting platform drafts and covers.':'Quality review is incomplete or failed.'}})}::jsonb,updated_at=now() where id=${o.jobId} and org_id=${ctx.orgId}`);
+    const phase=eligibility.eligible?'AWAITING_PUBLISHING_PACKAGE':'AWAITING_QUALITY_REVIEW';
+    await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({creativeOwner:'chatgpt',qualityReport:report,productionQualityPassed:decision.verdict==='PASS',productionReviewEligible:eligibility.eligible,postProduction:{phase,fileId:p.fileId,...eligibility,detail:eligibility.eligible?'Technical checks passed; prepare drafts and covers for human review.':'Quality defects or missing evidence block preparation.'}})}::jsonb,updated_at=now() where id=${o.jobId} and org_id=${ctx.orgId}`);
     await runEvent(tx,ctx.orgId,o.runId,phase,'ChatGPT submitted quality evidence: '+decision.verdict,o.jobId);
     await audit(scoped,'production.quality.report',{type:'generation_job',id:o.jobId},undefined,{fileId:p.fileId,verdict:decision.verdict});
-    return {jobId:o.jobId,fileId:p.fileId,...decision,technical,phase};
+    return {jobId:o.jobId,fileId:p.fileId,...decision,technical,phase,...eligibility};
   });
 }
 async function inspectReadiness(ctx:Ctx,o:Output){
   const missing:string[]=[];
-  if(o.settings.productionQualityPassed!==true||!matches(o,o.settings.qualityReport as Stored|undefined)||(o.settings.qualityReport as Stored|undefined)?.verdict!=='PASS')missing.push('QUALITY_REPORT_PASS');
+  const report=o.settings.qualityReport as Stored|undefined;
+  const review=reviewEligibility(report);
+  if(!matches(o,report)||!review.eligible)missing.push('QUALITY_REPORT_ELIGIBLE');
   if(o.settings.dispatchPaused===true||o.settings.productionStopped===true||(o.runId&&o.runState!=='ACTIVE')||(await runPrefs(ctx))[o.brandId]?.paused)missing.push('PRODUCTION_PAUSED');
   if(!['DRAFT','IN_PROGRESS','READY'].includes(o.stage))missing.push('PROJECT_NOT_EDITABLE');
   if(rows(await ctx.db.execute(sql`select id from generation_jobs where org_id=${ctx.orgId} and project_id=${o.projectId} and status in ('QUEUED','RUNNING') limit 1`)).length)missing.push('ACTIVE_RENDER');
@@ -112,7 +132,7 @@ async function inspectReadiness(ctx:Ctx,o:Output){
     if(!coverSha256)missing.push('COVER:'+a.id);
     results.push({accountId:a.id,platform:a.platform,draftVerified:draft,coverSha256});
   }
-  return {jobId:o.jobId,fileId:o.fileId,projectId:o.projectId,itemId,stage:o.stage,ready:missing.length===0,missing,qualityReport:o.settings.qualityReport??null,accounts:results,unconnectedPlatforms:runPlatforms.filter(p=>!accounts.some(a=>a.platform===p))};
+  return {jobId:o.jobId,fileId:o.fileId,projectId:o.projectId,itemId,stage:o.stage,ready:missing.length===0,missing,...review,qualityVerdict:report?.verdict??null,qualityReport:o.settings.qualityReport??null,accounts:results,unconnectedPlatforms:runPlatforms.filter(p=>!accounts.some(a=>a.platform===p))};
 }
 export async function productionReadiness(ctx:Ctx,p:Target){return inspectReadiness(ctx,await output(ctx,productionFinalizeSchema.parse(p)));}
 export async function finalizeChatGPTProduction(ctx:Ctx,p:Target){
@@ -124,9 +144,9 @@ export async function finalizeChatGPTProduction(ctx:Ctx,p:Target){
     await setAutomatedProjectStage(tx,ctx.orgId,o.projectId,'READY','Verified ChatGPT quality report, indexed output, connected drafts and saved covers; human review before publication.');
     const [project]=rows<{stage:string}>(await tx.execute(sql`select stage from creative_projects where id=${o.projectId} and org_id=${ctx.orgId}`));
     if(project?.stage!=='READY')throw conflict('Project stage changed before finalization.');
-    await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({creativeOwner:'chatgpt',postProduction:{phase:'READY',fileId:o.fileId,itemId:status.itemId,prefilled:status.accounts.map(a=>a.accountId),covers:status.accounts.map(a=>a.platform),detail:'Verified ChatGPT publishing package.',verification:status.accounts}})}::jsonb,updated_at=now() where id=${o.jobId} and org_id=${ctx.orgId}`);
-    await runEvent(tx,ctx.orgId,o.runId,'READY','ChatGPT quality, drafts and covers verified.',o.jobId);
-    await audit(scoped,'production.finalize',{type:'generation_job',id:o.jobId},undefined,{fileId:o.fileId,itemId:status.itemId});
+    await tx.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({creativeOwner:'chatgpt',postProduction:{phase:'READY',fileId:o.fileId,itemId:status.itemId,prefilled:status.accounts.map(a=>a.accountId),covers:status.accounts.map(a=>a.platform),detail:status.unresolvedChecks.length?'Ready for human review; unresolved quality checks: '+status.unresolvedChecks.join(', '):'Ready for human review; publishing package verified.',humanReviewRequired:true,unresolvedChecks:status.unresolvedChecks,qualityVerdict:status.qualityVerdict,verification:status.accounts}})}::jsonb,updated_at=now() where id=${o.jobId} and org_id=${ctx.orgId}`);
+    await runEvent(tx,ctx.orgId,o.runId,'READY','Publishing package ready for human review. Quality verdict: '+status.qualityVerdict+'; unresolved: '+(status.unresolvedChecks.join(', ')||'none'),o.jobId);
+    await audit(scoped,'production.finalize',{type:'generation_job',id:o.jobId},undefined,{fileId:o.fileId,itemId:status.itemId,qualityVerdict:status.qualityVerdict,unresolvedChecks:status.unresolvedChecks,humanReviewRequired:true});
     return {...status,stage:'READY'};
   });
 }

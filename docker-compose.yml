@@ -222,6 +222,21 @@ services:
         limits: { memory: 128m }
     logging: *logging
 
+  # Dedicated public hostname kemokem.com -> Cloudflare Tunnel -> Caddy.
+  # Opt-in profile: regular Kemokem deployments do not need a Cloudflare token.
+  # Start with: docker compose --profile tunnel up -d --no-deps cloudflared
+  cloudflared:
+    profiles: [tunnel]
+    image: cloudflare/cloudflared:latest
+    container_name: kemokem-cloudflared
+    restart: unless-stopped
+    command: ['tunnel', '--no-autoupdate', 'run']
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in the private .env before enabling the tunnel profile}
+    depends_on:
+      caddy: { condition: service_started }
+    logging: *logging
+
   # ---- dev profile: expose the data stores on loopback only, for `pnpm dev` and host-run tests -------------------
   db-proxy:
     profiles: [dev]

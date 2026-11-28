@@ -24,6 +24,8 @@ CREATE TABLE agent_tasks (
   project_id uuid REFERENCES creative_projects(id),
   task_type text NOT NULL CHECK (task_type IN ('CONTENT_STRATEGY','SCRIPT_GENERATION','IMAGE_GENERATION')),
   input jsonb NOT NULL,
+  creator_context jsonb NOT NULL DEFAULT '{}'::jsonb,
+  upload_root_id uuid,
   state text NOT NULL DEFAULT 'QUEUED' CHECK (state IN ('QUEUED','DISPATCHED','DELIVERED','CLAIMED','RUNNING','COMPLETED','FAILED','TIMED_OUT','CANCELLED','BLOCKED')),
   created_at timestamptz NOT NULL DEFAULT now(),
   dispatched_at timestamptz,

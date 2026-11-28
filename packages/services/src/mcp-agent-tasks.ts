@@ -12,7 +12,7 @@ export type AgentTask = {
   id: string; task_type: AgentTaskInput['taskType']; input: AgentTaskInput; state: string;
   claim_hash: string | null; lease_until: Date | null; deadline_at: Date;
   upload_request_id: string | null; result: AgentTaskResult | null; project_id: string | null;
-  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null; frames_retrieved:boolean; run_state:string|null;
+  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null; frames_retrieved:boolean; run_state:string|null; claimed_at:Date|null;
 };
 
 // All claim mutations are serialized against the active owner/credential. Never trust a
@@ -32,7 +32,7 @@ export async function checkAgentConnection(db: Executor, auth: AgentAuth) {
   `)).length) throw forbidden('Agent authorization changed.');
 }
 
-export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestId: string, raw: AgentTaskInput, binding?:{runId:string;stageKey:string;dailyTasks:number;dailyImages:number}) {
+export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestId: string, raw: AgentTaskInput, binding?:{runId:string;stageKey:string;dailyTasks:number;dailyImages:number;vidiqCredits:number}) {
   const input = agentTaskInput.parse(raw);
   return ctx.db.transaction(async tx => {
     // Lock the org row before counting and inserting task reservations.
@@ -67,6 +67,19 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       `));
       if((usage?.tasks??0)>=binding.dailyTasks||(input.taskType==='IMAGE_GENERATION'&&(usage?.images??0)>=binding.dailyImages))
         throw conflict('Agent daily task or image reservation exhausted.');
+    }
+    if(input.taskType==='RESEARCH'){
+      if(!binding)throw badRequest('vidIQ research requires an owner-configured native agent run.');
+      const rawLimit=ctx.env.processEnv.AI_GATEWAY_AGENT_VIDIQ_DAILY_LIMIT;
+      const limit=rawLimit!==undefined&&/^\d+$/.test(rawLimit)?Math.min(100,Number(rawLimit)):20;
+      const [credits]=rows<{global:number;agent:number}>(await tx.execute(sql`
+        select coalesce(sum((t.input->>'reservedCredits')::int),0)::int as global,
+         coalesce(sum((t.input->>'reservedCredits')::int) filter(where r.agent_id=(select agent_id from agent_runs where id=${binding.runId})),0)::int as agent
+        from agent_tasks t left join agent_runs r on r.id=t.agent_run_id where t.org_id=${ctx.orgId} and t.task_type='RESEARCH'
+        and t.created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'
+      `));
+      if((credits?.global??0)+input.reservedCredits>limit||(credits?.agent??0)+input.reservedCredits>binding.vidiqCredits)
+        throw conflict('vidIQ daily reservation budget exhausted. No provider request admitted.');
     }
     if(input.taskType==='VIDEO_REVIEW'||input.taskType==='SEO_GENERATION'){
       if(!rows(await tx.execute(sql`
@@ -136,7 +149,7 @@ export async function withAgentTask<T>(auth: AgentAuth, principal: string, reque
     await checkAgentConnection(tx, auth);
     const [task] = rows<AgentTask>(await tx.execute(sql`
       select t.id,t.task_type,t.input,t.state,t.claim_hash,t.lease_until,t.deadline_at,t.upload_request_id,
-        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id,t.frames_retrieved,r.state as run_state
+        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id,t.frames_retrieved,t.claimed_at,r.state as run_state
       from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
       left join agent_runs r on r.id=t.agent_run_id
       where t.id=${requestId} and t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId}
@@ -197,6 +210,7 @@ export async function finishAgentTask(auth: AgentAuth, principal: string, reques
       throw conflict('Completed task has a different result.');
     }
     assertAgentClaim(task,token);
+    if(result.taskType==='RESEARCH'&&(!task.claimed_at||result.creditEvidence.charges.some(c=>Date.parse(c.chargedAt)<new Date(task.claimed_at!).getTime()-60000||Date.parse(c.chargedAt)>Date.now()+60000)))throw conflict('Reported vidIQ charges are outside the assigned execution window.');
     if(result.taskType==='VIDEO_REVIEW'&&!task.frames_retrieved)throw conflict('Retrieve assigned render frames before reporting review.');
     if (result.taskType==='IMAGE_GENERATION') {
       if (result.uploadRequestId!==task.upload_request_id) throw badRequest('Use the task-bound upload session.');

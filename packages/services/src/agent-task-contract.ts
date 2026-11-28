@@ -4,7 +4,8 @@ import { qualityReportSchema } from './production-quality';
 export const AGENT_EVENT = 'kemokem.task.requested';
 export const AGENT_SUBSCRIBE = 'agents.subscribe';
 export const AGENT_EXECUTE = 'agents.execute';
-export const AGENT_SCHEMA_VERSION = 1 as const;
+export const AGENT_SCHEMA_VERSION = 2 as const;
+export function agentTaskSchemaVersion(type:string):1|2 {return ['CONTENT_STRATEGY','SCRIPT_GENERATION','IMAGE_GENERATION'].includes(type)?1:2;}
 
 // Only capabilities with concrete admission and result validators are advertised.
 // New task types must add both schemas, authorization, and a delivery handler.
@@ -74,5 +75,5 @@ export function validateAgentResult(input: AgentTaskInput, result: unknown): Age
 }
 export function agentEventPayload(requestId: string, taskType: AgentTaskInput['taskType'], createdAt: Date) {
   return { eventId: requestId, name: AGENT_EVENT, timestamp: createdAt.toISOString(),
-    data: { requestId, taskType, schemaVersion: AGENT_SCHEMA_VERSION }, cursor: null };
+    data: { requestId, taskType, schemaVersion: agentTaskSchemaVersion(taskType) }, cursor: null };
 }

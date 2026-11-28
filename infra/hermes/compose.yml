@@ -1,0 +1,22 @@
+# Isolated Hermes Agent starter: no connection to the Kemokem production Docker network.
+# Read README.md before deployment; run provider setup and configure dashboard login first.
+name: kemokem-hermes
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: kemokem-hermes
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    environment:
+      HERMES_DASHBOARD: "1"
+      HERMES_UID: "${HERMES_UID:-1000}"
+      HERMES_GID: "${HERMES_GID:-1000}"
+    volumes:
+      - "${HOME}/.hermes:/opt/data"
+    ports:
+      # Local-only. Use SSH port forwarding to access from another computer.
+      # Do not expose the dashboard publicly or attach it to the Kemokem Cloudflare Tunnel.
+      - "127.0.0.1:9119:9119"
+    mem_limit: 3g
+    cpus: 2.0

@@ -23,7 +23,7 @@ const image = base.extend({
   referenceFileIds: refs,
   aspect: z.enum(['1:1', '9:16', '16:9', '4:5', '3:2', '2:3']),
 }).strict();
-const research = base.extend({taskType:z.literal('RESEARCH'),provider:z.literal('OWNER_SOURCES'),sources:z.array(z.object({url:z.url(),excerpt:z.string().min(1).max(3000)}).strict()).min(1).max(20)}).strict();
+const research = base.extend({taskType:z.literal('RESEARCH'),provider:z.literal('VIDIQ'),query:z.string().trim().min(1).max(500),reservedCredits:z.union([z.literal(5),z.literal(15)]),watch:z.boolean()}).strict().refine(r=>r.reservedCredits===(r.watch?15:5),'Reservation must match approved calls.');
 const planning = base.extend({taskType:z.literal('PRODUCTION_PLANNING'),projectId:uuid,durationSec:z.number().int().min(3).max(30),aspect:z.enum(['9:16','16:9','1:1'])}).strict();
 const video = base.extend({taskType:z.literal('VIDEO_REVIEW'),projectId:uuid,jobId:uuid,fileId:uuid,referenceFileIds:refs,frameSeconds:z.array(z.number().min(0).max(30)).min(1).max(4)}).strict();
 const account=z.object({accountId:uuid,platform:z.string().min(1).max(40)}).strict();
@@ -48,7 +48,7 @@ const imageResult = z.object({
   fileId: uuid,
   evidence: z.string().trim().min(1).max(2000),
 }).strict();
-const researchResult=z.object({taskType:z.literal('RESEARCH'),findings:z.array(z.object({url:z.url(),finding:z.string().min(1).max(2000)}).strict()).min(1).max(20),limitations:z.array(z.string().max(1000)).max(10)}).strict();
+const researchResult=z.object({taskType:z.literal('RESEARCH'),provider:z.literal('VIDIQ'),findings:z.array(z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),url:z.url(),title:z.string().min(1).max(300),finding:z.string().min(1).max(2000),views:z.number().int().nonnegative().nullable(),outlierScore:z.number().nonnegative().nullable()}).strict()).min(1).max(10),analysis:z.object({videoId:z.string().regex(/^[A-Za-z0-9_-]{11}$/),jobId:z.string().min(1).max(500),observations:z.string().min(1).max(8000)}).strict().nullable(),creditEvidence:z.object({balanceBefore:z.number().int().nonnegative().nullable(),balanceAfter:z.number().int().nonnegative().nullable(),charges:z.array(z.object({tool:z.enum(['vidiq_outliers','vidiq_watch_shortform_content']),credits:z.union([z.literal(5),z.literal(10)]),chargedAt:z.iso.datetime({offset:true})}).strict()).min(1).max(2)}).strict(),limitations:z.array(z.string().max(1000)).max(10)}).strict();
 const planResult=z.object({taskType:z.literal('PRODUCTION_PLANNING'),title:z.string().trim().min(1).max(200),brief:z.string().trim().min(1).max(12000),imagePrompt:z.string().trim().min(1).max(6000),masterPrompt:z.string().trim().min(1).max(12000),segments:z.array(z.object({prompt:z.string().trim().min(1).max(6000),durationSec:z.number().int().min(1).max(9),continuity:z.enum(['shot','context'])}).strict()).min(1).max(8)}).strict();
 const videoResult=z.object({taskType:z.literal('VIDEO_REVIEW'),assessment:qualityReportSchema,frameSeconds:z.array(z.number().min(0).max(30)).min(1).max(4)}).strict();
 const seoResult=z.object({taskType:z.literal('SEO_GENERATION'),drafts:z.array(z.object({accountId:uuid,title:z.string().trim().min(1).max(100),caption:z.string().trim().min(1).max(5000),hashtags:z.array(z.string().trim().min(1).max(100)).min(1).max(30)}).strict()).min(1).max(20),thumbnailPrompt:z.string().trim().min(1).max(4000)}).strict();
@@ -70,7 +70,13 @@ export function validateAgentResult(input: AgentTaskInput, result: unknown): Age
     const expected=input.accounts.map(a=>a.accountId).sort(),actual=parsed.drafts.map(a=>a.accountId).sort();
     if(JSON.stringify(expected)!==JSON.stringify(actual))throw new Error('agent_account_mismatch');
   }
-  if(input.taskType==='RESEARCH'&&parsed.taskType==='RESEARCH'&&parsed.findings.some(f=>!input.sources.some(s=>s.url===f.url)))throw new Error('agent_source_mismatch');
+  if(input.taskType==='RESEARCH'&&parsed.taskType==='RESEARCH'){
+    const charges=parsed.creditEvidence.charges;
+    if(charges.length!==(input.watch?2:1)||charges.filter(c=>c.tool==='vidiq_outliers'&&c.credits===5).length!==1||charges.reduce((n,c)=>n+c.credits,0)!==input.reservedCredits)throw new Error('agent_research_charge_mismatch');
+    if(input.watch&&(!parsed.analysis||!parsed.findings.some(f=>f.videoId===parsed.analysis?.videoId)||!charges.some(c=>c.tool==='vidiq_watch_shortform_content'&&c.credits===10)))throw new Error('agent_research_analysis_missing');
+    if(!input.watch&&parsed.analysis)throw new Error('agent_unreserved_analysis');
+    for(const f of parsed.findings){const url=new URL(f.url);if(url.protocol!=='https:'||!['www.youtube.com','youtube.com','youtu.be'].includes(url.hostname)||(url.hostname==='youtu.be'?url.pathname.slice(1)!==f.videoId:!(url.pathname==='/shorts/'+f.videoId||(url.pathname==='/watch'&&url.searchParams.get('v')===f.videoId))))throw new Error('agent_invalid_source_url');}
+  }
   return parsed;
 }
 export function agentEventPayload(requestId: string, taskType: AgentTaskInput['taskType'], createdAt: Date) {

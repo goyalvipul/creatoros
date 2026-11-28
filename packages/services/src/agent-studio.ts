@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { sql, publishDrafts, and, eq, type Db } from '@creatoros/db';
+import { sql, publishDrafts, type Db } from '@creatoros/db';
 import { agentConfigSchema, scheduleDue, taskInstructions, workflowStages, type AgentConfig } from './agent-studio-contract';
 import { agentTaskInput, agentTaskResult, AGENT_EXECUTE, AGENT_SUBSCRIBE, type AgentTaskInput, type AgentTaskResult } from './agent-task-contract';
 import { createAgentTask } from './mcp-agent-tasks';

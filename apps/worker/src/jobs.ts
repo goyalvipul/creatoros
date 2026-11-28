@@ -329,10 +329,11 @@ export async function jobLive(d: WorkerDeps) {
 
 export const JOB_TABLE = {
   'mcp-diagnostics': async (d: WorkerDeps) => {
-    const { dispatchMcpDiagnostics, dispatchMcpAgentTasks } = await import('@creatoros/services');
+    const { dispatchMcpDiagnostics, dispatchMcpAgentTasks, runDueAgentStudio } = await import('@creatoros/services');
     const diagnostics = await dispatchMcpDiagnostics(d.db, d.env.encryptionKey);
+    const studio = await runDueAgentStudio(d.db,d.env);
     const agents = await dispatchMcpAgentTasks(d.db, d.env.encryptionKey);
-    return { diagnostics, agents };
+    return { diagnostics, agents, studio };
   },
   heartbeat: jobHeartbeat,
   'drive-sync': jobDriveSync,

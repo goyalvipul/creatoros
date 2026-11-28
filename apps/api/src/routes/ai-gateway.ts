@@ -8,6 +8,7 @@ import { operations, permissionGroups, scopes, validateForm } from './ai-gateway
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
 import { h3Form } from './ai-gateway-forms';
 import { registerGatewayEvents } from './ai-gateway-events';
+import { registerAgentStudio } from './agent-studio';
 import { registerBinaryUploadRoutes } from './ai-gateway-binary';
 import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative, authorizeDedicatedImageUpload, isDedicatedImageOperation } from './ai-gateway-production-policy';
 
@@ -204,6 +205,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);if(a.exclusive)throw forbidden('Use task-scoped status in exclusive mode.');const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   registerBinaryUploadRoutes(app,authenticate,envelope);
   registerGatewayEvents(app,deps,authenticate,envelope,invoke);
+  registerAgentStudio(app,deps);
   // Keep legacy endpoints on the same permission, execution and request-id path.
   app.get('/ai-gateway/projects',async req=>envelope(req,await invoke(await authenticate(req),{operation:'projects.list',input:{}})));
   app.get('/ai-gateway/videos',async req=>envelope(req,await invoke(await authenticate(req),{operation:'media.list',input:{kind:'VIDEO'}})));

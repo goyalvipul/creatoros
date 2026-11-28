@@ -3,16 +3,16 @@ import { useState } from 'react';
 import { Badge, Button } from '@/components/ui';
 import { post,useApi } from '@/lib/api';
 const path='/integrations/ai-gateway/agent-studio';
-type Config={name:string;brandId:string;subscriptionId:string;workflow:'STRATEGY'|'SCRIPT'|'IMAGE'|'H3_SHORT';schedule:{kind:'MANUAL'|'DAILY';time:string};
+type Config={name:string;brandId:string;subscriptionId:string;workflow:'STRATEGY'|'SCRIPT'|'IMAGE'|'H3_SHORT'|'LTX_SHORT';schedule:{kind:'MANUAL'|'DAILY';time:string};
  instructions:string;skills:{name:string;instructions:string}[];memory:{key:string;value:string}[];projectId:string|null;workerId:string|null;
- aspect:'9:16'|'16:9'|'1:1';durationSec:number;research:'NONE';dailyTasks:number;dailyImages:number;vidiqCredits:0};
+ aspect:'9:16'|'16:9'|'1:1';durationSec:number;research:'NONE';dailyTasks:number;dailyImages:number;vidiqCredits:0;maxRegenerations?:0|1;ltx?:{audioFileId:string;audioStartSec:number;loraName:string;loraStrength:number}};
 type Agent={id:string;name:string;enabled:boolean;revision:number;config:Config};
 type Run={id:string;agentId:string;slot:string;revision:number;state:string;stage:number;detail:string|null;projectId:string|null;jobId:string|null;fileId:string|null};
 type Board={exclusive:boolean;agents:Agent[];runs:Run[];usage:{agentId:string;tasks:number;images:number}[];
  tasks:{id:string;runId:string;stageKey:string;state:string;progress:string|null;errorCode:string|null;result:unknown}[];
  brands:{id:string;name:string}[];projects:{id:string;title:string;brandId:string}[];workers:{id:string;name:string}[];subscriptions:{id:string;expiresAt:string}[]};
 const blank:Config={name:'',brandId:'',subscriptionId:'',workflow:'SCRIPT',schedule:{kind:'MANUAL',time:'01:00'},instructions:'',skills:[],memory:[],
- projectId:null,workerId:null,aspect:'9:16',durationSec:12,research:'NONE',dailyTasks:6,dailyImages:2,vidiqCredits:0};
+ projectId:null,workerId:null,aspect:'9:16',durationSec:12,research:'NONE',dailyTasks:6,dailyImages:2,vidiqCredits:0,maxRegenerations:0};
 const field='block w-full rounded border border-border bg-transparent p-2 text-sm';
 export function AgentStudioCard(){
  const {data,error,mutate}=useApi<Board>(path,{refreshInterval:5000});
@@ -40,7 +40,7 @@ export function AgentStudioCard(){
    <h3 id="agent-studio" className="font-semibold">Agent Studio</h3>
    <Badge tone={data?.exclusive?'ok':'warn'}>{data?.exclusive?'Exclusive execution':'Interactive mode'}</Badge>
   </div>
-  <p className="text-sm text-muted">Native Vancouver-time scheduling, revision-pinned skills and memory, and durable creative runs. H3 creates one short per daily run. No paid fallback or automatic publication. vidIQ and LTX are unavailable in this release candidate.</p>
+  <p className="text-sm text-muted">Native Vancouver-time scheduling, revision-pinned skills and memory, and durable creative runs. H3 and audio-conditioned LTX create one short per daily run. No paid fallback or automatic publication. Unmediated vidIQ is unavailable.</p>
   {error&&<p role="alert" className="text-bad text-sm">{error.message}</p>}
   {failure&&<p role="alert" className="text-bad text-sm">{failure}</p>}
   {data&&<>
@@ -56,14 +56,21 @@ export function AgentStudioCard(){
      <label className="text-sm">Name<input className={field} value={config.name} onChange={e=>patch('name',e.target.value)}/></label>
      <label className="text-sm">Creator<select className={field} value={config.brandId} disabled={!!editId} onChange={e=>setConfig(c=>({...c,brandId:e.target.value,projectId:null}))}><option value="">Select creator</option>{data.brands.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
      <label className="text-sm">Subscription<select className={field} value={config.subscriptionId} onChange={e=>patch('subscriptionId',e.target.value)}><option value="">Select production subscription</option>{data.subscriptions.map(s=><option key={s.id} value={s.id}>{s.id.slice(0,12)}</option>)}</select></label>
-     <label className="text-sm">Workflow<select className={field} value={config.workflow} onChange={e=>setConfig(c=>({...c,workflow:e.target.value as Config['workflow'],projectId:null}))}><option value="STRATEGY">Content strategy</option><option value="SCRIPT">Strategy and script</option><option value="IMAGE">Character/scene image</option><option value="H3_SHORT">H3 short → READY</option></select></label>
+     <label className="text-sm">Workflow<select className={field} value={config.workflow} onChange={e=>setConfig(c=>({...c,workflow:e.target.value as Config['workflow'],projectId:null,maxRegenerations:0,ltx:e.target.value==='LTX_SHORT'?(c.ltx??{audioFileId:'',audioStartSec:0,loraName:'',loraStrength:0.75}):undefined}))}><option value="STRATEGY">Content strategy</option><option value="SCRIPT">Strategy and script</option><option value="IMAGE">Character/scene image</option><option value="H3_SHORT">H3 short → READY</option><option value="LTX_SHORT">LTX audio-conditioned short → READY</option></select></label>
      <label className="text-sm">Schedule<select className={field} value={config.schedule.kind} onChange={e=>patch('schedule',{...config.schedule,kind:e.target.value as Config['schedule']['kind']})}><option value="MANUAL">Manual</option><option value="DAILY">Daily</option></select></label>
      <label className="text-sm">Time (Vancouver)<input className={field} type="time" value={config.schedule.time} onChange={e=>patch('schedule',{...config.schedule,time:e.target.value})}/></label>
-     {config.workflow==='H3_SHORT'?<label className="text-sm">GPU worker<select className={field} value={config.workerId??''} onChange={e=>patch('workerId',e.target.value||null)}><option value="">Select worker</option>{data.workers.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>:<label className="text-sm">Draft project<select className={field} value={config.projectId??''} onChange={e=>patch('projectId',e.target.value||null)}><option value="">None</option>{data.projects.filter(p=>p.brandId===config.brandId).map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>}
+     {['H3_SHORT','LTX_SHORT'].includes(config.workflow)?<label className="text-sm">GPU worker<select className={field} value={config.workerId??''} onChange={e=>patch('workerId',e.target.value||null)}><option value="">Select worker</option>{data.workers.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>:<label className="text-sm">Draft project<select className={field} value={config.projectId??''} onChange={e=>patch('projectId',e.target.value||null)}><option value="">None</option>{data.projects.filter(p=>p.brandId===config.brandId).map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>}
      <label className="text-sm">Aspect<select className={field} value={config.aspect} onChange={e=>patch('aspect',e.target.value as Config['aspect'])}>{['9:16','16:9','1:1'].map(a=><option key={a}>{a}</option>)}</select></label>
      <label className="text-sm">Duration (seconds)<input className={field} type="number" min={3} max={30} value={config.durationSec} onChange={e=>patch('durationSec',Number(e.target.value))}/></label>
      <label className="text-sm">Daily task limit<input className={field} type="number" min={1} max={12} value={config.dailyTasks} onChange={e=>patch('dailyTasks',Number(e.target.value))}/></label>
      <label className="text-sm">Daily image limit<input className={field} type="number" min={0} max={6} value={config.dailyImages} onChange={e=>patch('dailyImages',Number(e.target.value))}/></label>
+     {config.workflow==='H3_SHORT'&&<label className="text-sm">Reserved corrective renders<select className={field} value={config.maxRegenerations??0} onChange={e=>patch('maxRegenerations',Number(e.target.value) as 0|1)}><option value="0">None</option><option value="1">One confirmed visual correction</option></select></label>}
+     {config.workflow==='LTX_SHORT'&&config.ltx&&<>
+      <label className="text-sm">Approved audio file UUID<input className={field} value={config.ltx.audioFileId} onChange={e=>patch('ltx',{...config.ltx!,audioFileId:e.target.value})}/></label>
+      <label className="text-sm">Audio start (seconds)<input className={field} type="number" min={0} value={config.ltx.audioStartSec} onChange={e=>patch('ltx',{...config.ltx!,audioStartSec:Number(e.target.value)})}/></label>
+      <label className="text-sm">Worker LoRA filename<input className={field} value={config.ltx.loraName} onChange={e=>patch('ltx',{...config.ltx!,loraName:e.target.value})}/></label>
+      <label className="text-sm">LoRA strength<input className={field} type="number" min={0} max={2} step={0.05} value={config.ltx.loraStrength} onChange={e=>patch('ltx',{...config.ltx!,loraStrength:Number(e.target.value)})}/></label>
+     </>}
     </div>
     <label className="block text-sm">Instructions<textarea className={field} rows={4} maxLength={6000} value={config.instructions} onChange={e=>patch('instructions',e.target.value)}/></label>
     <h5 className="text-sm font-medium">Versioned skills</h5>

@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { McpEventsCard } from '@/components/mcp-events-card';
 import { AgentTasksCard } from '@/components/agent-tasks-card';
+import { AgentStudioCard } from '@/components/agent-studio-card';
 import { Bot } from 'lucide-react';
 import { ActionButton, Badge, Button, Card, StateBadge } from '@/components/ui';
 import { post, useApi } from '@/lib/api';
@@ -227,6 +228,7 @@ export function AiGatewayCard() {
       )}
       {!s && res.error && <ActionButton className="mt-3" onAction={async () => { await res.mutate(); }}>Retry</ActionButton>}
       <McpEventsCard />
+      <AgentStudioCard />
       <AgentTasksCard />
     </Card>
   );

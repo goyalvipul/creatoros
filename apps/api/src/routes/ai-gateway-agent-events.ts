@@ -129,7 +129,7 @@ export function registerAgentEvents(app:FastifyInstance,deps:AppDeps,authorize:A
     const p=bound.extend({image:binaryUploadSchema}).strict().parse(req.body);
     const task=await withAgentTask(a,p.principal,p.requestId,async(_db,t)=>{
       assertAgentClaim(t,p.claimToken);
-      if(t.task_type!=='IMAGE_GENERATION'||!t.upload_request_id||p.image.brandId!==t.brand_id||p.image.projectId!==t.project_id)
+      if(t.task_type!=='IMAGE_GENERATION'||!t.upload_request_id||p.image.brandId!==t.brand_id||p.image.projectId!==t.project_id||p.image.rootId!==t.upload_root_id)
         throw forbidden('Image target is not assigned to this task.');
       return t;
     });

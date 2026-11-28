@@ -3,7 +3,7 @@ import { sql, type Executor } from '@creatoros/db';
 import { badRequest, conflict, forbidden, notFound, type Ctx } from './types';
 import { decrypt } from './crypto';
 import { sendMcpWebhook } from './mcp-event-webhook';
-import { AGENT_SUBSCRIBE, AGENT_EXECUTE, agentTaskInput, agentEventPayload, validateAgentResult, type AgentTaskInput, type AgentTaskResult } from './agent-task-contract';
+import { AGENT_SUBSCRIBE, AGENT_EXECUTE, agentTaskInput, agentEventPayload, agentTaskSchemaVersion, validateAgentResult, type AgentTaskInput, type AgentTaskResult } from './agent-task-contract';
 
 const rows = <T>(result: unknown) => (result as { rows: T[] }).rows;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -174,7 +174,7 @@ export async function getAgentTask(auth: AgentAuth, principal: string, requestId
     assertAgentClaim(task,token);
     return { requestId, input: task.input, uploadRequestId: task.upload_request_id,
       creatorContext: task.creator_context, uploadRootId: task.upload_root_id,
-      deadlineAt: task.deadline_at, leaseUntil: task.lease_until, schemaVersion: 1 };
+      deadlineAt: task.deadline_at, leaseUntil: task.lease_until, schemaVersion: agentTaskSchemaVersion(task.task_type) };
   });
 }
 export async function progressAgentTask(auth: AgentAuth, principal: string, requestId: string, token: string, detail?: string) {

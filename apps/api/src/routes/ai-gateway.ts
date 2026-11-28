@@ -118,8 +118,8 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     const claimed=await auth.ctx.db.transaction(async tx=>{
       const [connection]=rows<{production_policy:unknown;active_scopes:string[]}>(await tx.execute(sql`select g.production_policy,case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end as active_scopes from ai_gateway_connections g join organization_memberships m on m.org_id=g.org_id and m.user_id=case when g.mode='hosted' then g.hosted_owner else g.local_owner end join users u on u.id=m.user_id where g.org_id=${auth.ctx.orgId} and g.enabled and g.mode=${auth.mode} and (case when g.mode='hosted' then g.hosted_hash else g.local_hash end)=${auth.hash} and ${operation.scope}=any(case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end) and m.role='OWNER' and m.status='ACTIVE' and u.status='ACTIVE' for update of g`));
       if(!connection)throw forbidden('Connector authorization changed.');
-      const [bound]=rows<{id:string;state:string;claim_hash:string;brand_id:string;project_id:string;active:boolean;credential_hash:string;owner_id:string;org_id:string}>(await tx.execute(sql`
-        select t.id,t.state,t.claim_hash,t.brand_id,t.project_id,t.credential_hash,t.owner_id,t.org_id,
+      const [bound]=rows<{id:string;state:string;claim_hash:string;brand_id:string;project_id:string;upload_root_id:string;active:boolean;credential_hash:string;owner_id:string;org_id:string}>(await tx.execute(sql`
+        select t.id,t.state,t.claim_hash,t.brand_id,t.project_id,t.upload_root_id,t.credential_hash,t.owner_id,t.org_id,
           (t.lease_until>now() and t.deadline_at>now() and s.revoked_at is null) as active
         from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
         where t.upload_request_id=${body.requestId} for update of t
@@ -130,7 +130,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
           bound.owner_id!==auth.ctx.userId||bound.credential_hash!==auth.hash||bound.claim_hash!==digest(binding.claimToken)||
           !bound.active||!['CLAIMED','RUNNING'].includes(bound.state)||auth.mode!=='hosted'||
           !connection.active_scopes.includes(AGENT_SUBSCRIBE)||!connection.active_scopes.includes(AGENT_EXECUTE)||
-          body.operation!=='media.prepareImageUpload'||image.brandId!==bound.brand_id||image.projectId!==bound.project_id)
+          body.operation!=='media.prepareImageUpload'||image.brandId!==bound.brand_id||image.projectId!==bound.project_id||image.rootId!==bound.upload_root_id)
           throw forbidden('Task-bound upload authorization required.');
       }
       const [existing]=rows<{id:string;status:string;result:unknown}>(await tx.execute(sql`select id,status,result from ai_gateway_requests where id=${body.requestId} and org_id=${auth.ctx.orgId} and mode=${auth.mode} and credential_hash=${auth.hash} and operation=${body.operation} and input=${json}::jsonb`));

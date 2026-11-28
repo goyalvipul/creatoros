@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
-import { audit, notify, DIAGNOSTIC_RESULT, DIAGNOSTIC_SUBSCRIBE, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
+import { audit, notify, DIAGNOSTIC_RESULT, DIAGNOSTIC_SUBSCRIBE, AGENT_SUBSCRIBE, AGENT_EXECUTE, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes, validateForm } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
@@ -49,6 +49,9 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       if (!body.enabled || body.mode !== 'hosted' || !hosted.includes(DIAGNOSTIC_SUBSCRIBE) || !hosted.includes(DIAGNOSTIC_RESULT)) {
         await tx.execute(sql`update mcp_diagnostic_subscriptions set revoked_at=now(), callback_enc=null, secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
       }
+      if (!body.enabled || body.mode !== 'hosted' || !hosted.includes(AGENT_SUBSCRIBE) || !hosted.includes(AGENT_EXECUTE)) {
+        await tx.execute(sql`update mcp_agent_subscriptions set revoked_at=now(),callback_enc=null,secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
+      }
       await audit({...ctx,db:tx},'ai_gateway.settings',{type:'organization',id:ctx.orgId},undefined,{enabled:body.enabled,mode:body.mode,localScopes:local,hostedScopes:hosted});
     });
     return state(ctx);
@@ -78,6 +81,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       if(body.mode==='local')await tx.execute(sql`update ai_gateway_connections set local_hash=${hash},local_owner=${token?ctx.userId:null},local_seen=null where org_id=${ctx.orgId}`);
       else await tx.execute(sql`update ai_gateway_connections set hosted_hash=${hash},hosted_owner=${token?ctx.userId:null},hosted_seen=null,production_policy=null where org_id=${ctx.orgId}`);
       if (body.mode === 'hosted') {
+        await tx.execute(sql`update mcp_agent_subscriptions set revoked_at=now(),callback_enc=null,secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
         await tx.execute(sql`update mcp_diagnostic_subscriptions set revoked_at=now(), callback_enc=null, secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
       }
       await tx.execute(sql`update ai_gateway_requests set status='REJECTED',finished_at=now() where org_id=${ctx.orgId} and mode=${body.mode} and status='PENDING'`);
@@ -101,7 +105,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     return {ctx,mode:selected,hash,scopes:r.scopes};
   }
   const envelope=(req:FastifyRequest,data:unknown)=>({data,meta:{requestId:req.correlationId},error:null});
-  async function invoke(auth:GatewayAuth,body:z.output<typeof invokeBody>) {
+  async function invoke(auth:GatewayAuth,body:z.output<typeof invokeBody>,binding?:{taskId:string;claimToken:string}) {
     const operation=lookup(body.operation);
     if(!auth.scopes.includes(operation.scope))throw forbidden('Gateway permission not enabled.');
     const input=operation.schema.parse(body.input);
@@ -114,6 +118,21 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
     const claimed=await auth.ctx.db.transaction(async tx=>{
       const [connection]=rows<{production_policy:unknown;active_scopes:string[]}>(await tx.execute(sql`select g.production_policy,case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end as active_scopes from ai_gateway_connections g join organization_memberships m on m.org_id=g.org_id and m.user_id=case when g.mode='hosted' then g.hosted_owner else g.local_owner end join users u on u.id=m.user_id where g.org_id=${auth.ctx.orgId} and g.enabled and g.mode=${auth.mode} and (case when g.mode='hosted' then g.hosted_hash else g.local_hash end)=${auth.hash} and ${operation.scope}=any(case when g.mode='hosted' then g.hosted_scopes else g.local_scopes end) and m.role='OWNER' and m.status='ACTIVE' and u.status='ACTIVE' for update of g`));
       if(!connection)throw forbidden('Connector authorization changed.');
+      const [bound]=rows<{id:string;state:string;claim_hash:string;brand_id:string;project_id:string;active:boolean;credential_hash:string;owner_id:string;org_id:string}>(await tx.execute(sql`
+        select t.id,t.state,t.claim_hash,t.brand_id,t.project_id,t.credential_hash,t.owner_id,t.org_id,
+          (t.lease_until>now() and t.deadline_at>now() and s.revoked_at is null) as active
+        from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
+        where t.upload_request_id=${body.requestId} for update of t
+      `));
+      if(bound||binding){
+        const image=input as Record<string,unknown>;
+        if(!bound||!binding||bound.id!==binding.taskId||bound.org_id!==auth.ctx.orgId||
+          bound.owner_id!==auth.ctx.userId||bound.credential_hash!==auth.hash||bound.claim_hash!==digest(binding.claimToken)||
+          !bound.active||!['CLAIMED','RUNNING'].includes(bound.state)||auth.mode!=='hosted'||
+          !connection.active_scopes.includes(AGENT_SUBSCRIBE)||!connection.active_scopes.includes(AGENT_EXECUTE)||
+          body.operation!=='media.prepareImageUpload'||image.brandId!==bound.brand_id||image.projectId!==bound.project_id)
+          throw forbidden('Task-bound upload authorization required.');
+      }
       const [existing]=rows<{id:string;status:string;result:unknown}>(await tx.execute(sql`select id,status,result from ai_gateway_requests where id=${body.requestId} and org_id=${auth.ctx.orgId} and mode=${auth.mode} and credential_hash=${auth.hash} and operation=${body.operation} and input=${json}::jsonb`));
       if(existing)return {row:existing,execute:false};
       if(body.operation==='generation.h3')await validateForm({...auth.ctx,db:tx},h3Form.parse(input));
@@ -182,7 +201,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES,MAX_SOCIAL_COVER_JSON_BYTES+4096),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   registerBinaryUploadRoutes(app,authenticate,envelope);
-  registerGatewayEvents(app,deps,authenticate,envelope);
+  registerGatewayEvents(app,deps,authenticate,envelope,invoke);
   // Keep legacy endpoints on the same permission, execution and request-id path.
   app.get('/ai-gateway/projects',async req=>envelope(req,await invoke(await authenticate(req),{operation:'projects.list',input:{}})));
   app.get('/ai-gateway/videos',async req=>envelope(req,await invoke(await authenticate(req),{operation:'media.list',input:{kind:'VIDEO'}})));

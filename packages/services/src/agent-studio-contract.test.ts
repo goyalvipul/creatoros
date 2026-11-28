@@ -20,3 +20,16 @@ describe('Agent Studio definitions',()=>{
   expect(taskInstructions({...c,skills:[{name:'Safety',instructions:'Use verified assets'}]},null)).toContain('Use verified assets');
  });
 });
+
+it('requires explicit provider risk acceptance and enough credits for the selected research',()=>{
+ const c={...base,research:'VIDIQ',researchQuery:'beginner home fitness',vidiqCredits:5,acceptHostCreditRisk:true};
+ expect(agentConfigSchema.safeParse(c).success).toBe(true);
+ expect(agentConfigSchema.safeParse({...c,acceptHostCreditRisk:false}).success).toBe(false);
+ expect(agentConfigSchema.safeParse({...c,vidiqWatch:true}).success).toBe(false);
+ expect(workflowStages(agentConfigSchema.parse(c))).toEqual(['RESEARCH','CONTENT_STRATEGY','SCRIPT_GENERATION']);
+});
+it('requires explicit LTX audio and LoRA settings',()=>{
+ const c={...base,workflow:'LTX_SHORT',workerId:id};
+ expect(agentConfigSchema.safeParse(c).success).toBe(false);
+ expect(agentConfigSchema.safeParse({...c,ltx:{audioFileId:id,audioStartSec:0,loraName:'identity.safetensors',loraStrength:0.75}}).success).toBe(true);
+});

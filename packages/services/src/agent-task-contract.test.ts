@@ -27,3 +27,31 @@ describe('Agent task version 1', () => {
     expect(validateAgentResult(task, { taskType: 'SCRIPT_GENERATION', title: 'Title', script: 'Script', limitations: [] }).taskType).toBe('SCRIPT_GENERATION');
   });
 });
+
+describe('Agent task version 2',()=>{
+ const common={brandId:id,projectId:other,instructions:'Create approved original content.'};
+ it('preserves old event versions and uses version two for new task types',()=>{
+  expect(agentEventPayload(id,'VIDEO_REVIEW',new Date(0)).data.schemaVersion).toBe(2);
+  expect(agentEventPayload(id,'IMAGE_GENERATION',new Date(0)).data.schemaVersion).toBe(1);
+ });
+ it('requires exact planned duration',()=>{
+  const input=agentTaskInput.parse({...common,taskType:'PRODUCTION_PLANNING',durationSec:12,aspect:'9:16'});
+  const result={taskType:'PRODUCTION_PLANNING',title:'Title',brief:'Brief',imagePrompt:'Image',masterPrompt:'Prompt',segments:[{prompt:'First',durationSec:6,continuity:'shot'},{prompt:'Second',durationSec:6,continuity:'context'}]};
+  expect(validateAgentResult(input,result).taskType).toBe('PRODUCTION_PLANNING');
+  expect(()=>validateAgentResult(input,{...result,segments:result.segments.slice(0,1)})).toThrow('agent_plan_duration_mismatch');
+ });
+ it('rejects incorrect provider reservations and mismatched charge evidence',()=>{
+  expect(agentTaskInput.safeParse({...common,taskType:'RESEARCH',provider:'VIDIQ',query:'Fitness',reservedCredits:5,watch:true}).success).toBe(false);
+  const input=agentTaskInput.parse({...common,taskType:'RESEARCH',provider:'VIDIQ',query:'Fitness',reservedCredits:5,watch:false});
+  const result={taskType:'RESEARCH',provider:'VIDIQ',findings:[{videoId:'Abcdefghijk',url:'https://www.youtube.com/shorts/Abcdefghijk',title:'Fitness',finding:'Example',views:100,outlierScore:2}],analysis:null,creditEvidence:{balanceBefore:50,balanceAfter:45,charges:[{tool:'vidiq_outliers',credits:5,chargedAt:'2026-11-28T01:00:00Z'}]},limitations:[]};
+  expect(validateAgentResult(input,result).taskType).toBe('RESEARCH');
+  expect(()=>validateAgentResult(input,{...result,creditEvidence:{...result.creditEvidence,charges:[{tool:'vidiq_watch_shortform_content',credits:10,chargedAt:'2026-11-28T01:00:00Z'}]}})).toThrow('agent_research_charge_mismatch');
+  expect(()=>validateAgentResult(input,{...result,findings:[{...result.findings[0],url:'https://www.youtube.com/shorts/WrongSource'}]})).toThrow('agent_invalid_source_url');
+ });
+ it('rejects incorrect publishing account sets',()=>{
+  const input=agentTaskInput.parse({...common,taskType:'SEO_GENERATION',jobId:id,fileId:other,accounts:[{accountId:id,platform:'youtube'}]});
+  const result={taskType:'SEO_GENERATION',drafts:[{accountId:id,title:'Title',caption:'Caption',hashtags:['fitness']}],thumbnailPrompt:'Thumbnail'};
+  expect(validateAgentResult(input,result).taskType).toBe('SEO_GENERATION');
+  expect(()=>validateAgentResult(input,{...result,drafts:[{...result.drafts[0],accountId:other}]})).toThrow('agent_account_mismatch');
+ });
+});

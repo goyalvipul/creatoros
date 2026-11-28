@@ -27,7 +27,7 @@ export function registerAgentStudio(app:FastifyInstance,deps:AppDeps){
    workers:rows(await ctx.db.execute(sql`select id,label as name from gpu_workers where org_id=${ctx.orgId} and enabled order by label`)),
    subscriptions:rows(await ctx.db.execute(sql`select id,expires_at as "expiresAt" from mcp_agent_subscriptions where org_id=${ctx.orgId} and owner_id=${ctx.userId}
     and revoked_at is null and expires_at>now() and callback_enc is not null order by expires_at desc`)),
-   provider:{vidiq:'UNAVAILABLE_UNMEDIATED',ltx:'UNSUPPORTED_FINALIZER',paidFallback:false,scheduledActivationRequiresCompletedRun:true}};
+   provider:{vidiq:'UNAVAILABLE_UNMEDIATED',ltx:'OWNER_AUDIO_AND_LIVE_ACCEPTANCE_REQUIRED',paidFallback:false,scheduledActivationRequiresCompletedRun:true}};
  });
  route({method:'POST',url:base+'/exclusive',tag:'AI Gateway',summary:'Select mutually exclusive hosted execution mode',role:'OWNER',
   body:z.object({enabled:z.boolean()}).strict()},async({ctx,body})=>ctx.db.transaction(async tx=>{

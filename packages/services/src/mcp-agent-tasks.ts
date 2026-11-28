@@ -70,7 +70,7 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
     }
     if(input.taskType==='VIDEO_REVIEW'||input.taskType==='SEO_GENERATION'){
       if(!rows(await tx.execute(sql`
-        select j.id from generation_jobs j join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and o.output_role='final'
+        select j.id from generation_jobs j join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and (o.output_role='final' and j.provider='comfyui-h3' or o.output_role='original' and j.provider='comfyui-ltx' and j.settings->>'nativeAgentRunId' is not null)
         join file_instances f on f.id=o.file_instance_id and f.org_id=j.org_id
         where j.id=${input.jobId} and j.org_id=${ctx.orgId} and j.project_id=${input.projectId} and j.status='SUCCEEDED'
           and f.id=${input.fileId} and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO'

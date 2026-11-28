@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sql } from '@creatoros/db';
 import {
-  AGENT_EVENT, AGENT_SUBSCRIBE, AGENT_EXECUTE, agentTaskTypes, agentTaskInput,
+  AGENT_EVENT, AGENT_SUBSCRIBE, AGENT_EXECUTE, AGENT_SCHEMA_VERSION, agentTaskTypes, agentTaskInput,
   agentTaskClaim, agentTaskProgress, agentTaskComplete, agentTaskFail,
   checkAgentConnection, createAgentTask, claimAgentTask, getAgentTask, progressAgentTask,
   finishAgentTask, failAgentTask, withAgentTask, assertAgentClaim,
@@ -78,7 +78,7 @@ export function registerAgentEvents(app:FastifyInstance,deps:AppDeps,authorize:A
   const options={bodyLimit:256*1024,config:{rateLimit:{max:60,timeWindow:'1 minute'}}};
   app.post(prefix+'capabilities',options,async req=>{
     const a=await auth(req,'capabilities');z.object({principal}).strict().parse(req.body);
-    return envelope(req,{schemaVersion:1,taskTypes:agentTaskTypes,
+    return envelope(req,{schemaVersion:AGENT_SCHEMA_VERSION,supportedSchemaVersions:[1,2],taskTypes:agentTaskTypes,
       imageTransferConfigured:a.scopes.includes('media.upload.image')&&a.scopes.includes('references.read')&&
         await isDedicatedUploadRoot(a.ctx,a.ctx.env.processEnv?.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID),
       hostCapabilitiesVerified:false,publishingAllowed:false});

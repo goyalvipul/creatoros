@@ -81,3 +81,6 @@ export * from './mcp-event-webhook';
 
 export * from './agent-task-contract';
 export * from './mcp-agent-tasks';
+
+export * from './agent-studio-contract';
+export * from './agent-studio';

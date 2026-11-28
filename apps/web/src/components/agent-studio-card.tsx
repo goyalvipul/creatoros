@@ -5,10 +5,10 @@ import { post,useApi } from '@/lib/api';
 const path='/integrations/ai-gateway/agent-studio';
 type Config={name:string;brandId:string;subscriptionId:string;workflow:'STRATEGY'|'SCRIPT'|'IMAGE'|'H3_SHORT'|'LTX_SHORT';schedule:{kind:'MANUAL'|'DAILY';time:string};
  instructions:string;skills:{name:string;instructions:string}[];memory:{key:string;value:string}[];projectId:string|null;workerId:string|null;
- aspect:'9:16'|'16:9'|'1:1';durationSec:number;research:'NONE';dailyTasks:number;dailyImages:number;vidiqCredits:0;maxRegenerations?:0|1;ltx?:{audioFileId:string;audioStartSec:number;loraName:string;loraStrength:number}};
+ aspect:'9:16'|'16:9'|'1:1';durationSec:number;research:'NONE'|'VIDIQ';researchQuery?:string;vidiqWatch?:boolean;acceptHostCreditRisk?:boolean;dailyTasks:number;dailyImages:number;vidiqCredits:number;maxRegenerations?:0|1;ltx?:{audioFileId:string;audioStartSec:number;loraName:string;loraStrength:number}};
 type Agent={id:string;name:string;enabled:boolean;revision:number;config:Config};
 type Run={id:string;agentId:string;slot:string;revision:number;state:string;stage:number;detail:string|null;projectId:string|null;jobId:string|null;fileId:string|null};
-type Board={exclusive:boolean;agents:Agent[];runs:Run[];usage:{agentId:string;tasks:number;images:number}[];
+type Board={exclusive:boolean;agents:Agent[];runs:Run[];usage:{agentId:string;tasks:number;images:number;vidiqReserved:number}[];
  tasks:{id:string;runId:string;stageKey:string;state:string;progress:string|null;errorCode:string|null;result:unknown}[];
  brands:{id:string;name:string}[];projects:{id:string;title:string;brandId:string}[];workers:{id:string;name:string}[];subscriptions:{id:string;expiresAt:string}[]};
 const blank:Config={name:'',brandId:'',subscriptionId:'',workflow:'SCRIPT',schedule:{kind:'MANUAL',time:'01:00'},instructions:'',skills:[],memory:[],
@@ -40,7 +40,7 @@ export function AgentStudioCard(){
    <h3 id="agent-studio" className="font-semibold">Agent Studio</h3>
    <Badge tone={data?.exclusive?'ok':'warn'}>{data?.exclusive?'Exclusive execution':'Interactive mode'}</Badge>
   </div>
-  <p className="text-sm text-muted">Native Vancouver-time scheduling, revision-pinned skills and memory, and durable creative runs. H3 and audio-conditioned LTX create one short per daily run. No paid fallback or automatic publication. Unmediated vidIQ is unavailable.</p>
+  <p className="text-sm text-muted">Native Vancouver-time scheduling, revision-pinned skills and memory, and durable creative runs. H3 and audio-conditioned LTX create one short per daily run. No paid fallback or automatic publication. Optional vidIQ research reserves credits locally; the external provider is not hard-capped by Kemokem.</p>
   {error&&<p role="alert" className="text-bad text-sm">{error.message}</p>}
   {failure&&<p role="alert" className="text-bad text-sm">{failure}</p>}
   {data&&<>
@@ -79,7 +79,14 @@ export function AgentStudioCard(){
     <h5 className="text-sm font-medium">Owner-approved memory</h5>
     {config.memory.map((m,i)=><div className="space-y-1" key={i}><input className={field} placeholder="Memory key" value={m.key} onChange={e=>patch('memory',config.memory.map((x,j)=>j===i?{...x,key:e.target.value}:x))}/><textarea className={field} rows={2} placeholder="Approved observation or rule" value={m.value} onChange={e=>patch('memory',config.memory.map((x,j)=>j===i?{...x,value:e.target.value}:x))}/><Button onClick={()=>patch('memory',config.memory.filter((_,j)=>j!==i))}>Remove memory</Button></div>)}
     <Button disabled={config.memory.length>=10} onClick={()=>patch('memory',[...config.memory,{key:'',value:''}])}>Add memory</Button>
-    <p className="text-xs text-muted">Research: original content only. vidIQ credits: 0. All updates create a new immutable revision.</p>
+    <label className="block text-sm">Research<select className={field} value={config.research} onChange={e=>setConfig(c=>({...c,research:e.target.value as Config['research'],vidiqCredits:e.target.value==='VIDIQ'?5:0,vidiqWatch:false,acceptHostCreditRisk:false}))}><option value="NONE">Original content</option><option value="VIDIQ">vidIQ outlier search</option></select></label>
+    {config.research==='VIDIQ'&&<div className="space-y-2 rounded border border-border p-3">
+      <label className="block text-sm">Research query<input className={field} maxLength={500} value={config.researchQuery??''} onChange={e=>patch('researchQuery',e.target.value)}/></label>
+      <label className="flex gap-2 text-sm"><input type="checkbox" checked={config.vidiqWatch??false} onChange={e=>setConfig(c=>({...c,vidiqWatch:e.target.checked,vidiqCredits:e.target.checked?15:5}))}/>Analyze one selected short (15 total reserved credits)</label>
+      <label className="block text-sm">Daily vidIQ reservation limit<input className={field} type="number" min={5} max={100} value={config.vidiqCredits} onChange={e=>patch('vidiqCredits',Number(e.target.value))}/></label>
+      <label className="flex gap-2 text-sm"><input type="checkbox" checked={config.acceptHostCreditRisk??false} onChange={e=>patch('acceptHostCreditRisk',e.target.checked)}/>I approve these host-provider calls and understand that Kemokem cannot prevent external calls or independently verify the provider ledger.</label>
+    </div>}
+    <p className="text-xs text-muted">All updates create a new immutable revision. Research is never enabled implicitly.</p>
     <div className="flex gap-2"><Button disabled={busy||!config.name||!config.brandId||!config.subscriptionId||!config.instructions} onClick={()=>void save()}>Save revision</Button><Button onClick={()=>setOpen(false)}>Close</Button></div>
    </div>}
    {data.agents.map(a=>{
@@ -87,7 +94,7 @@ export function AgentStudioCard(){
     return <div key={a.id} className="space-y-2 rounded border border-border p-3">
      <div className="flex flex-wrap items-center gap-2"><strong>{a.name}</strong><Badge>{a.enabled?'Enabled':'Disabled'}</Badge><Badge>Revision {a.revision}</Badge></div>
      <p className="text-xs text-muted">{data.brands.find(b=>b.id===a.config.brandId)?.name} · {a.config.workflow} · {a.config.schedule.kind==='DAILY'?a.config.schedule.time+' daily':'Manual'}</p>
-     <p className="text-xs">Today: {usage?.tasks??0}/{a.config.dailyTasks} task slots · {usage?.images??0}/{a.config.dailyImages} image slots</p>
+     <p className="text-xs">Today: {usage?.tasks??0}/{a.config.dailyTasks} task slots · {usage?.images??0}/{a.config.dailyImages} image slots · {usage?.vidiqReserved??0}/{a.config.vidiqCredits} vidIQ reserved credits</p>
      <div className="flex flex-wrap gap-2"><Button disabled={busy||a.enabled} onClick={()=>{setEditId(a.id);setConfig(structuredClone(a.config));setOpen(true);}}>Edit</Button><Button disabled={busy||!data.exclusive} onClick={()=>void perform('/agents/'+a.id+'/run')}>Run now</Button><Button disabled={busy||(!a.enabled&&!data.exclusive)} onClick={()=>void perform('/agents/'+a.id+'/enable',{enabled:!a.enabled})}>{a.enabled?'Disable schedule':'Enable schedule'}</Button></div>
      {data.runs.filter(r=>r.agentId===a.id).map(r=><details className="rounded border border-border p-2 text-xs" key={r.id}>
       <summary className="cursor-pointer">{r.slot} · revision {r.revision} · {r.state} · stage {r.stage+1}</summary>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { McpEventsCard } from '@/components/mcp-events-card';
 import { Bot } from 'lucide-react';
 import { ActionButton, Badge, Button, Card, StateBadge } from '@/components/ui';
 import { post, useApi } from '@/lib/api';
@@ -224,6 +225,7 @@ export function AiGatewayCard() {
         </>
       )}
       {!s && res.error && <ActionButton className="mt-3" onAction={async () => { await res.mutate(); }}>Retry</ActionButton>}
+      <McpEventsCard />
     </Card>
   );
 }

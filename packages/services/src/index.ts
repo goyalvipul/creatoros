@@ -75,3 +75,6 @@ export * from './production-quality';
 export * from './production-plan';
 
 export * from './production-external';
+
+export * from './mcp-diagnostics';
+export * from './mcp-event-webhook';

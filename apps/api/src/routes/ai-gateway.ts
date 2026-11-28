@@ -2,11 +2,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql, type Executor } from '@creatoros/db';
-import { audit, notify, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
+import { audit, notify, DIAGNOSTIC_RESULT, DIAGNOSTIC_SUBSCRIBE, AppError, MAX_SOCIAL_COVER_JSON_BYTES, forbidden, unauthorized, notFound, conflict, badRequest, type Ctx } from '@creatoros/services';
 import { makeRouter, type AppDeps } from '../http';
 import { operations, permissionGroups, scopes, validateForm } from './ai-gateway-operations';
 import { decodeMedia, MAX_GATEWAY_MEDIA_JSON_BYTES, MAX_GATEWAY_INVOKE_BODY_BYTES } from './ai-gateway-media';
 import { h3Form } from './ai-gateway-forms';
+import { registerGatewayEvents } from './ai-gateway-events';
 import { registerBinaryUploadRoutes } from './ai-gateway-binary';
 import { productionPolicySchema, productionOperations, authorizeProduction, validatePolicy, creativeOperations, canExecuteCreative, authorizeCreative, authorizeDedicatedImageUpload, isDedicatedImageOperation } from './ai-gateway-production-policy';
 
@@ -45,6 +46,9 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       const local=body.localScopes??(body.mode==='local'?body.scopes:undefined)??current.local_scopes;
       const hosted=body.hostedScopes??(body.mode==='hosted'?body.scopes:undefined)??current.hosted_scopes;
       await tx.execute(sql`update ai_gateway_connections set enabled=${body.enabled},mode=${body.mode},local_scopes=ARRAY[${sql.join([...new Set(local)].map(s=>sql`${s}`),sql`,`)}]::text[],hosted_scopes=ARRAY[${sql.join([...new Set(hosted)].map(s=>sql`${s}`),sql`,`)}]::text[] where org_id=${ctx.orgId}`);
+      if (!body.enabled || body.mode !== 'hosted' || !hosted.includes(DIAGNOSTIC_SUBSCRIBE) || !hosted.includes(DIAGNOSTIC_RESULT)) {
+        await tx.execute(sql`update mcp_diagnostic_subscriptions set revoked_at=now(), callback_enc=null, secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
+      }
       await audit({...ctx,db:tx},'ai_gateway.settings',{type:'organization',id:ctx.orgId},undefined,{enabled:body.enabled,mode:body.mode,localScopes:local,hostedScopes:hosted});
     });
     return state(ctx);
@@ -73,6 +77,9 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       await tx.execute(sql`insert into ai_gateway_connections(org_id) values(${ctx.orgId}) on conflict do nothing`);
       if(body.mode==='local')await tx.execute(sql`update ai_gateway_connections set local_hash=${hash},local_owner=${token?ctx.userId:null},local_seen=null where org_id=${ctx.orgId}`);
       else await tx.execute(sql`update ai_gateway_connections set hosted_hash=${hash},hosted_owner=${token?ctx.userId:null},hosted_seen=null,production_policy=null where org_id=${ctx.orgId}`);
+      if (body.mode === 'hosted') {
+        await tx.execute(sql`update mcp_diagnostic_subscriptions set revoked_at=now(), callback_enc=null, secret_enc=null where org_id=${ctx.orgId} and revoked_at is null`);
+      }
       await tx.execute(sql`update ai_gateway_requests set status='REJECTED',finished_at=now() where org_id=${ctx.orgId} and mode=${body.mode} and status='PENDING'`);
       await audit({...ctx,db:tx},'ai_gateway.'+body.action,{type:'organization',id:ctx.orgId},undefined,{mode:body.mode});
     });
@@ -175,6 +182,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
   app.post('/ai-gateway/invoke',{bodyLimit:Math.max(4*1024*1024,MAX_GATEWAY_INVOKE_BODY_BYTES,MAX_SOCIAL_COVER_JSON_BYTES+4096),config:{rateLimit:{max:30,timeWindow:'1 minute'}}},async req=>{const a=await authenticate(req);return envelope(req,await invoke(a,invokeBody.parse(req.body)));});
   app.get('/ai-gateway/requests/:id',async req=>{const a=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);const [r]=rows<RequestRow>(await a.ctx.db.execute(sql`select id,operation,scope,status,result,expires_at,finished_at from ai_gateway_requests where id=${id} and org_id=${a.ctx.orgId} and mode=${a.mode} and credential_hash=${a.hash}`));if(!r||!a.scopes.includes(r.scope))throw notFound('Request');return envelope(req,r);});
   registerBinaryUploadRoutes(app,authenticate,envelope);
+  registerGatewayEvents(app,deps,authenticate,envelope);
   // Keep legacy endpoints on the same permission, execution and request-id path.
   app.get('/ai-gateway/projects',async req=>envelope(req,await invoke(await authenticate(req),{operation:'projects.list',input:{}})));
   app.get('/ai-gateway/videos',async req=>envelope(req,await invoke(await authenticate(req),{operation:'media.list',input:{kind:'VIDEO'}})));

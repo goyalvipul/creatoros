@@ -137,7 +137,7 @@ async function keyframes(ctx:Ctx,p:{id:string;seconds:number[]}) {
 }
 
 export const permissionGroups = [
-  {name:'MCP Events',items:[['diagnostics.subscribe','Subscribe to Kemokem diagnostics'],['diagnostics.result','Acknowledge a dispatched diagnostic']]},
+  {name:'MCP Events',items:[['diagnostics.subscribe','Subscribe to Kemokem diagnostics'],['diagnostics.result','Acknowledge a dispatched diagnostic'],['agents.subscribe','Subscribe to owner-authorized agent tasks'],['agents.execute','Execute assigned agent tasks']]},
   {name:'Creators',items:[['creators.read','Read creator profiles and instructions'],['references.read','Retrieve reference images']]},
   {name:'Production',items:[['production.execute','Execute authorized creative work without individual approval'],['projects.read','Read projects'],['projects.write','Create draft projects'],['projects.update','Update projects'],['scenes.write','Manage scenes and clips']]},
   {name:'Creative Studio',items:[['studio.read','Read studio projects and drafts'],['h3.write','Write H3 prompts and drafts'],['ltx.write','Write LTX prompts and drafts'],['longvideo.write','Manage long videos']]},

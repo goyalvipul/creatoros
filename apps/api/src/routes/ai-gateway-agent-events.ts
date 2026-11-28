@@ -124,6 +124,7 @@ export function registerAgentEvents(app:FastifyInstance,deps:AppDeps,authorize:A
   });
   app.post(prefix+'frames',options,async req=>{
     const a=await auth(req,'frames');const p=bound.strict().parse(req.body);
+    if(!a.scopes.includes('frames.read'))throw forbidden('Frame permission required.');
     const input=await withAgentTask(a,p.principal,p.requestId,async(_db,t)=>{
       assertAgentClaim(t,p.claimToken);
       if(t.input.taskType!=='VIDEO_REVIEW')throw forbidden('Frame review is not assigned.');

@@ -117,10 +117,26 @@ export function registerAgentEvents(app:FastifyInstance,deps:AppDeps,authorize:A
     if(!a.scopes.includes('references.read'))throw forbidden('Reference permission required.');
     await withAgentTask(a,p.principal,p.requestId,async(_db,t)=>{
       assertAgentClaim(t,p.claimToken);
-      if(t.input.taskType!=='IMAGE_GENERATION'||!t.input.referenceFileIds.includes(p.fileId))throw forbidden('Reference is not assigned to this task.');
+      if((t.input.taskType!=='IMAGE_GENERATION'&&t.input.taskType!=='VIDEO_REVIEW')||!t.input.referenceFileIds.includes(p.fileId))throw forbidden('Reference is not assigned to this task.');
     });
     const op=operations['references.image']!;
     return envelope(req,await op.run(a.ctx,{id:p.fileId},'read-only'));
+  });
+  app.post(prefix+'frames',options,async req=>{
+    const a=await auth(req,'frames');const p=bound.strict().parse(req.body);
+    const input=await withAgentTask(a,p.principal,p.requestId,async(_db,t)=>{
+      assertAgentClaim(t,p.claimToken);
+      if(t.input.taskType!=='VIDEO_REVIEW')throw forbidden('Frame review is not assigned.');
+      return t.input;
+    });
+    const op=operations['media.keyframes'];
+    if(!op)throw notFound('Frame extraction capability');
+    const result=await op.run(a.ctx,{id:input.fileId,seconds:input.frameSeconds},'read-only');
+    await withAgentTask(a,p.principal,p.requestId,async(db,t)=>{
+      assertAgentClaim(t,p.claimToken);
+      await db.execute(sql`update agent_tasks set frames_retrieved=true where id=${t.id}`);
+    });
+    return envelope(req,result);
   });
   // Native binary media remains on the existing importer. Only the task's reserved ID,
   // project, creator and dedicated root may be used here. No arbitrary tool invocation.

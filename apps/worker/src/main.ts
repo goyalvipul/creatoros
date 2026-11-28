@@ -12,6 +12,7 @@ import { JOB_TABLE, jobBackup, jobPublish, jobRestoreTest, jobSync, type JobName
  */
 const SCHEDULE: { name: JobName; every?: number; pattern?: string; tz?: string }[] = [
   { name: 'mcp-diagnostics', every: 10_000 },
+  { name: 'agent-studio', every: 30_000 },
   { name: 'heartbeat', every: 30_000 },
   { name: 'drive-sync', every: 15_000 },
   { name: 'publish-due', every: 60_000 },

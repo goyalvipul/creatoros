@@ -60,3 +60,6 @@ CREATE UNIQUE INDEX agent_run_stage_task ON agent_tasks(agent_run_id,stage_key) 
 ALTER TABLE agent_tasks DROP CONSTRAINT agent_tasks_task_type_check;
 --> statement-breakpoint
 ALTER TABLE agent_tasks ADD CONSTRAINT agent_tasks_task_type_check CHECK(task_type IN ('CONTENT_STRATEGY','SCRIPT_GENERATION','IMAGE_GENERATION','RESEARCH','PRODUCTION_PLANNING','VIDEO_REVIEW','SEO_GENERATION'));
+
+--> statement-breakpoint
+ALTER TABLE agent_tasks ADD COLUMN frames_retrieved boolean NOT NULL DEFAULT false;

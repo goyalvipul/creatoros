@@ -12,7 +12,7 @@ export type AgentTask = {
   id: string; task_type: AgentTaskInput['taskType']; input: AgentTaskInput; state: string;
   claim_hash: string | null; lease_until: Date | null; deadline_at: Date;
   upload_request_id: string | null; result: AgentTaskResult | null; project_id: string | null;
-  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null; frames_retrieved:boolean;
+  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null; frames_retrieved:boolean; run_state:string|null;
 };
 
 // All claim mutations are serialized against the active owner/credential. Never trust a
@@ -136,13 +136,15 @@ export async function withAgentTask<T>(auth: AgentAuth, principal: string, reque
     await checkAgentConnection(tx, auth);
     const [task] = rows<AgentTask>(await tx.execute(sql`
       select t.id,t.task_type,t.input,t.state,t.claim_hash,t.lease_until,t.deadline_at,t.upload_request_id,
-        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id,t.frames_retrieved
+        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id,t.frames_retrieved,r.state as run_state
       from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
+      left join agent_runs r on r.id=t.agent_run_id
       where t.id=${requestId} and t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId}
         and t.credential_hash=${auth.hash} and t.principal=${principal} and s.revoked_at is null
       for update of t
     `));
     if (!task) throw notFound('Agent task');
+    if(task.run_state&&!['ACTIVE','PAUSED'].includes(task.run_state)&&task.state!=='COMPLETED')throw conflict('Assigned run is no longer active.');
     return fn(tx, task);
   });
 }
@@ -158,7 +160,7 @@ export async function claimAgentTask(auth: AgentAuth, principal: string, request
       assertAgentClaim(task,token);
       return { requestId, claimed: true };
     }
-    if (!['DISPATCHED','DELIVERED'].includes(task.state) || task.claim_hash ||
+    if (task.run_state==='PAUSED'||!['DISPATCHED','DELIVERED'].includes(task.state) || task.claim_hash ||
         new Date(task.deadline_at).getTime() <= Date.now()) return { requestId, claimed: false, state: task.state };
     await db.execute(sql`
       update agent_tasks set state='CLAIMED',claim_hash=${hash(token)},claimed_at=now(),
@@ -254,7 +256,7 @@ export async function dispatchMcpAgentTasks(db: Executor, key: Buffer) {
       terminal_at=now(),lease_until=null
     from mcp_agent_subscriptions s where s.id=t.subscription_id
     and t.state in ('QUEUED','DISPATCHED','DELIVERED','CLAIMED','RUNNING')
-    and (s.revoked_at is not null or t.deadline_at<=now()
+    and (s.revoked_at is not null or (t.deadline_at<=now() and not (t.state='QUEUED' and t.attempts=0 and exists(select 1 from agent_runs r where r.id=t.agent_run_id and r.state='PAUSED')))
       or (t.state in ('QUEUED','DISPATCHED') and s.expires_at<=now())
       or (t.state in ('CLAIMED','RUNNING') and t.lease_until<=now()))
   `);
@@ -271,6 +273,7 @@ export async function dispatchMcpAgentTasks(db: Executor, key: Buffer) {
       join organization_memberships m on m.org_id=g.org_id and m.user_id=g.hosted_owner
       join users u on u.id=m.user_id
       where t.state in ('QUEUED','DISPATCHED') and t.claim_hash is null
+      and (t.agent_run_id is null or exists(select 1 from agent_runs r where r.id=t.agent_run_id and r.state='ACTIVE' and g.agent_exclusive))
       and t.next_attempt_at<=now() and t.deadline_at>now() and t.attempts<4
       and s.revoked_at is null and s.expires_at>now() and s.callback_enc is not null and s.secret_enc is not null
       and g.enabled and g.mode='hosted' and g.hosted_hash=t.credential_hash and g.hosted_owner=t.owner_id

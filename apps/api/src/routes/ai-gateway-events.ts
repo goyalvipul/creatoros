@@ -18,6 +18,7 @@ import {
 } from '@creatoros/services';
 import { z } from 'zod';
 import { makeRouter, type AppDeps } from '../http';
+import { registerAgentEvents, type AgentInvoke } from './ai-gateway-agent-events';
 
 type Auth = { ctx: Ctx; hash: string; mode: 'hosted' | 'local'; scopes: string[] };
 type Authenticator = (request: FastifyRequest) => Promise<Auth>;
@@ -59,9 +60,10 @@ export function registerGatewayEvents(
   deps: AppDeps,
   authenticate: Authenticator,
   envelope: (request: FastifyRequest, data: unknown) => unknown,
+  invoke: AgentInvoke,
 ) {
   const route = makeRouter(app, deps);
-  async function authorize(request: FastifyRequest, action: 'subscribe' | 'unsubscribe' | 'result') {
+  async function authorize(request: FastifyRequest, action: string, required: readonly string[] = [DIAGNOSTIC_SUBSCRIBE, DIAGNOSTIC_RESULT]) {
     const key = deps.config.env.processEnv?.KEMOKEM_MCP_EVENTS_KEY;
     const timestamp = request.headers['x-kemokem-event-time'];
     const nonce = request.headers['x-kemokem-event-nonce'];
@@ -86,10 +88,9 @@ export function registerGatewayEvents(
     const auth = await authenticate(request);
     if (
       auth.mode !== 'hosted' ||
-      !auth.scopes.includes(DIAGNOSTIC_SUBSCRIBE) ||
-      !auth.scopes.includes(DIAGNOSTIC_RESULT)
+      required.some(scope => !auth.scopes.includes(scope))
     )
-      throw forbidden('Hosted diagnostic permissions are required.');
+      throw forbidden('Hosted event permissions are required.');
     const claimed = rows(
       await auth.ctx.db.execute(sql`
       insert into mcp_diagnostic_site_calls (nonce)
@@ -99,6 +100,8 @@ export function registerGatewayEvents(
     if (!claimed.length) throw conflict('Duplicate Site event request.');
     return auth;
   }
+
+  registerAgentEvents(app, deps, authorize, envelope, invoke);
 
   app.post(
     '/ai-gateway/events/subscribe',

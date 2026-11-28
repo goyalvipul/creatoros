@@ -17,13 +17,13 @@ export const productionQualityReportSchema=productionFinalizeSchema.extend({
 type Target=z.infer<typeof productionFinalizeSchema>;
 type Report=z.infer<typeof productionQualityReportSchema>;
 type Stored={requirements?:QualityRequirements;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;verdict:string;technical:TechnicalQuality;semantic:SemanticQuality;evidence:Report['evidence'];corrections:string[]};
-type Output={jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
+type Output={provider:string;jobId:string;projectId:string;brandId:string;stage:string;status:string;settings:Record<string,unknown>;runId:string|null;runState:string|null;fileId:string;outputId:string;versionId:string|null;size:number;mtime:string;planId:string|null;planState:string|null;planPayload:Record<string,unknown>|null};
 async function output(ctx:Ctx,target:Target,lock=false){
-  const [o]=rows<Output>(await ctx.db.execute(sql`select j.id as "jobId",p.id as "projectId",p.brand_id as "brandId",p.stage,j.status,j.settings,
+  const [o]=rows<Output>(await ctx.db.execute(sql`select j.provider,j.id as "jobId",p.id as "projectId",p.brand_id as "brandId",p.stage,j.status,j.settings,
     j.settings->>'productionRunId' as "runId",r.state as "runState",f.id as "fileId",o.id as "outputId",o.asset_version_id as "versionId",f.size::float8 as size,f.mtime::text as mtime,
     pl.id as "planId",pl.state as "planState",pl.payload as "planPayload"
     from generation_jobs j join creative_projects p on p.id=j.project_id and p.org_id=j.org_id
-    join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and o.output_role='final'
+    join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and (o.output_role='final' and j.provider='comfyui-h3' or o.output_role='original' and j.provider='comfyui-ltx' and j.settings->>'nativeAgentRunId' is not null)
     join file_instances f on f.id=o.file_instance_id and f.org_id=o.org_id
     join storage_roots sr on sr.id=f.root_id and sr.org_id=f.org_id
     join devices dev on dev.id=f.device_id and dev.org_id=f.org_id
@@ -31,12 +31,12 @@ async function output(ctx:Ctx,target:Target,lock=false){
     left join production_plans pl on pl.id::text=j.settings->>'productionPlanId' and pl.org_id=j.org_id and pl.job_id=j.id
     where j.org_id=${ctx.orgId} and j.id=${target.jobId} and f.id=${target.fileId} and p.deleted_at is null and p.brand_id is not null
     and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO' and sr.state='ACTIVE' and sr.retired_at is null and dev.state='ONLINE'
-    and j.provider='comfyui-h3' and j.status='SUCCEEDED'
+    and (j.provider='comfyui-h3' or (j.provider='comfyui-ltx' and j.settings->>'nativeAgentRunId' is not null and coalesce(j.settings->>'wantUpscale','false')='false' and exists(select 1 from agent_runs ar where ar.id::text=j.settings->>'nativeAgentRunId' and ar.org_id=j.org_id and ar.project_id=j.project_id and ar.job_id=j.id))) and j.status='SUCCEEDED'
     and coalesce(j.settings->>'productionSuperseded','false')<>'true'
     and (j.settings->>'productionPlanId' is null or pl.id is not null)
     and not exists(select 1 from generation_jobs newer where newer.org_id=j.org_id and newer.project_id=j.project_id and newer.provider=j.provider and newer.created_at>j.created_at and newer.status in ('QUEUED','RUNNING','SUCCEEDED') and coalesce(newer.settings->>'productionSuperseded','false')<>'true')
     ${lock?sql`for update of j,p`:sql``}`));
-  if(!o)throw notFound('Current successful H3 output');
+  if(!o)throw notFound('Current successful authorized render output');
   return o;
 }
 function requireActive(o:Output){
@@ -45,12 +45,13 @@ function requireActive(o:Output){
 }
 function requirements(o:Output,p:Report):QualityRequirements {
   const segments=o.settings.segments as {durationSec?:number;audioFileId?:string;audioUploadName?:string}[]|undefined;
-  const duration=(segments??[]).reduce((n,s)=>n+(s.durationSec??0),0);
-  const aspectRatio=String(o.settings.aspectRatio??'');
+  const ltx=o.provider==='comfyui-ltx';
+  const duration=ltx?Number(o.settings.durationSec):(segments??[]).reduce((n,s)=>n+(s.durationSec??0),0);
+  const aspectRatio=ltx?String(o.settings.width)+':'+String(o.settings.height):String(o.settings.aspectRatio??'');
   if(duration<=0||duration>30||!/^\d+:\d+/.test(aspectRatio))throw badRequest('Original render requirements are unavailable.');
   const plan=o.planPayload;
   const previous=o.settings.qualityReport as (Stored&{requirements?:QualityRequirements})|undefined;
-  return {duration,aspectRatio,requireAudio:previous?.requirements?.requireAudio===true||p.requireAudio||p.requireLipSync||plan?.requireAudio===true||plan?.requireLipSync===true||!!segments?.some(s=>s.audioFileId||s.audioUploadName),requireLipSync:previous?.requirements?.requireLipSync===true||p.requireLipSync||plan?.requireLipSync===true,requirePhysicalAccuracy:previous?.requirements?.requirePhysicalAccuracy===true||p.requirePhysicalAccuracy||plan?.requirePhysicalAccuracy===true};
+  return {duration,aspectRatio,requireAudio:ltx||previous?.requirements?.requireAudio===true||p.requireAudio||p.requireLipSync||plan?.requireAudio===true||plan?.requireLipSync===true||!!segments?.some(s=>s.audioFileId||s.audioUploadName),requireLipSync:previous?.requirements?.requireLipSync===true||p.requireLipSync||plan?.requireLipSync===true,requirePhysicalAccuracy:previous?.requirements?.requirePhysicalAccuracy===true||p.requirePhysicalAccuracy||plan?.requirePhysicalAccuracy===true};
 }
 export function constrainEvidence(report:Report,required:QualityRequirements):SemanticQuality {
   const checks=report.assessment.checks.map(c=>{

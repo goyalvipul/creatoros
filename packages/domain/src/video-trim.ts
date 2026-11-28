@@ -128,6 +128,7 @@ function separators(p: string, os: PathOs): string {
 
 /** A single mp4 file name. Slashes and Windows-forbidden characters are removed. */
 export function clipFileName(raw: string): string {
+  // eslint-disable-next-line no-control-regex -- Reject or strip control characters from external input.
   const cleaned = raw.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim();
   const dot = cleaned.lastIndexOf('.');
   const stem = (dot > 0 ? cleaned.slice(0, dot) : cleaned).replace(/\.+$/g, '').trim();
@@ -137,6 +138,7 @@ export function clipFileName(raw: string): string {
 
 export function trimFileName(sourceName: string, startMs: number, endMs: number, taken: Iterable<string>): string {
   const dot = sourceName.lastIndexOf('.');
+  // eslint-disable-next-line no-control-regex -- Reject or strip control characters from external input.
   const raw = (dot > 0 ? sourceName.slice(0, dot) : sourceName).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim();
   const stem = (raw || 'clip').slice(0, 80);
   const stamp = `${String(startMs).padStart(7, '0')}-${String(endMs).padStart(7, '0')}`;

@@ -739,6 +739,7 @@ export async function streamHeartbeat(
   if (machine.currentSessionId) {
     const [session] = await db.select().from(liveSessions).where(eq(liveSessions.id, machine.currentSessionId));
     if (session && typeof body.agentLog === 'string') {
+      // eslint-disable-next-line no-control-regex -- Reject or strip control characters from external input.
       const agentLog = redactStreamSecrets(body.agentLog.replace(/\u0000/g, '')).split(/\r?\n/).slice(-35).join('\n').slice(-8000);
       await db
         .update(liveSessions)

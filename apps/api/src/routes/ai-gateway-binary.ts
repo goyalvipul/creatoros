@@ -3,14 +3,14 @@ import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { sql } from '@creatoros/db';
-import { badRequest, conflict, forbidden, notFound, tooMany, type Ctx } from '@creatoros/services';
+import { AGENT_SUBSCRIBE, AGENT_EXECUTE, badRequest, conflict, forbidden, notFound, tooMany, type Ctx } from '@creatoros/services';
 import { importBinaryMedia, MAX_BINARY_IMAGE_BYTES, MAX_BINARY_AUDIO_BYTES, validateMediaName } from './ai-gateway-media';
 
 import { isDedicatedUploadRoot } from './ai-gateway-production-policy';
 
 const rows = <T>(r: unknown) => (r as { rows: T[] }).rows;
 type Kind = 'IMAGE' | 'AUDIO';
-type Auth = { ctx: Ctx; mode: 'local' | 'hosted'; hash: string; scopes: string[] };
+type Auth = { ctx: Ctx; mode: 'local' | 'hosted'; hash: string; scopes: string[]; exclusive?:boolean };
 export const binaryUploadSchema = z.object({
   rootId: z.uuid(), brandId: z.uuid(), projectId: z.uuid().nullable().optional(),
   fileName: z.string().min(1).max(120), mime: z.string().max(40),
@@ -43,6 +43,21 @@ async function loadSession(auth: Auth,id:string) {
   if (!session || !auth.scopes.includes(session.scope) || !session.result?.uploadState) throw notFound('Upload session');
   return session;
 }
+// A native upload reserved by an agent must still belong to an active claim.
+async function checkTaskUpload(auth:Auth,id:string,claimHeader:unknown) {
+  const claimHash = typeof claimHeader === 'string' && /^[a-f0-9]{64}$/.test(claimHeader)
+    ? createHash('sha256').update(claimHeader).digest('hex')
+    : null;
+  const [task]=rows<{ok:boolean}>(await auth.ctx.db.execute(sql`
+    select (t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId} and t.credential_hash=${auth.hash}
+      and coalesce(t.claim_hash=${claimHash},false) and t.state in ('CLAIMED','RUNNING') and t.lease_until>now() and t.deadline_at>now()
+      and s.revoked_at is null and (t.agent_run_id is null or exists(select 1 from agent_runs r where r.id=t.agent_run_id and r.state in ('ACTIVE','PAUSED')))) as ok
+    from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id where t.upload_request_id=${id}
+  `));
+  if(auth.exclusive&&!task)throw forbidden('Only task-bound uploads are permitted in exclusive mode.');
+  if(task&&(!task.ok||auth.mode!=='hosted'||!auth.scopes.includes(AGENT_SUBSCRIBE)||!auth.scopes.includes(AGENT_EXECUTE)))
+    throw forbidden('Agent upload authorization is no longer active.');
+}
 function sessionState(s:Session) {
   if (Date.parse(s.result.expiresAt)<=Date.now()) {
     if(s.result.uploadState==='OPEN')return 'EXPIRED';
@@ -70,11 +85,12 @@ export async function readBinaryBody(body:Readable, size:number, sha256:string) 
 export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req:FastifyRequest,required?:string)=>Promise<Auth>,envelope:(req:FastifyRequest,data:unknown)=>unknown) {
   app.get('/ai-gateway/uploads/:id',async req=>{
     const auth=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);
-    const s=await loadSession(auth,id);return envelope(req,{...s.result,uploadState:sessionState(s)});
+    const s=await loadSession(auth,id);if(auth.exclusive)await checkTaskUpload(auth,id,req.headers['x-kemokem-task-claim']);return envelope(req,{...s.result,uploadState:sessionState(s)});
   });
   app.post('/ai-gateway/uploads/:id/cancel',async req=>{
     const auth=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);
     await loadSession(auth,id);
+    if(auth.exclusive)await checkTaskUpload(auth,id,req.headers['x-kemokem-task-claim']);
     if(!await setState(auth,id,'OPEN','CANCELLED'))throw conflict('Only an unused, unexpired upload can be cancelled.');
     return envelope(req,{uploadState:'CANCELLED'});
   });
@@ -89,8 +105,9 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
     scoped.put('/ai-gateway/uploads/:id',{bodyLimit:MAX_BINARY_AUDIO_BYTES,config:{rateLimit:{max:6,timeWindow:'1 minute'}}},async req=>{
       const auth=await authenticate(req);const {id}=z.object({id:z.uuid()}).parse(req.params);
       const s=await loadSession(auth,id);const state=sessionState(s);
-      if(state==='COMPLETE')return envelope(req,s.result);
+      if(state==='COMPLETE'){if(auth.exclusive)await checkTaskUpload(auth,id,req.headers['x-kemokem-task-claim']);return envelope(req,s.result);}
       if(state!=='OPEN')throw conflict('Upload is '+state+'. Check the original session; do not replay uncertain writes.');
+      await checkTaskUpload(auth,id,req.headers['x-kemokem-task-claim']);
       const input=binaryUploadSchema.parse(s.input),kind=kindOf(s.operation);
       validateBinaryInput(input,kind);
       if(req.headers['content-type']!=='application/octet-stream'||req.headers['content-encoding']||req.headers['content-length']!==String(input.size)||!(req.body instanceof Readable))throw badRequest('Send raw binary with exact Content-Length and no compression.');
@@ -108,6 +125,7 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
         const current=await authenticate(req,s.scope);
         if(current.hash!==auth.hash||current.ctx.orgId!==auth.ctx.orgId)throw forbidden('Upload authorization changed.');
         if(Date.parse(s.result.expiresAt)<=Date.now())throw conflict('Upload session expired.');
+        await checkTaskUpload(current,id,req.headers['x-kemokem-task-claim']);
         if(s.policy_authorized&&kind==='IMAGE'&&!await isDedicatedUploadRoot(current.ctx,input.rootId))throw forbidden('Dedicated ChatGPT upload root authorization changed.');
         writing=true;
         const output=await importBinaryMedia(current.ctx,input,id,kind,bytes);

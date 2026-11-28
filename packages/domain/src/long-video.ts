@@ -326,7 +326,7 @@ function clipContext(value: unknown, index: number): boolean | { error: string }
   return { error: `Clip ${String(index + 1).padStart(2, '0')} context must be true or false.` };
 }
 
-const SONG_TIME = /song\s*time:\s*(\d+(?:\.\d+)?)\s*[–\-]\s*(\d+(?:\.\d+)?)/gi;
+const SONG_TIME = /song\s*time:\s*(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)/gi;
 
 function songRange(item: Record<string, unknown>, details: string, index: number): { start: number | null; end: number | null } | { error: string } {
   const label = `Clip ${String(index + 1).padStart(2, '0')}`;

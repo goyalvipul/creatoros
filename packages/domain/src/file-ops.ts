@@ -21,6 +21,7 @@ export interface PlannedFileOp {
   ext: string;
 }
 
+// eslint-disable-next-line no-control-regex -- Reject or strip control characters from external input.
 const BAD_NAME = /[\\/:*?"<>|\u0000-\u001f]/;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
 

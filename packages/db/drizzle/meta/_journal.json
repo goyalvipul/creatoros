@@ -435,6 +435,20 @@
       "when": 1797200000007,
       "tag": "0061_mcp_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1797200000008,
+      "tag": "0062_agent_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1797200000009,
+      "tag": "0063_agent_studio",
+      "breakpoints": true
     }
   ]
 }

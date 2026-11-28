@@ -78,3 +78,6 @@ export * from './production-external';
 
 export * from './mcp-diagnostics';
 export * from './mcp-event-webhook';
+
+export * from './agent-task-contract';
+export * from './mcp-agent-tasks';

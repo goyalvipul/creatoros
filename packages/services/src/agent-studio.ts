@@ -11,7 +11,7 @@ import { productionReadiness, submitChatGPTQualityReport, finalizeChatGPTProduct
 import { readSocialCover, saveSocialCoverBytes, socialCoverLimit } from './social-cover';
 import { openAgentFile } from './agent-file';
 import { audit } from './audit';
-import { badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
+import { AppError, badRequest, conflict, notFound, type Ctx, type ServiceEnv } from './types';
 
 const rows=<T>(v:unknown)=>(v as {rows:T[]}).rows;
 type Definition={id:string;org_id:string;owner_id:string;brand_id:string;name:string;enabled:boolean;revision:number;config:AgentConfig};
@@ -143,6 +143,7 @@ export async function startAgentRun(ctx:Ctx,id:string,scheduled=false){
   const snapshot:Snapshot={config:c,referenceFileIds:refs};
   const [run]=rows<Run>(await tx.execute(sql`insert into agent_runs(agent_id,org_id,owner_id,brand_id,slot,revision,snapshot,project_id,production_run_id,plan_id)
    values(${id},${ctx.orgId},${ctx.userId},${c.brandId},${slot},${a.revision},${JSON.stringify(snapshot)}::jsonb,${projectId},${productionRunId},${planId}) returning *`));
+  await tx.execute(sql`insert into agent_run_events(run_id,state,stage,detail) values(${run!.id},'ACTIVE',0,'Run admitted.')`);
   await audit(scoped,'agent.run.start',{type:'agent_run',id:run!.id},undefined,{agentId:id,slot,scheduled});
   return run!;
  });
@@ -156,9 +157,16 @@ async function resultFor(ctx:Ctx,r:Run,key:string){
  return agentTaskResult.parse(t.result);
 }
 async function updateRun(ctx:Ctx,r:Run,detail:string,patch:{stage?:number;state?:string;jobId?:string;fileId?:string}={}){
+ const [previous]=rows<{detail:string|null;state:string;stage:number}>(await ctx.db.execute(sql`select detail,state,stage from agent_runs where id=${r.id} for update`));
+ if(!previous||previous.state!=='ACTIVE')return;
  await ctx.db.execute(sql`update agent_runs set detail=${detail.slice(0,2000)},stage=coalesce(${patch.stage??null}::int,stage),
  state=coalesce(${patch.state??null},state),job_id=coalesce(${patch.jobId??null}::uuid,job_id),
  file_id=coalesce(${patch.fileId??null}::uuid,file_id),updated_at=now() where id=${r.id} and state='ACTIVE'`);
+ if(previous.detail!==detail||patch.state||patch.stage!==undefined)await ctx.db.execute(sql`insert into agent_run_events(run_id,state,stage,detail) values(${r.id},${patch.state??previous.state},${patch.stage??previous.stage},${detail.slice(0,2000)})`);
+ if(patch.state==='BLOCKED'&&r.production_run_id){
+  const [p]=rows<{state:string}>(await ctx.db.execute(sql`select state from production_runs where id=${r.production_run_id} and org_id=${r.org_id}`));
+  if(p?.state==='ACTIVE')await controlProductionRun(ctx,r.production_run_id,'pause');
+ }
 }
 async function queueStage(ctx:Ctx,r:Run,key:string,input:AgentTaskInput){
  const c=r.snapshot.config;
@@ -336,7 +344,7 @@ export async function runDueAgentStudio(db:Db,env:ServiceEnv){
   select a.* from agent_definitions a join ai_gateway_connections g on g.org_id=a.org_id
   where a.enabled and g.agent_exclusive and g.enabled and g.mode='hosted' and g.hosted_owner=a.owner_id
   and a.config->'schedule'->>'kind'='DAILY' order by a.updated_at limit 50`));
- for(const a of defs){try{await startAgentRun(ownerCtx(db,env,a),a.id,true);}catch{ /* next tick rechecks admission; no side effects on failed transaction */ }}
+ for(const a of defs){try{await startAgentRun(ownerCtx(db,env,a),a.id,true);await db.execute(sql`update agent_definitions set last_error=null where id=${a.id} and last_error is not null`);}catch(e){const message=e instanceof AppError?e.message:'Scheduled admission failed; inspect worker logs.';await db.execute(sql`update agent_definitions set last_error=${message.slice(0,1000)} where id=${a.id}`);}}
  const pending=rows<Run>(await db.execute(sql`select * from agent_runs where state='ACTIVE' order by updated_at,id limit 20`));
  for(const r of pending){
   const ctx=ownerCtx(db,env,r);
@@ -357,7 +365,11 @@ export async function runDueAgentStudio(db:Db,env:ServiceEnv){
    });
   }catch(e){
    // Transaction rollback means no new task/plan was committed. Do not blindly retry an uncertain external write.
-   await db.execute(sql`update agent_runs set state='BLOCKED',detail=${e instanceof Error&&'code' in e?String((e as {code:unknown}).code).slice(0,200):'Stage failed; inspect existing task or production records.'},updated_at=now() where id=${r.id} and state='ACTIVE' and stage=${r.stage}`);
+   await db.transaction(async tx=>{
+    const scoped={...ctx,db:tx};await lockOrg(scoped);
+    const [current]=rows<Run>(await tx.execute(sql`select * from agent_runs where id=${r.id} and state='ACTIVE' and stage=${r.stage} for update`));
+    if(current)await updateRun(scoped,current,e instanceof AppError?e.message:'Stage failed; inspect existing task or production records.',{state:'BLOCKED'});
+   });
   }
  }
  return {definitions:defs.length,runs:pending.length};
@@ -374,6 +386,7 @@ export async function controlAgentRun(ctx:Ctx,id:string,action:'pause'|'resume'|
   await tx.execute(sql`update agent_runs set state=${state},detail=${'Owner '+action},updated_at=now() where id=${id}`);
   if(action==='stop')await tx.execute(sql`update agent_tasks set state='CANCELLED',terminal_at=now(),lease_until=null,error_code='run_stopped' where agent_run_id=${id} and state in ('QUEUED','DISPATCHED','DELIVERED','CLAIMED','RUNNING')`);
   if(action==='resume')await tx.execute(sql`update agent_tasks set deadline_at=now()+interval '30 minutes',next_attempt_at=now() where agent_run_id=${id} and state='QUEUED' and attempts=0`);
+  await tx.execute(sql`insert into agent_run_events(run_id,state,stage,detail) values(${id},${state},${r.stage},${'Owner '+action})`);
   await audit(scoped,'agent.run.'+action,{type:'agent_run',id});
   return {id,state};
  });

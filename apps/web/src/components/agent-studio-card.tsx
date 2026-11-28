@@ -6,10 +6,11 @@ const path='/integrations/ai-gateway/agent-studio';
 type Config={name:string;brandId:string;subscriptionId:string;workflow:'STRATEGY'|'SCRIPT'|'IMAGE'|'H3_SHORT'|'LTX_SHORT';schedule:{kind:'MANUAL'|'DAILY';time:string};
  instructions:string;skills:{name:string;instructions:string}[];memory:{key:string;value:string}[];projectId:string|null;workerId:string|null;
  aspect:'9:16'|'16:9'|'1:1';durationSec:number;research:'NONE'|'VIDIQ';researchQuery?:string;vidiqWatch?:boolean;acceptHostCreditRisk?:boolean;dailyTasks:number;dailyImages:number;vidiqCredits:number;maxRegenerations?:0|1;ltx?:{audioFileId:string;audioStartSec:number;loraName:string;loraStrength:number}};
-type Agent={id:string;name:string;enabled:boolean;revision:number;config:Config};
+type Agent={id:string;name:string;enabled:boolean;revision:number;config:Config;lastError?:string|null};
 type Run={id:string;agentId:string;slot:string;revision:number;state:string;stage:number;detail:string|null;projectId:string|null;jobId:string|null;fileId:string|null};
 type Board={exclusive:boolean;agents:Agent[];runs:Run[];usage:{agentId:string;tasks:number;images:number;vidiqReserved:number}[];
  tasks:{id:string;runId:string;stageKey:string;state:string;progress:string|null;errorCode:string|null;result:unknown}[];
+ events:{id:string;runId:string;state:string;stage:number;detail:string;createdAt:string}[];
  brands:{id:string;name:string}[];projects:{id:string;title:string;brandId:string}[];workers:{id:string;name:string}[];subscriptions:{id:string;expiresAt:string}[]};
 const blank:Config={name:'',brandId:'',subscriptionId:'',workflow:'SCRIPT',schedule:{kind:'MANUAL',time:'01:00'},instructions:'',skills:[],memory:[],
  projectId:null,workerId:null,aspect:'9:16',durationSec:12,research:'NONE',dailyTasks:6,dailyImages:2,vidiqCredits:0,maxRegenerations:0};
@@ -94,11 +95,13 @@ export function AgentStudioCard(){
     return <div key={a.id} className="space-y-2 rounded border border-border p-3">
      <div className="flex flex-wrap items-center gap-2"><strong>{a.name}</strong><Badge>{a.enabled?'Enabled':'Disabled'}</Badge><Badge>Revision {a.revision}</Badge></div>
      <p className="text-xs text-muted">{data.brands.find(b=>b.id===a.config.brandId)?.name} · {a.config.workflow} · {a.config.schedule.kind==='DAILY'?a.config.schedule.time+' daily':'Manual'}</p>
+     {a.lastError&&<p className="text-xs text-bad">Schedule: {a.lastError}</p>}
      <p className="text-xs">Today: {usage?.tasks??0}/{a.config.dailyTasks} task slots · {usage?.images??0}/{a.config.dailyImages} image slots · {usage?.vidiqReserved??0}/{a.config.vidiqCredits} vidIQ reserved credits</p>
      <div className="flex flex-wrap gap-2"><Button disabled={busy||a.enabled} onClick={()=>{setEditId(a.id);setConfig(structuredClone(a.config));setOpen(true);}}>Edit</Button><Button disabled={busy||!data.exclusive} onClick={()=>void perform('/agents/'+a.id+'/run')}>Run now</Button><Button disabled={busy||(!a.enabled&&!data.exclusive)} onClick={()=>void perform('/agents/'+a.id+'/enable',{enabled:!a.enabled})}>{a.enabled?'Disable schedule':'Enable schedule'}</Button></div>
      {data.runs.filter(r=>r.agentId===a.id).map(r=><details className="rounded border border-border p-2 text-xs" key={r.id}>
       <summary className="cursor-pointer">{r.slot} · revision {r.revision} · {r.state} · stage {r.stage+1}</summary>
       <p>{r.detail??'Queued'}</p>
+      <details className="my-2"><summary>Execution history</summary>{data.events.filter(e=>e.runId===r.id).map(e=><p key={e.id} className="mt-1">{new Date(e.createdAt).toLocaleString()} · {e.state} · {e.detail}</p>)}</details>
       {r.projectId&&<p>Project: {r.projectId}</p>}{r.jobId&&<p>Render: {r.jobId}</p>}{r.fileId&&<p>Media: {r.fileId}</p>}
       {data.tasks.filter(t=>t.runId===r.id).map(t=><details key={t.id} className="mt-1 border-t border-border pt-1"><summary>{t.stageKey} · {t.state}</summary><p>{t.progress??t.errorCode??''}</p>{t.result!=null&&<pre className="break-all whitespace-pre-wrap">{JSON.stringify(t.result,null,2)}</pre>}</details>)}
       <div className="mt-2 flex gap-2">{r.state==='ACTIVE'&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'pause'})}>Pause</Button>}{r.state==='PAUSED'&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'resume'})}>Resume</Button>}{['ACTIVE','PAUSED','BLOCKED','FAILED'].includes(r.state)&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'stop'})}>Stop</Button>}</div>

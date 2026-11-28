@@ -63,3 +63,16 @@ ALTER TABLE agent_tasks ADD CONSTRAINT agent_tasks_task_type_check CHECK(task_ty
 
 --> statement-breakpoint
 ALTER TABLE agent_tasks ADD COLUMN frames_retrieved boolean NOT NULL DEFAULT false;
+--> statement-breakpoint
+ALTER TABLE agent_definitions ADD COLUMN last_error text;
+--> statement-breakpoint
+CREATE TABLE agent_run_events (
+ id bigserial PRIMARY KEY,
+ run_id uuid NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+ state text NOT NULL,
+ stage integer NOT NULL,
+ detail text NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+--> statement-breakpoint
+CREATE INDEX agent_run_event_history ON agent_run_events(run_id,id DESC);

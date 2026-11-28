@@ -173,7 +173,7 @@ export async function claimAgentTask(auth: AgentAuth, principal: string, request
       assertAgentClaim(task,token);
       return { requestId, claimed: true };
     }
-    if (task.run_state==='PAUSED'||!['DISPATCHED','DELIVERED'].includes(task.state) || task.claim_hash ||
+    if (!['DISPATCHED','DELIVERED'].includes(task.state) || task.claim_hash ||
         new Date(task.deadline_at).getTime() <= Date.now()) return { requestId, claimed: false, state: task.state };
     await db.execute(sql`
       update agent_tasks set state='CLAIMED',claim_hash=${hash(token)},claimed_at=now(),

@@ -51,7 +51,7 @@ async function checkTaskUpload(auth:Auth,id:string,claimHeader:unknown) {
   const [task]=rows<{ok:boolean}>(await auth.ctx.db.execute(sql`
     select (t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId} and t.credential_hash=${auth.hash}
       and coalesce(t.claim_hash=${claimHash},false) and t.state in ('CLAIMED','RUNNING') and t.lease_until>now() and t.deadline_at>now()
-      and s.revoked_at is null) as ok
+      and s.revoked_at is null and (t.agent_run_id is null or exists(select 1 from agent_runs r where r.id=t.agent_run_id and r.state in ('ACTIVE','PAUSED')))) as ok
     from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id where t.upload_request_id=${id}
   `));
   if(auth.exclusive&&!task)throw forbidden('Only task-bound uploads are permitted in exclusive mode.');

@@ -123,7 +123,7 @@ export function aiGatewayRoutes(app:FastifyInstance,deps:AppDeps) {
       if(auth.mode==='hosted'&&connection.agent_exclusive&&!binding)throw forbidden('Exclusive agent execution is active.');
       const [bound]=rows<{id:string;state:string;claim_hash:string;brand_id:string;project_id:string;upload_root_id:string;active:boolean;credential_hash:string;owner_id:string;org_id:string}>(await tx.execute(sql`
         select t.id,t.state,t.claim_hash,t.brand_id,t.project_id,t.upload_root_id,t.credential_hash,t.owner_id,t.org_id,
-          (t.lease_until>now() and t.deadline_at>now() and s.revoked_at is null) as active
+          (t.lease_until>now() and t.deadline_at>now() and s.revoked_at is null and (t.agent_run_id is null or exists(select 1 from agent_runs r where r.id=t.agent_run_id and r.state in ('ACTIVE','PAUSED')))) as active
         from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
         where t.upload_request_id=${body.requestId} for update of t
       `));

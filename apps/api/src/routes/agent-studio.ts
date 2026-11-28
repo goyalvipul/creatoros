@@ -12,7 +12,7 @@ export function registerAgentStudio(app:FastifyInstance,deps:AppDeps){
   reply.header('cache-control','no-store');
   const [connection]=rows<{exclusive:boolean}>(await ctx.db.execute(sql`select agent_exclusive as exclusive from ai_gateway_connections where org_id=${ctx.orgId}`));
   return {exclusive:connection?.exclusive===true,
-   agents:rows(await ctx.db.execute(sql`select id,name,brand_id as "brandId",enabled,revision,config,updated_at as "updatedAt" from agent_definitions
+   agents:rows(await ctx.db.execute(sql`select id,name,brand_id as "brandId",enabled,revision,config,last_error as "lastError",updated_at as "updatedAt" from agent_definitions
     where org_id=${ctx.orgId} and owner_id=${ctx.userId} order by name`)),
    runs:rows(await ctx.db.execute(sql`select id,agent_id as "agentId",slot,revision,state,stage,detail,project_id as "projectId",
     production_run_id as "productionRunId",plan_id as "planId",job_id as "jobId",file_id as "fileId",updated_at as "updatedAt"
@@ -23,6 +23,7 @@ export function registerAgentStudio(app:FastifyInstance,deps:AppDeps){
     and t.created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver' group by r.agent_id`)),
    tasks:rows(await ctx.db.execute(sql`select t.id,t.agent_run_id as "runId",t.stage_key as "stageKey",t.state,t.progress,t.error_code as "errorCode",t.result
     from agent_tasks t join agent_runs r on r.id=t.agent_run_id where r.org_id=${ctx.orgId} and r.owner_id=${ctx.userId} order by t.created_at desc limit 100`)),
+   events:rows(await ctx.db.execute(sql`select e.id::text,e.run_id as "runId",e.state,e.stage,e.detail,e.created_at as "createdAt" from agent_run_events e join agent_runs r on r.id=e.run_id where r.org_id=${ctx.orgId} and r.owner_id=${ctx.userId} order by e.id desc limit 300`)),
    brands:rows(await ctx.db.execute(sql`select id,name from brands where org_id=${ctx.orgId} and active and deleted_at is null order by name`)),
    projects:rows(await ctx.db.execute(sql`select id,title,brand_id as "brandId" from creative_projects where org_id=${ctx.orgId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS') order by created_at desc limit 100`)),
    workers:rows(await ctx.db.execute(sql`select id,label as name from gpu_workers where org_id=${ctx.orgId} and enabled order by label`)),

@@ -169,7 +169,7 @@ async function queueStage(ctx:Ctx,r:Run,key:string,input:AgentTaskInput){
   await updateRun(ctx,r,key+' · '+(existing.error_code??existing.state),{state:'BLOCKED'});return false;
  }
  await createAgentTask(ctx,c.subscriptionId,randomUUID(),agentTaskInput.parse(input),
-   {runId:r.id,stageKey:key,dailyTasks:c.dailyTasks,dailyImages:c.dailyImages});
+   {runId:r.id,stageKey:key,dailyTasks:c.dailyTasks,dailyImages:c.dailyImages,vidiqCredits:c.vidiqCredits});
  await updateRun(ctx,r,key+' queued');
  return false;
 }
@@ -177,9 +177,15 @@ async function advance(ctx:Ctx,r:Run){
  const c=agentConfigSchema.parse(r.snapshot.config),refs=r.snapshot.referenceFileIds;
  const stages=workflowStages(c),key=stages[r.stage];
  if(!key){await updateRun(ctx,r,'Workflow complete.',{state:'COMPLETED'});return;}
- const common={brandId:r.brand_id,projectId:r.project_id,instructions:taskInstructions(c,null)};
+ const research=c.research==='VIDIQ'&&key!=='RESEARCH'?await resultFor(ctx,r,'RESEARCH'):null;
+ const common={brandId:r.brand_id,projectId:r.project_id,instructions:taskInstructions(c,research)};
  const next=async()=>updateRun(ctx,r,key+' completed.',{stage:r.stage+1});
  if(r.production_run_id)await ctx.db.execute(sql`update production_runs set updated_at=now() where id=${r.production_run_id} and state='ACTIVE'`);
+ if(key==='RESEARCH'){
+  if(await queueStage(ctx,r,key,{...common,taskType:'RESEARCH',provider:'VIDIQ',query:c.researchQuery!,
+    reservedCredits:c.vidiqWatch?15:5,watch:c.vidiqWatch}))await next();
+  return;
+ }
  if(key==='CONTENT_STRATEGY'){
   if(await queueStage(ctx,r,key,{...common,taskType:key}))await next();return;
  }
@@ -213,7 +219,7 @@ async function advance(ctx:Ctx,r:Run){
      negativePrompt:workflow.preset.negativePrompt,width:width!,height:height!,fps:30,loraName:audio.loraName,loraStrength:audio.loraStrength,
      upscaleWidth:width!,upscaleHeight:height!,wantUpscale:false,imageUploadName:null,imageUploadWorkerId:null,audioUploadName:null,audioUploadWorkerId:null},{skipDraft:true});
     const jobId=generated.job.id;
-    await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({nativeAgentRunId:r.id,productionRunId:r.production_run_id,creativeOwner:'chatgpt',postProduction:{phase:'WAIT_INDEX'}})}::jsonb where id=${jobId} and org_id=${r.org_id}`);
+    await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({nativeAgentRunId:r.id,productionRunId:r.production_run_id,sourceEvidence:research?JSON.stringify({hostReported:true,source:research}).slice(0,20000):'Original owner-directed content',creativeOwner:'chatgpt',postProduction:{phase:'WAIT_INDEX'}})}::jsonb where id=${jobId} and org_id=${r.org_id}`);
     await ctx.db.execute(sql`update production_runs set planning_state='PLANNED',planning_detail='Native LTX render queued.',updated_at=now() where id=${r.production_run_id}`);
     await setAutomatedProjectStage(ctx.db,r.org_id,r.project_id,'IN_PROGRESS','Native LTX render queued.');
     await runEvent(ctx.db,r.org_id,r.production_run_id,'RENDER_QUEUED','LTX render queued.',jobId);
@@ -237,7 +243,7 @@ async function advance(ctx:Ctx,r:Run){
    const form={projectId:r.project_id,workerId:c.workerId,imageFileId:null,imageUploadName:null,imageUploadWorkerId:null,
     prompt:plan.masterPrompt,aspectRatio:c.aspect,megapixels:1,audioLocked:true,shareAudio:false,videoLocked:true,shareVideo:false,
     segments:plan.segments.map(s=>({...s,taskMode:'ref',refImageSize:'max',audioFileId:null,audioUploadName:null,audioUploadWorkerId:null,images}))};
-   await submitProductionPlan(ctx,productionPlanInputSchema.parse({runId:r.production_run_id,form,sourceEvidence:'Original owner-directed content; no external research claimed.',brief:plan.brief,assets:[],qualityReferenceFileIds:refs,requireAudio:false,requireLipSync:false,requirePhysicalAccuracy:true,maxRegenerations:c.maxRegenerations,acceptBillableQuality:false,qualityProvider:'chatgpt'}),r.plan_id!);
+   await submitProductionPlan(ctx,productionPlanInputSchema.parse({runId:r.production_run_id,form,sourceEvidence:research?JSON.stringify({hostReported:true,source:research}).slice(0,20000):'Original owner-directed content; no external research claimed.',brief:plan.brief,assets:[],qualityReferenceFileIds:refs,requireAudio:false,requireLipSync:false,requirePhysicalAccuracy:true,maxRegenerations:c.maxRegenerations,acceptBillableQuality:false,qualityProvider:'chatgpt'}),r.plan_id!);
    await updateRun(ctx,r,'H3 production plan saved.');return;
   }
   if(['FAILED','STOPPED'].includes(existing.state))throw conflict('H3 plan requires review.');

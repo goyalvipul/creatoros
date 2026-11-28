@@ -12,7 +12,7 @@ export type AgentTask = {
   id: string; task_type: AgentTaskInput['taskType']; input: AgentTaskInput; state: string;
   claim_hash: string | null; lease_until: Date | null; deadline_at: Date;
   upload_request_id: string | null; result: AgentTaskResult | null; project_id: string | null;
-  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null;
+  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null; frames_retrieved:boolean;
 };
 
 // All claim mutations are serialized against the active owner/credential. Never trust a
@@ -32,7 +32,7 @@ export async function checkAgentConnection(db: Executor, auth: AgentAuth) {
   `)).length) throw forbidden('Agent authorization changed.');
 }
 
-export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestId: string, raw: AgentTaskInput) {
+export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestId: string, raw: AgentTaskInput, binding?:{runId:string;stageKey:string;dailyTasks:number;dailyImages:number}) {
   const input = agentTaskInput.parse(raw);
   return ctx.db.transaction(async tx => {
     // Lock the org row before counting and inserting task reservations.
@@ -52,6 +52,38 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       and subscription_id=${subscriptionId} and input=${JSON.stringify(input)}::jsonb
     `));
     if (existing) return { requestId: existing.id };
+    if(binding){
+      const [run]=rows<{id:string;agent_id:string}>(await tx.execute(sql`
+        select r.id,r.agent_id from agent_runs r join ai_gateway_connections g on g.org_id=r.org_id
+        where r.id=${binding.runId} and r.org_id=${ctx.orgId} and r.owner_id=${ctx.userId} and r.brand_id=${input.brandId}
+        and r.state='ACTIVE' and g.agent_exclusive and g.enabled and g.mode='hosted' and g.hosted_owner=r.owner_id
+        and r.project_id is not distinct from ${input.projectId}::uuid for update of r
+      `));
+      if(!run)throw conflict('Assigned agent run is inactive or execution isolation is off.');
+      const [usage]=rows<{tasks:number;images:number}>(await tx.execute(sql`
+        select count(*)::int as tasks,count(*) filter(where t.task_type='IMAGE_GENERATION')::int as images
+        from agent_tasks t join agent_runs r on r.id=t.agent_run_id where r.agent_id=${run.agent_id}
+          and t.created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'
+      `));
+      if((usage?.tasks??0)>=binding.dailyTasks||(input.taskType==='IMAGE_GENERATION'&&(usage?.images??0)>=binding.dailyImages))
+        throw conflict('Agent daily task or image reservation exhausted.');
+    }
+    if(input.taskType==='VIDEO_REVIEW'||input.taskType==='SEO_GENERATION'){
+      if(!rows(await tx.execute(sql`
+        select j.id from generation_jobs j join generation_outputs o on o.job_id=j.id and o.org_id=j.org_id and o.output_role='final'
+        join file_instances f on f.id=o.file_instance_id and f.org_id=j.org_id
+        where j.id=${input.jobId} and j.org_id=${ctx.orgId} and j.project_id=${input.projectId} and j.status='SUCCEEDED'
+          and f.id=${input.fileId} and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='VIDEO'
+          and coalesce(j.settings->>'productionSuperseded','false')<>'true'
+      `)).length)throw badRequest('Use the exact current indexed render.');
+      if(input.taskType==='SEO_GENERATION'){
+        for(const a of input.accounts){
+          if(!rows(await tx.execute(sql`select a.id from social_accounts a join channels c on c.id=a.channel_id and c.org_id=a.org_id
+            where a.id=${a.accountId} and a.org_id=${ctx.orgId} and c.brand_id=${input.brandId} and a.platform::text=${a.platform}
+            and a.active and a.deleted_at is null and c.deleted_at is null`)).length)throw badRequest('Invalid creator account.');
+        }
+      }
+    }
     if (!rows(await tx.execute(sql`select id from brands where org_id=${ctx.orgId} and id=${input.brandId} and active and deleted_at is null`)).length)
       throw notFound('Active creator');
     if (input.projectId && !rows(await tx.execute(sql`
@@ -63,7 +95,7 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       from ai_profiles where org_id=${ctx.orgId} and brand_id=${input.brandId}
     `));
     let uploadRootId:string|null=null;
-    if (input.taskType === 'IMAGE_GENERATION') {
+    if (input.taskType === 'IMAGE_GENERATION'||input.taskType==='VIDEO_REVIEW') {
       const canonical = profile?.reference_file_ids ?? [];
       if ((profile?.character_name || profile?.character_notes) && !canonical.length)
         throw badRequest('Add approved canonical character reference images first.');
@@ -75,9 +107,11 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
           and archived_at is null and availability='AVAILABLE' and file_type::text='IMAGE'`)).length)
           throw badRequest('Reference image is unavailable.');
       }
-      const root = ctx.env.processEnv?.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID;
-      if (!root || !/^[0-9a-f-]{36}$/i.test(root)) throw badRequest('Configure the dedicated ChatGPT image upload root first.');
-      uploadRootId=root;
+      if(input.taskType==='IMAGE_GENERATION'){
+        const root = ctx.env.processEnv?.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID;
+        if (!root || !/^[0-9a-f-]{36}$/i.test(root)) throw badRequest('Configure the dedicated ChatGPT image upload root first.');
+        uploadRootId=root;
+      }
     }
     const [count] = rows<{ daily: number; active: number }>(await tx.execute(sql`
       select count(*) filter(where created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver')::int as daily,
@@ -86,10 +120,10 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
     `));
     if ((count?.daily ?? 0)>=12 || (count?.active ?? 0)>=2) throw conflict('Agent task safety limit reached.');
     const [inserted] = rows<{ id: string }>(await tx.execute(sql`
-      insert into agent_tasks(id,org_id,owner_id,subscription_id,credential_hash,principal,brand_id,project_id,task_type,input,creator_context,upload_root_id,upload_request_id)
+      insert into agent_tasks(id,org_id,owner_id,subscription_id,credential_hash,principal,brand_id,project_id,task_type,input,creator_context,upload_root_id,upload_request_id,agent_run_id,stage_key)
       values(${requestId},${ctx.orgId},${ctx.userId},${subscriptionId},${sub.credential_hash},${sub.principal},
         ${input.brandId},${input.projectId},${input.taskType},${JSON.stringify(input)}::jsonb,${JSON.stringify(profile??{})}::jsonb,${uploadRootId},
-        ${input.taskType==='IMAGE_GENERATION'?randomUUID():null})
+        ${input.taskType==='IMAGE_GENERATION'?randomUUID():null},${binding?.runId??null},${binding?.stageKey??null})
       on conflict do nothing returning id
     `));
     if (!inserted) throw conflict('Task request ID is already used.');
@@ -102,7 +136,7 @@ export async function withAgentTask<T>(auth: AgentAuth, principal: string, reque
     await checkAgentConnection(tx, auth);
     const [task] = rows<AgentTask>(await tx.execute(sql`
       select t.id,t.task_type,t.input,t.state,t.claim_hash,t.lease_until,t.deadline_at,t.upload_request_id,
-        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id
+        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id,t.frames_retrieved
       from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
       where t.id=${requestId} and t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId}
         and t.credential_hash=${auth.hash} and t.principal=${principal} and s.revoked_at is null
@@ -161,6 +195,7 @@ export async function finishAgentTask(auth: AgentAuth, principal: string, reques
       throw conflict('Completed task has a different result.');
     }
     assertAgentClaim(task,token);
+    if(result.taskType==='VIDEO_REVIEW'&&!task.frames_retrieved)throw conflict('Retrieve assigned render frames before reporting review.');
     if (result.taskType==='IMAGE_GENERATION') {
       if (result.uploadRequestId!==task.upload_request_id) throw badRequest('Use the task-bound upload session.');
       // The existing binary importer validates the bytes, MIME, exact length, SHA-256

@@ -428,6 +428,13 @@
       "when": 1797200000006,
       "tag": "0060_durable_creative_production",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1797200000007,
+      "tag": "0061_mcp_diagnostics",
+      "breakpoints": true
     }
   ]
 }

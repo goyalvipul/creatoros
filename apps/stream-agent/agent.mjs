@@ -333,7 +333,7 @@ const got = await sha256(dest);
 
 function quote(file) {
 
-  return `file '${file.replace(/\\/g, '/').replace(/'/g, `'\\\''`)}'`;
+  return `file '${file.replace(/\\/g, '/').replace(/'/g, `'\\''`)}'`;
 
 }
 

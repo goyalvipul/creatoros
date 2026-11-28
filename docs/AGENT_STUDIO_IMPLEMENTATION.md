@@ -16,3 +16,11 @@ This branch starts the approved application implementation with a durable, signe
 10. Coordinate application and existing private Site update; never create duplicate plugin, change sharing, rotate existing credentials unnecessarily, automatically publish, or add paid models/frameworks. Keep existing legacy producer as mutually exclusive fallback until acceptance.
 
 The protocol and current routes are specified in AGENT_TASK_CONTRACT.md. The hosted connector is not in this repository; Codex must update its actual checkout and installed skill. Use the draft PR as the application source of truth, update contract and tests together when adding remaining types. Preserve the already verified diagnostics. No testing claims based on mere source inspection.
+
+## Hosted pilot staging
+
+Site version 21 is saved on the existing private Site and contains the version-1 task adapter. It adds no production exposure by itself. Leave `KEMOKEM_AGENT_TASK_PILOT` unset and leave `agents.subscribe` and `agents.execute` disabled on the live connector until a trusted restricted execution surface and the required acceptance tests are available. The flag is a rollout switch, not an execution isolation boundary. Version 20 remains the live diagnostic connector.
+
+The native task upload tool derives its target from the claimed task and attaches the active claim to the binary PUT. It cannot prepare an unrestricted image upload. The existing interactive upload flow continues to use its own authorization.
+
+Deploy only after the release checklist passes. Apply migration 0062 before enabling matching connector routes. Keep the existing private Site, signing secret and plugin identity. Release the matching production skill after the tool catalogue has been verified. Rollback disables the agent scopes and pilot flag, restores Site version 20, and rebuilds the prior application revision. Keep the additive migration tables for task history.

@@ -44,10 +44,13 @@ async function loadSession(auth: Auth,id:string) {
   return session;
 }
 // A native upload reserved by an agent must still belong to an active claim.
-async function checkTaskUpload(auth:Auth,id:string) {
+async function checkTaskUpload(auth:Auth,id:string,claimHeader:unknown) {
+  const claimHash = typeof claimHeader === 'string' && /^[a-f0-9]{64}$/.test(claimHeader)
+    ? createHash('sha256').update(claimHeader).digest('hex')
+    : null;
   const [task]=rows<{ok:boolean}>(await auth.ctx.db.execute(sql`
     select (t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId} and t.credential_hash=${auth.hash}
-      and t.state in ('CLAIMED','RUNNING') and t.lease_until>now() and t.deadline_at>now()
+      and coalesce(t.claim_hash=${claimHash},false) and t.state in ('CLAIMED','RUNNING') and t.lease_until>now() and t.deadline_at>now()
       and s.revoked_at is null) as ok
     from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id where t.upload_request_id=${id}
   `));
@@ -102,7 +105,7 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
       const s=await loadSession(auth,id);const state=sessionState(s);
       if(state==='COMPLETE')return envelope(req,s.result);
       if(state!=='OPEN')throw conflict('Upload is '+state+'. Check the original session; do not replay uncertain writes.');
-      await checkTaskUpload(auth,id);
+      await checkTaskUpload(auth,id,req.headers['x-kemokem-task-claim']);
       const input=binaryUploadSchema.parse(s.input),kind=kindOf(s.operation);
       validateBinaryInput(input,kind);
       if(req.headers['content-type']!=='application/octet-stream'||req.headers['content-encoding']||req.headers['content-length']!==String(input.size)||!(req.body instanceof Readable))throw badRequest('Send raw binary with exact Content-Length and no compression.');
@@ -120,7 +123,7 @@ export function registerBinaryUploadRoutes(app:FastifyInstance,authenticate:(req
         const current=await authenticate(req,s.scope);
         if(current.hash!==auth.hash||current.ctx.orgId!==auth.ctx.orgId)throw forbidden('Upload authorization changed.');
         if(Date.parse(s.result.expiresAt)<=Date.now())throw conflict('Upload session expired.');
-        await checkTaskUpload(current,id);
+        await checkTaskUpload(current,id,req.headers['x-kemokem-task-claim']);
         if(s.policy_authorized&&kind==='IMAGE'&&!await isDedicatedUploadRoot(current.ctx,input.rootId))throw forbidden('Dedicated ChatGPT upload root authorization changed.');
         writing=true;
         const output=await importBinaryMedia(current.ctx,input,id,kind,bytes);

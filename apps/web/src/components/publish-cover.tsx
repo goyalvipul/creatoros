@@ -117,7 +117,7 @@ export function ThumbnailPicker({
     }
   }
 
-  async function useAutomaticFrame() {
+  async function applyAutomaticFrame() {
     setBusy(true);
     setError(null);
     try {
@@ -144,7 +144,7 @@ export function ThumbnailPicker({
         {activeHasCover ? (
           <button type="button" disabled={busy}
             className="text-xs font-semibold text-muted underline"
-            onClick={() => void useAutomaticFrame()}>
+            onClick={() => void applyAutomaticFrame()}>
             Use video/default cover
           </button>
         ) : null}

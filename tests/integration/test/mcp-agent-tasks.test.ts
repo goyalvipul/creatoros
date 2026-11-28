@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { brands, sql } from '@creatoros/db';
 import { AGENT_EXECUTE, AGENT_SUBSCRIBE, dispatchMcpAgentTasks } from '@creatoros/services';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
@@ -107,4 +107,46 @@ it('rejects wrong-organization creators, late completion and expired claims with
   expect((await sendSite('complete',bound(expired,{result:script}))).status).toBe(409);
   await settings([AGENT_SUBSCRIBE]);
   expect((await sendSite('status',{principal,requestId:expired})).status).toBe(403);
+});
+
+it('requires the exact active claim for a reserved binary upload and rejects cancellation', async () => {
+  await settings([AGENT_SUBSCRIBE, AGENT_EXECUTE, 'media.upload.image']);
+  const renewed = await subscribe();
+  expect(renewed.status).toBe(200);
+  subscriptionId = renewed.body.data.id;
+  const requestId = randomUUID();
+  const uploadId = randomUUID();
+  expect((await queue(requestId)).status).toBe(200);
+  callbacks.send.mockResolvedValue({ status: 202, body: '' });
+  await dispatch();
+  expect((await sendSite('claim', bound(requestId))).body.data.claimed).toBe(true);
+
+  // Seed a reserved upload transport fixture. Admission and scanner writes are tested separately.
+  const payload = Buffer.from('fixture');
+  const checksum = createHash('sha256').update(payload).digest('hex');
+  const input = {
+    rootId: randomUUID(), brandId, fileName: 'fixture.png', mime: 'image/png',
+    size: payload.length, sha256: checksum,
+  };
+  const result = { uploadState: 'OPEN', expiresAt: new Date(Date.now() + 60000).toISOString() };
+  await fresh.handle.db.execute(sql`update agent_tasks set upload_request_id=${uploadId} where id=${requestId}`);
+  await fresh.handle.db.execute(sql`
+    insert into ai_gateway_requests(id,org_id,mode,credential_hash,operation,scope,input,status,result)
+    select ${uploadId},org_id,'hosted',credential_hash,'media.prepareImageUpload','media.upload.image',
+      ${JSON.stringify(input)}::jsonb,'COMPLETED',${JSON.stringify(result)}::jsonb
+    from agent_tasks where id=${requestId}
+  `);
+  const upload = (claim?: string) => api.call('PUT', '/api/v1/ai-gateway/uploads/' + uploadId, {
+    raw: payload.subarray(0, 1),
+    headers: { authorization: 'Bearer ' + token, 'content-type': 'application/octet-stream',
+      'content-length': '1', ...(claim ? { 'x-kemokem-task-claim': claim } : {}) },
+  });
+  expect((await upload()).status).toBe(403);
+  expect((await upload('b'.repeat(64))).status).toBe(403);
+  // An exact claim reaches content-length validation. The fixture never writes to the scanner.
+  const acceptedClaim = await upload(claimToken);
+  expect(acceptedClaim.status).toBe(400);
+  expect(acceptedClaim.body.error.message).toContain('exact Content-Length');
+  expect((await api.call('POST', admin+'/agent-tasks/'+requestId+'/cancel', { cookie })).status).toBe(200);
+  expect((await upload(claimToken)).status).toBe(403);
 });

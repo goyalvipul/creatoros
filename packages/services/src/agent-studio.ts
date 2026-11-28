@@ -5,7 +5,8 @@ import { agentTaskInput, agentTaskResult, AGENT_EXECUTE, AGENT_SUBSCRIBE, type A
 import { createAgentTask } from './mcp-agent-tasks';
 import { createDraftProject } from './projects';
 import { productionPlanInputSchema, submitProductionPlan } from './production-plan';
-import { runEvent, runPrefs, controlProductionRun } from './production-run';
+import { generateLtx, ltxApiWorkflow } from './comfy';
+import { runEvent, runPrefs, controlProductionRun, setAutomatedProjectStage } from './production-run';
 import { productionReadiness, submitChatGPTQualityReport, finalizeChatGPTProduction } from './production-external';
 import { readSocialCover, saveSocialCoverBytes, socialCoverLimit } from './social-cover';
 import { openAgentFile } from './agent-file';
@@ -18,6 +19,7 @@ type Snapshot={config:AgentConfig;referenceFileIds:string[]};
 type Run={id:string;agent_id:string;org_id:string;owner_id:string;brand_id:string;slot:string;revision:number;snapshot:Snapshot;state:string;stage:number;project_id:string|null;production_run_id:string|null;plan_id:string|null;job_id:string|null;file_id:string|null};
 type TaskRow={id:string;state:string;result:unknown;error_code:string|null};
 const active=['QUEUED','DISPATCHED','DELIVERED','CLAIMED','RUNNING'];
+const isVideo=(c:AgentConfig)=>c.workflow==='H3_SHORT'||c.workflow==='LTX_SHORT';
 function ownerCtx(db:Db,env:ServiceEnv,r:{org_id:string;owner_id:string}):Ctx {
  return {db,env,orgId:r.org_id,userId:r.owner_id,actor:{type:'system'},now:()=>new Date()};
 }
@@ -44,7 +46,31 @@ async function verifyConfig(ctx:Ctx,c:AgentConfig){
  if(!rows(await ctx.db.execute(sql`select id from mcp_agent_subscriptions where id=${c.subscriptionId} and org_id=${ctx.orgId} and owner_id=${ctx.userId}`)).length)throw notFound('Production subscription');
  if(c.projectId&&!rows(await ctx.db.execute(sql`select id from creative_projects where id=${c.projectId} and org_id=${ctx.orgId} and brand_id=${c.brandId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')`)).length)throw badRequest('Choose a draft project belonging to this creator.');
  if(c.workerId&&!rows(await ctx.db.execute(sql`select id from gpu_workers where id=${c.workerId} and org_id=${ctx.orgId} and enabled`)).length)throw notFound('GPU worker');
- if(c.workflow==='H3_SHORT'&&c.projectId)throw badRequest('H3 creates a fresh draft project per run.');
+ if(isVideo(c)&&c.projectId)throw badRequest('Video workflows create a fresh draft project per run.');
+ if(c.workflow==='LTX_SHORT')await verifyLtxAudio(ctx,c);
+}
+async function verifyLtxAudio(ctx:Ctx,c:AgentConfig){
+ const a=c.ltx;
+ if(!a)throw badRequest('Select LTX audio and LoRA.');
+ const [audio]=rows<{duration:number|null}>(await ctx.db.execute(sql`
+  select nullif(f.tech->>'durationMs','')::float8 as duration from file_instances f
+  join asset_file_links l on l.file_instance_id=f.id and l.org_id=f.org_id
+  join asset_versions v on v.id=l.asset_version_id and v.org_id=l.org_id
+  join logical_assets b on b.id=v.asset_id and b.org_id=v.org_id
+  where f.id=${a.audioFileId} and f.org_id=${ctx.orgId} and b.brand_id=${c.brandId} and not b.is_archived
+  and f.archived_at is null and f.availability='AVAILABLE' and f.file_type='AUDIO' limit 1`));
+ if(!audio?.duration||audio.duration/1000<a.audioStartSec+c.durationSec)throw badRequest('Choose verified creator audio with sufficient measured duration.');
+ return a;
+}
+async function reserveRender(ctx:Ctx,count:number){
+ const raw=ctx.env.processEnv.AI_GATEWAY_DAILY_GENERATION_LIMIT;
+ const limit=raw&&/^\d+$/.test(raw)?Math.min(100,Number(raw)):2;
+ const [quota]=rows<{n:number}>(await ctx.db.execute(sql`
+  select (coalesce((select sum(1+coalesce((payload->>'maxRegenerations')::int,0)) from production_plans
+    where org_id=${ctx.orgId} and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'),0)
+   +(select count(*) from generation_jobs where org_id=${ctx.orgId} and provider in ('comfyui-h3','comfyui-ltx')
+    and settings->>'productionPlanId' is null and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'))::int as n`));
+ if((quota?.n??0)+count>limit)throw conflict('Daily native GPU render reservation exhausted.');
 }
 export async function saveAgentDefinition(ctx:Ctx,raw:AgentConfig,id?:string){
  const c=agentConfigSchema.parse(raw);
@@ -103,13 +129,13 @@ export async function startAgentRun(ctx:Ctx,id:string,scheduled=false){
   if((await runPrefs(scoped))[c.brandId]?.paused)throw conflict('Creator production is paused.');
   const [profile]=rows<{reference_file_ids:string[]}>(await tx.execute(sql`select reference_file_ids from ai_profiles where org_id=${ctx.orgId} and brand_id=${c.brandId}`));
   const refs=profile?.reference_file_ids??[];
-  if(c.workflow==='H3_SHORT'&&(refs.length<1||refs.length>3))throw badRequest('H3 needs one to three approved canonical reference images.');
+  if(isVideo(c)&&(refs.length<1||refs.length>3))throw badRequest('H3 needs one to three approved canonical reference images.');
   let projectId=c.projectId,productionRunId:string|null=null,planId:string|null=null;
-  if(c.workflow==='H3_SHORT'){
+  if(isVideo(c)){
    const [pr]=rows<{id:string}>(await tx.execute(sql`insert into production_runs(org_id,brand_id,local_day,target)
      values(${ctx.orgId},${c.brandId},${clock.day}::date,1) on conflict do nothing returning id`));
    if(!pr)throw conflict('Another production run already owns this creator and Vancouver day. Disable the overlapping producer.');
-   productionRunId=pr.id;planId=randomUUID();
+   productionRunId=pr.id;planId=c.workflow==='H3_SHORT'?randomUUID():null;
    const project=await createDraftProject(tx,scoped,{title:c.name+' · '+clock.day,brandId:c.brandId,type:'OTHER',contentFormat:'OTHER',brief:c.instructions});
    projectId=project.id;
    await runEvent(tx,ctx.orgId,pr.id,'RESEARCHING','Native agent owns this production run.');
@@ -166,7 +192,7 @@ async function advance(ctx:Ctx,r:Run){
  }
  if(key==='IMAGE_GENERATION'){
   let instructions=common.instructions;
-  if(c.workflow==='H3_SHORT'){
+  if(isVideo(c)){
    const plan=await resultFor(ctx,r,'PRODUCTION_PLANNING');if(plan.taskType!=='PRODUCTION_PLANNING')throw conflict('Invalid plan.');
    instructions=taskInstructions(c,{imagePrompt:plan.imagePrompt,brief:plan.brief});
   }
@@ -175,18 +201,43 @@ async function advance(ctx:Ctx,r:Run){
  if(key==='RENDER'){
   const plan=await resultFor(ctx,r,'PRODUCTION_PLANNING'),image=await resultFor(ctx,r,'IMAGE_GENERATION');
   if(plan.taskType!=='PRODUCTION_PLANNING'||image.taskType!=='IMAGE_GENERATION')throw conflict('Missing verified render inputs.');
+  if(c.workflow==='LTX_SHORT'){
+   if(!r.job_id){
+    const audio=await verifyLtxAudio(ctx,c);
+    const workflow=ltxApiWorkflow();if(!workflow)throw badRequest('LTX workflow is not installed.');
+    await reserveRender(ctx,1);
+    const [width,height]=c.aspect==='9:16'?[576,1024]:c.aspect==='16:9'?[1024,576]:[768,768];
+    await ctx.db.execute(sql`update creative_projects set title=${plan.title},brief=${plan.brief},updated_at=now() where id=${r.project_id} and org_id=${r.org_id} and stage='DRAFT'`);
+    const generated=await generateLtx(ctx,{projectId:r.project_id,workerId:c.workerId,imageFileId:image.fileId,audioFileId:audio.audioFileId,
+     audioStartSec:audio.audioStartSec,durationSec:c.durationSec,prompt:[plan.masterPrompt,...plan.segments.map(s=>s.prompt)].join('\n').slice(0,16000),
+     negativePrompt:workflow.preset.negativePrompt,width:width!,height:height!,fps:30,loraName:audio.loraName,loraStrength:audio.loraStrength,
+     upscaleWidth:width!,upscaleHeight:height!,wantUpscale:false,imageUploadName:null,imageUploadWorkerId:null,audioUploadName:null,audioUploadWorkerId:null},{skipDraft:true});
+    const jobId=generated.job.id;
+    await ctx.db.execute(sql`update generation_jobs set settings=settings||${JSON.stringify({nativeAgentRunId:r.id,productionRunId:r.production_run_id,creativeOwner:'chatgpt',postProduction:{phase:'WAIT_INDEX'}})}::jsonb where id=${jobId} and org_id=${r.org_id}`);
+    await ctx.db.execute(sql`update production_runs set planning_state='PLANNED',planning_detail='Native LTX render queued.',updated_at=now() where id=${r.production_run_id}`);
+    await setAutomatedProjectStage(ctx.db,r.org_id,r.project_id,'IN_PROGRESS','Native LTX render queued.');
+    await runEvent(ctx.db,r.org_id,r.production_run_id,'RENDER_QUEUED','LTX render queued.',jobId);
+    await updateRun(ctx,r,'LTX render queued.',{jobId});return;
+   }
+   const [job]=rows<{status:string;file_id:string|null}>(await ctx.db.execute(sql`
+    select j.status,(select f.id from generation_outputs o join file_instances f on f.id=o.file_instance_id and f.org_id=o.org_id
+     where o.job_id=j.id and o.org_id=j.org_id and o.output_role='original' and f.availability='AVAILABLE' and f.archived_at is null
+     and f.file_type='VIDEO' order by o.created_at desc limit 1) as file_id
+    from generation_jobs j where j.id=${r.job_id} and j.org_id=${r.org_id} and j.project_id=${r.project_id} and j.settings->>'nativeAgentRunId'=${r.id}`));
+   if(!job||['FAILED','CANCELLED'].includes(job.status))throw conflict('LTX render failed; inspect exact job before retrying.');
+   if(job.status!=='SUCCEEDED'||!job.file_id){await updateRun(ctx,r,'Waiting for indexed LTX original output.');return;}
+   await updateRun(ctx,r,'Exact LTX output indexed.',{stage:r.stage+1,fileId:job.file_id});return;
+  }
   const [existing]=rows<{state:string;job_id:string|null;detail:string|null}>(await ctx.db.execute(sql`select state,job_id,detail from production_plans where id=${r.plan_id} and org_id=${r.org_id} and project_id=${r.project_id}`));
   if(!existing){
    // Preserve project creation/audit and existing production plan idempotency. No billable fallback.
    await ctx.db.execute(sql`update creative_projects set title=${plan.title},brief=${plan.brief},updated_at=now() where id=${r.project_id} and org_id=${r.org_id} and stage='DRAFT'`);
-   const [quota]=rows<{n:number}>(await ctx.db.execute(sql`
-    select count(*)::int as n from production_plans where org_id=${r.org_id} and created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver'`));
-   if((quota?.n??0)>=2)throw conflict('Daily native plan ceiling reached.');
+   await reserveRender(ctx,1+c.maxRegenerations);
    const images=[...refs,image.fileId].map(fileId=>({fileId,uploadName:null,uploadWorkerId:null,shared:true}));
    const form={projectId:r.project_id,workerId:c.workerId,imageFileId:null,imageUploadName:null,imageUploadWorkerId:null,
     prompt:plan.masterPrompt,aspectRatio:c.aspect,megapixels:1,audioLocked:true,shareAudio:false,videoLocked:true,shareVideo:false,
     segments:plan.segments.map(s=>({...s,taskMode:'ref',refImageSize:'max',audioFileId:null,audioUploadName:null,audioUploadWorkerId:null,images}))};
-   await submitProductionPlan(ctx,productionPlanInputSchema.parse({runId:r.production_run_id,form,sourceEvidence:'Original owner-directed content; no external research claimed.',brief:plan.brief,assets:[],qualityReferenceFileIds:refs,requireAudio:false,requireLipSync:false,requirePhysicalAccuracy:true,maxRegenerations:0,acceptBillableQuality:false,qualityProvider:'chatgpt'}),r.plan_id!);
+   await submitProductionPlan(ctx,productionPlanInputSchema.parse({runId:r.production_run_id,form,sourceEvidence:'Original owner-directed content; no external research claimed.',brief:plan.brief,assets:[],qualityReferenceFileIds:refs,requireAudio:false,requireLipSync:false,requirePhysicalAccuracy:true,maxRegenerations:c.maxRegenerations,acceptBillableQuality:false,qualityProvider:'chatgpt'}),r.plan_id!);
    await updateRun(ctx,r,'H3 production plan saved.');return;
   }
   if(['FAILED','STOPPED'].includes(existing.state))throw conflict('H3 plan requires review.');
@@ -205,14 +256,28 @@ async function advance(ctx:Ctx,r:Run){
  }
  if(key==='VIDEO_REVIEW'){
   const seconds=[0.25,0.35*c.durationSec,0.65*c.durationSec,0.9*c.durationSec].map(x=>Math.round(x*100)/100);
-  const ready=await queueStage(ctx,r,key,{...common,projectId:r.project_id!,taskType:key,jobId:r.job_id!,fileId:r.file_id!,referenceFileIds:refs,frameSeconds:seconds,
+  const reviewKey=key+':'+r.job_id;
+  const ready=await queueStage(ctx,r,reviewKey,{...common,projectId:r.project_id!,taskType:key,jobId:r.job_id!,fileId:r.file_id!,referenceFileIds:refs,frameSeconds:seconds,
     instructions:taskInstructions(c,await resultFor(ctx,r,'PRODUCTION_PLANNING'))});
   if(!ready)return;
-  const report=await resultFor(ctx,r,key);if(report.taskType!=='VIDEO_REVIEW')throw conflict('Missing quality assessment.');
+  const report=await resultFor(ctx,r,reviewKey);if(report.taskType!=='VIDEO_REVIEW')throw conflict('Missing quality assessment.');
   const quality=await submitChatGPTQualityReport(ctx,{jobId:r.job_id!,fileId:r.file_id!,assessment:report.assessment,
    evidence:{frameSeconds:report.frameSeconds,continuousMotion:false,audioHeard:false,lipSyncObserved:false},
-   requireAudio:false,requireLipSync:false,requirePhysicalAccuracy:true});
-  if(!quality.eligible){await updateRun(ctx,r,'Quality defects require targeted owner review; no automatic rerender.',{state:'BLOCKED'});return;}
+   requireAudio:c.workflow==='LTX_SHORT',requireLipSync:false,requirePhysicalAccuracy:true});
+  if(!quality.eligible){
+   const failures=report.assessment.checks.filter(ch=>ch.status==='FAIL');
+   const corrective=c.workflow==='H3_SHORT'&&c.maxRegenerations>0&&quality.verdict==='FAIL'&&!quality.technical.defects.length
+      &&failures.length>0&&failures.every(ch=>['brief','continuity','artifacts'].includes(ch.criterion));
+   if(corrective){
+    const corrected=rows(await ctx.db.execute(sql`
+      update production_plans set state='REGENERATE',payload=payload||${JSON.stringify({corrections:quality.corrections})}::jsonb,
+      detail='Confirmed visual defect; bounded prompt correction.',updated_at=now()
+      where id=${r.plan_id} and org_id=${r.org_id} and job_id=${r.job_id} and state='REVIEW'
+      and lease is null and attempt<=${c.maxRegenerations} returning id`));
+    if(corrected.length){await updateRun(ctx,r,'Confirmed visual defects: one reserved H3 correction.',{stage:r.stage-1});return;}
+   }
+   await updateRun(ctx,r,'Quality defects require targeted owner review; no unsafe rerender.',{state:'BLOCKED'});return;
+  }
   await next();return;
  }
  if(key==='SEO_GENERATION'){

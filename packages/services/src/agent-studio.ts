@@ -176,8 +176,9 @@ async function queueStage(ctx:Ctx,r:Run,key:string,input:AgentTaskInput){
   if(active.includes(existing.state)){await updateRun(ctx,r,key+' · '+existing.state);return false;}
   await updateRun(ctx,r,key+' · '+(existing.error_code??existing.state),{state:'BLOCKED'});return false;
  }
- await createAgentTask(ctx,c.subscriptionId,randomUUID(),agentTaskInput.parse(input),
-   {runId:r.id,stageKey:key,dailyTasks:c.dailyTasks,dailyImages:c.dailyImages,vidiqCredits:c.vidiqCredits});
+ try{await createAgentTask(ctx,c.subscriptionId,randomUUID(),agentTaskInput.parse(input),
+   {runId:r.id,stageKey:key,dailyTasks:c.dailyTasks,dailyImages:c.dailyImages,vidiqCredits:c.vidiqCredits});}
+ catch(e){if(e instanceof AppError&&e.code==='AGENT_ACTIVE_CAPACITY'){await updateRun(ctx,r,'Waiting for an active agent task slot.');return false;}throw e;}
  await updateRun(ctx,r,key+' queued');
  return false;
 }
@@ -379,8 +380,13 @@ export async function controlAgentRun(ctx:Ctx,id:string,action:'pause'|'resume'|
   const scoped={...ctx,db:tx};await lockOrg(scoped);
   const [r]=rows<Run>(await tx.execute(sql`select * from agent_runs where id=${id} and org_id=${ctx.orgId} and owner_id=${ctx.userId} for update`));
   if(!r)throw notFound('Agent run');
-  if(action==='pause'&&r.state!=='ACTIVE'||action==='resume'&&r.state!=='PAUSED'||action==='stop'&&!['ACTIVE','PAUSED','BLOCKED','FAILED'].includes(r.state))throw conflict('Invalid run transition.');
-  if(action==='resume'&&!await isolated(scoped,r.snapshot.config.subscriptionId))throw conflict('Reconnect isolated execution first.');
+  if(action==='pause'&&r.state!=='ACTIVE'||action==='resume'&&!['PAUSED','BLOCKED'].includes(r.state)||action==='stop'&&!['ACTIVE','PAUSED','BLOCKED','FAILED'].includes(r.state))throw conflict('Invalid run transition.');
+  if(action==='resume'){
+   if(!await isolated(scoped,r.snapshot.config.subscriptionId))throw conflict('Reconnect isolated execution first.');
+   if(r.slot!==(await localClock(scoped)).day)throw conflict('An old daily slot cannot be resumed.');
+   if(rows(await tx.execute(sql`select id from agent_runs where agent_id=${r.agent_id} and id<>${r.id} and state in ('ACTIVE','PAUSED')`)).length)throw conflict('Another run owns this agent.');
+   if(r.state==='BLOCKED'&&rows(await tx.execute(sql`select id from agent_tasks where agent_run_id=${r.id} and state<>'COMPLETED' and not (state='QUEUED' and attempts=0)`)).length)throw conflict('Resolve failed or uncertain tasks before resuming; no automatic replay.');
+  }
   if(r.production_run_id)await controlProductionRun(scoped,r.production_run_id,action);
   const state=action==='pause'?'PAUSED':action==='resume'?'ACTIVE':'STOPPED';
   await tx.execute(sql`update agent_runs set state=${state},detail=${'Owner '+action},updated_at=now() where id=${id}`);

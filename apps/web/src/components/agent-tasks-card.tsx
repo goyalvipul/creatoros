@@ -6,7 +6,7 @@ import { post, useApi } from '@/lib/api';
 
 const path = '/integrations/ai-gateway/agent-tasks';
 type TaskType = 'CONTENT_STRATEGY' | 'SCRIPT_GENERATION' | 'IMAGE_GENERATION';
-type Task = {id:string;taskType:TaskType;state:string;brandId:string;projectId:string|null;createdAt:string;
+type Task = {id:string;taskType:TaskType|'RESEARCH'|'PRODUCTION_PLANNING'|'VIDEO_REVIEW'|'SEO_GENERATION';state:string;brandId:string;projectId:string|null;createdAt:string;
   attempts:number;progress:string|null;errorCode:string|null;result:unknown;completedAt:string|null};
 type Board = {
   subscriptions: {id:string;expiresAt:string;revokedAt:string|null}[];
@@ -107,7 +107,7 @@ export function AgentTasksCard() {
           <summary className="cursor-pointer text-sm">Recent agent tasks</summary>
           {data.tasks.length===0&&<p className="text-sm text-muted">No production tasks.</p>}
           {data.tasks.map(t=><div className="mt-2 space-y-1 rounded border border-border p-2 text-xs" key={t.id}>
-            <div className="flex flex-wrap items-center gap-2"><strong>{labels[t.taskType]}</strong><Badge tone={t.state==='COMPLETED'?'ok':activeStates.has(t.state)?'warn':undefined}>{t.state}</Badge></div>
+            <div className="flex flex-wrap items-center gap-2"><strong>{(t.taskType in labels?labels[t.taskType as TaskType]:t.taskType.replaceAll('_',' '))}</strong><Badge tone={t.state==='COMPLETED'?'ok':activeStates.has(t.state)?'warn':undefined}>{t.state}</Badge></div>
             <p className="break-all">{t.id} · {new Date(t.createdAt).toLocaleString()} · {t.attempts} dispatch attempts</p>
             {t.progress&&<p className="whitespace-pre-wrap">{t.progress}</p>}
             {t.errorCode&&<p className="text-bad">{t.errorCode}</p>}

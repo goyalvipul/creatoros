@@ -104,7 +104,7 @@ export function AgentStudioCard(){
       <details className="my-2"><summary>Execution history</summary>{data.events.filter(e=>e.runId===r.id).map(e=><p key={e.id} className="mt-1">{new Date(e.createdAt).toLocaleString()} · {e.state} · {e.detail}</p>)}</details>
       {r.projectId&&<p>Project: {r.projectId}</p>}{r.jobId&&<p>Render: {r.jobId}</p>}{r.fileId&&<p>Media: {r.fileId}</p>}
       {data.tasks.filter(t=>t.runId===r.id).map(t=><details key={t.id} className="mt-1 border-t border-border pt-1"><summary>{t.stageKey} · {t.state}</summary><p>{t.progress??t.errorCode??''}</p>{t.result!=null&&<pre className="break-all whitespace-pre-wrap">{JSON.stringify(t.result,null,2)}</pre>}</details>)}
-      <div className="mt-2 flex gap-2">{r.state==='ACTIVE'&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'pause'})}>Pause</Button>}{r.state==='PAUSED'&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'resume'})}>Resume</Button>}{['ACTIVE','PAUSED','BLOCKED','FAILED'].includes(r.state)&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'stop'})}>Stop</Button>}</div>
+      <div className="mt-2 flex gap-2">{r.state==='ACTIVE'&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'pause'})}>Pause</Button>}{['PAUSED','BLOCKED'].includes(r.state)&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'resume'})}>Resume</Button>}{['ACTIVE','PAUSED','BLOCKED','FAILED'].includes(r.state)&&<Button disabled={busy} onClick={()=>void perform('/runs/'+r.id+'/control',{action:'stop'})}>Stop</Button>}</div>
      </details>)}
     </div>
    })}

@@ -131,7 +131,8 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       count(*) filter(where state in ('QUEUED','DISPATCHED','DELIVERED','CLAIMED','RUNNING'))::int as active
       from agent_tasks where org_id=${ctx.orgId}
     `));
-    if ((count?.daily ?? 0)>=12 || (count?.active ?? 0)>=2) throw conflict('Agent task safety limit reached.');
+    if ((count?.daily ?? 0)>=12) throw conflict('Daily agent task safety limit reached.',undefined,'AGENT_DAILY_LIMIT');
+    if ((count?.active ?? 0)>=2) throw conflict('Active agent task capacity is temporarily full.',undefined,'AGENT_ACTIVE_CAPACITY');
     const [inserted] = rows<{ id: string }>(await tx.execute(sql`
       insert into agent_tasks(id,org_id,owner_id,subscription_id,credential_hash,principal,brand_id,project_id,task_type,input,creator_context,upload_root_id,upload_request_id,agent_run_id,stage_key)
       values(${requestId},${ctx.orgId},${ctx.userId},${subscriptionId},${sub.credential_hash},${sub.principal},

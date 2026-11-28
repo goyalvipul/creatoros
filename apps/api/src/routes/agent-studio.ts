@@ -17,7 +17,8 @@ export function registerAgentStudio(app:FastifyInstance,deps:AppDeps){
    runs:rows(await ctx.db.execute(sql`select id,agent_id as "agentId",slot,revision,state,stage,detail,project_id as "projectId",
     production_run_id as "productionRunId",plan_id as "planId",job_id as "jobId",file_id as "fileId",updated_at as "updatedAt"
     from agent_runs where org_id=${ctx.orgId} and owner_id=${ctx.userId} order by created_at desc limit 100`)),
-   usage:rows(await ctx.db.execute(sql`select r.agent_id as "agentId",count(*)::int as tasks,count(*) filter(where t.task_type='IMAGE_GENERATION')::int as images
+   usage:rows(await ctx.db.execute(sql`select r.agent_id as "agentId",count(*)::int as tasks,count(*) filter(where t.task_type='IMAGE_GENERATION')::int as images,
+    coalesce(sum((t.input->>'reservedCredits')::int) filter(where t.task_type='RESEARCH'),0)::int as "vidiqReserved"
     from agent_tasks t join agent_runs r on r.id=t.agent_run_id where r.org_id=${ctx.orgId} and r.owner_id=${ctx.userId}
     and t.created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver' group by r.agent_id`)),
    tasks:rows(await ctx.db.execute(sql`select t.id,t.agent_run_id as "runId",t.stage_key as "stageKey",t.state,t.progress,t.error_code as "errorCode",t.result
@@ -27,7 +28,7 @@ export function registerAgentStudio(app:FastifyInstance,deps:AppDeps){
    workers:rows(await ctx.db.execute(sql`select id,label as name from gpu_workers where org_id=${ctx.orgId} and enabled order by label`)),
    subscriptions:rows(await ctx.db.execute(sql`select id,expires_at as "expiresAt" from mcp_agent_subscriptions where org_id=${ctx.orgId} and owner_id=${ctx.userId}
     and revoked_at is null and expires_at>now() and callback_enc is not null order by expires_at desc`)),
-   provider:{vidiq:'UNAVAILABLE_UNMEDIATED',ltx:'OWNER_AUDIO_AND_LIVE_ACCEPTANCE_REQUIRED',paidFallback:false,scheduledActivationRequiresCompletedRun:true}};
+   provider:{vidiq:'HOST_REPORTED_OPT_IN_ONLY',ltx:'OWNER_AUDIO_AND_LIVE_ACCEPTANCE_REQUIRED',paidFallback:false,scheduledActivationRequiresCompletedRun:true}};
  });
  route({method:'POST',url:base+'/exclusive',tag:'AI Gateway',summary:'Select mutually exclusive hosted execution mode',role:'OWNER',
   body:z.object({enabled:z.boolean()}).strict()},async({ctx,body})=>ctx.db.transaction(async tx=>{

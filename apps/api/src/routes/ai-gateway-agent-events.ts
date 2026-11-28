@@ -24,10 +24,10 @@ const bound = agentTaskClaim.extend({principal});
 const prefix = '/ai-gateway/agent-events/';
 const admin = '/integrations/ai-gateway/agent-tasks';
 type Authorize = (request: FastifyRequest, action: string, scopes: readonly string[]) => Promise<AgentAuth>;
-type Invoke = (auth: AgentAuth, body: {operation:string;input:unknown;requestId?:string}, binding?:{taskId:string;claimToken:string}) => Promise<unknown>;
+export type AgentInvoke = (auth: AgentAuth, body: {operation:string;input:unknown;requestId?:string}, binding?:{taskId:string;claimToken:string}) => Promise<unknown>;
 
 export function registerAgentEvents(app:FastifyInstance,deps:AppDeps,authorize:Authorize,
-  envelope:(request:FastifyRequest,data:unknown)=>unknown,invoke:Invoke) {
+  envelope:(request:FastifyRequest,data:unknown)=>unknown,invoke:AgentInvoke) {
   const route=makeRouter(app,deps);
   const auth=(req:FastifyRequest,action:string)=>authorize(req,'agent.'+action,[AGENT_SUBSCRIBE,AGENT_EXECUTE]);
   function validatedUrl(raw:string) {

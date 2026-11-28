@@ -12,7 +12,7 @@ export type AgentTask = {
   id: string; task_type: AgentTaskInput['taskType']; input: AgentTaskInput; state: string;
   claim_hash: string | null; lease_until: Date | null; deadline_at: Date;
   upload_request_id: string | null; result: AgentTaskResult | null; project_id: string | null;
-  brand_id: string;
+  brand_id: string; creator_context: Record<string,unknown>; upload_root_id: string|null;
 };
 
 // All claim mutations are serialized against the active owner/credential. Never trust a
@@ -58,11 +58,15 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       select id from creative_projects where org_id=${ctx.orgId} and id=${input.projectId}
       and brand_id=${input.brandId} and deleted_at is null and stage in ('DRAFT','IN_PROGRESS')
     `)).length) throw badRequest('Choose an active draft project belonging to the creator.');
+    const [profile] = rows<{reference_file_ids:string[];character_name:string;character_notes:string;[key:string]:unknown}>(await tx.execute(sql`
+      select name,niche,languages,tone,voice,themes,visual_notes,avoid,disclosure,character_name,character_notes,reference_file_ids
+      from ai_profiles where org_id=${ctx.orgId} and brand_id=${input.brandId}
+    `));
+    let uploadRootId:string|null=null;
     if (input.taskType === 'IMAGE_GENERATION') {
-      const [profile] = rows<{ reference_file_ids: string[] }>(await tx.execute(sql`
-        select reference_file_ids from ai_profiles where org_id=${ctx.orgId} and brand_id=${input.brandId}
-      `));
       const canonical = profile?.reference_file_ids ?? [];
+      if ((profile?.character_name || profile?.character_notes) && !canonical.length)
+        throw badRequest('Add approved canonical character reference images first.');
       if (canonical.some((id,i) => input.referenceFileIds[i] !== id))
         throw badRequest('Canonical creator references must appear first and in their approved order.');
       // Explicit owner selection authorizes the extra scene references; all must be available.
@@ -73,6 +77,7 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
       }
       const root = ctx.env.processEnv?.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID;
       if (!root || !/^[0-9a-f-]{36}$/i.test(root)) throw badRequest('Configure the dedicated ChatGPT image upload root first.');
+      uploadRootId=root;
     }
     const [count] = rows<{ daily: number; active: number }>(await tx.execute(sql`
       select count(*) filter(where created_at>=date_trunc('day',now() at time zone 'America/Vancouver') at time zone 'America/Vancouver')::int as daily,
@@ -81,9 +86,9 @@ export async function createAgentTask(ctx: Ctx, subscriptionId: string, requestI
     `));
     if ((count?.daily ?? 0)>=12 || (count?.active ?? 0)>=2) throw conflict('Agent task safety limit reached.');
     const [inserted] = rows<{ id: string }>(await tx.execute(sql`
-      insert into agent_tasks(id,org_id,owner_id,subscription_id,credential_hash,principal,brand_id,project_id,task_type,input,upload_request_id)
+      insert into agent_tasks(id,org_id,owner_id,subscription_id,credential_hash,principal,brand_id,project_id,task_type,input,creator_context,upload_root_id,upload_request_id)
       values(${requestId},${ctx.orgId},${ctx.userId},${subscriptionId},${sub.credential_hash},${sub.principal},
-        ${input.brandId},${input.projectId},${input.taskType},${JSON.stringify(input)}::jsonb,
+        ${input.brandId},${input.projectId},${input.taskType},${JSON.stringify(input)}::jsonb,${JSON.stringify(profile??{})}::jsonb,${uploadRootId},
         ${input.taskType==='IMAGE_GENERATION'?randomUUID():null})
       on conflict do nothing returning id
     `));
@@ -96,9 +101,12 @@ export async function withAgentTask<T>(auth: AgentAuth, principal: string, reque
   return auth.ctx.db.transaction(async tx => {
     await checkAgentConnection(tx, auth);
     const [task] = rows<AgentTask>(await tx.execute(sql`
-      select id,task_type,input,state,claim_hash,lease_until,deadline_at,upload_request_id,result,project_id,brand_id
-      from agent_tasks where id=${requestId} and org_id=${auth.ctx.orgId} and owner_id=${auth.ctx.userId}
-        and credential_hash=${auth.hash} and principal=${principal} for update
+      select t.id,t.task_type,t.input,t.state,t.claim_hash,t.lease_until,t.deadline_at,t.upload_request_id,
+        t.result,t.project_id,t.brand_id,t.creator_context,t.upload_root_id
+      from agent_tasks t join mcp_agent_subscriptions s on s.id=t.subscription_id
+      where t.id=${requestId} and t.org_id=${auth.ctx.orgId} and t.owner_id=${auth.ctx.userId}
+        and t.credential_hash=${auth.hash} and t.principal=${principal} and s.revoked_at is null
+      for update of t
     `));
     if (!task) throw notFound('Agent task');
     return fn(tx, task);
@@ -129,7 +137,7 @@ export async function getAgentTask(auth: AgentAuth, principal: string, requestId
   return withAgentTask(auth, principal, requestId, async (_db, task) => {
     assertAgentClaim(task,token);
     return { requestId, input: task.input, uploadRequestId: task.upload_request_id,
-      uploadRootId: task.task_type==='IMAGE_GENERATION'?auth.ctx.env.processEnv?.AI_GATEWAY_CHATGPT_UPLOAD_ROOT_ID:null,
+      creatorContext: task.creator_context, uploadRootId: task.upload_root_id,
       deadlineAt: task.deadline_at, leaseUntil: task.lease_until, schemaVersion: 1 };
   });
 }
@@ -145,7 +153,8 @@ export async function progressAgentTask(auth: AgentAuth, principal: string, requ
 }
 export async function finishAgentTask(auth: AgentAuth, principal: string, requestId: string, token: string, raw: unknown) {
   return withAgentTask(auth, principal, requestId, async (db, task) => {
-    const result=validateAgentResult(task.input,raw);
+    let result:AgentTaskResult;
+    try { result=validateAgentResult(task.input,raw); } catch { throw badRequest('Result does not match the assigned task schema.'); }
     if (task.state==='COMPLETED' && task.claim_hash===hash(token)) {
       if (rows(await db.execute(sql`select id from agent_tasks where id=${requestId} and result=${JSON.stringify(result)}::jsonb`)).length)
         return { requestId, state: 'COMPLETED' };
@@ -164,6 +173,7 @@ export async function finishAgentTask(auth: AgentAuth, principal: string, reques
           and q.operation='media.prepareImageUpload' and q.status='COMPLETED' and q.policy_authorized
           and q.result->>'uploadState'='COMPLETE' and q.result->'output'->>'fileId'=f.id::text
           and q.input->>'brandId'=${task.brand_id} and q.input->>'projectId'=${task.project_id}
+          and q.input->>'rootId'=${task.upload_root_id}
           and q.result->'output'->>'brandId'=${task.brand_id} and q.result->'output'->>'projectId'=${task.project_id}
           and q.result->'output'->>'sha256'=q.input->>'sha256'
           and f.archived_at is null and f.availability='AVAILABLE' and f.file_type::text='IMAGE'
@@ -249,7 +259,7 @@ export async function dispatchMcpAgentTasks(db: Executor, key: Buffer) {
     update agent_tasks set delivered_at=case when ${ok} then now() else delivered_at end,
       state=case when state<>'DISPATCHED' then state when ${ok} then 'DELIVERED'
         when ${!retry||delivery.attempts>=4} then 'FAILED' else state end,
-      error_code=case when state<>'DISPATCHED' or ${ok} then error_code else ${error} end,
+      error_code=case when state<>'DISPATCHED' then error_code when ${ok} then null else ${error} end,
       terminal_at=case when state='DISPATCHED' and ${!ok&&(!retry||delivery.attempts>=4)} then now() else terminal_at end,
       next_attempt_at=now()+(${delivery.attempts}*interval '30 seconds')
     where id=${delivery.id} and attempts=${delivery.attempts}

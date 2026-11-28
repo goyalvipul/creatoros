@@ -17,7 +17,7 @@ const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 const rows = <T>(r: unknown) => (r as { rows: T[] }).rows;
 type Mode = z.infer<typeof mode>;
 type State = { enabled:boolean; mode:Mode; scopes:string[]; local_scopes:string[]; hosted_scopes:string[]; local_configured:boolean; hosted_configured:boolean; local_seen:string|null; hosted_seen:string|null; production_policy:unknown };
-type GatewayAuth = { ctx:Ctx; mode:Mode; hash:string; scopes:string[]; exclusive:boolean };
+type GatewayAuth = { ctx:Ctx; mode:Mode; hash:string; scopes:string[]; exclusive?:boolean };
 type RequestRow = { id:string; mode:Mode; operation:string; scope:string; input:unknown; status:string; result:unknown; created_at:string; expires_at:string; finished_at:string|null };
 function reqFailure(error:unknown,operation?:string):never {
   if(operation==='generation.h3'&&error instanceof AppError&&/^(Choose a resolution from the list\.|Choose the PC first\.|Choose 0\.5, 1, or 1\.5 megapixels\.|Add a segment\.|Add a picture on segment \d+\.|Write the prompt for segment \d+\.|Choose available library media of the requested type\.|Use library media IDs\.)$/.test(error.message))throw badRequest(error.message,undefined,'H3_INPUT_INVALID');
